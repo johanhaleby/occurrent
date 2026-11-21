@@ -219,27 +219,19 @@ public interface CheckpointStorage {
      * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
      * <p>
      * The default answers {@link Optional#empty()} and writes nothing, like the default of
-     * {@link #resolveFirstCheckpointRace(String, Checkpoint)}. A storage that overrides that method should also
-     * override this three-argument method. A caller that gets an empty answer can only write the first position with
-     * {@link CheckpointWriteCondition#ifAbsent()} and then store the version with
-     * {@link #save(String, Checkpoint, CheckpointWriteCondition) save(id, candidate, notOlderThan(writeVersion))}.
-     * When the storage resolves a lost race through {@link #resolveFirstCheckpointRace(String, Checkpoint)}, another
-     * node can store an earlier first position between those two writes, and the second write would move it later
-     * again, so the blocking {@code DurableSubscriptionModel} makes only the {@code ifAbsent()} write on a storage that
-     * overrides only that method, and stores no version with the first position.
-     * {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} override both.
-     * <p>
-     * So only a storage that implements this method refuses the writes of a node with an older version from the moment
-     * the first position is written. With the two writes, a node with an older version can save a later checkpoint between them. That node
-     * lost the {@code ifAbsent()} write, starts from the stored first position and saves the checkpoint of an event it
-     * handled, and the second write of the node with the newer version then stores the first position over that
-     * checkpoint. The events between the two positions are delivered again.
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint)}. The blocking {@code DurableSubscriptionModel} then
+     * writes the first position with {@link CheckpointWriteCondition#ifAbsent()} and stores no version with it, as in
+     * 0.34.0. It doesn't save the position again with the version, since that save would write over whatever another
+     * node stored between the two writes. Until the next checkpoint write stores the version, a node that has lost its
+     * lease can then write over the first position, which delivers events again but skips none.
+     * {@code NativeMongoCheckpointStorage}, {@code SpringMongoCheckpointStorage}, {@code SpringRedisCheckpointStorage}
+     * and the blocking {@code InMemoryCheckpointStorage} override this method.
      *
      * @param subscriptionId The id of the subscription whose first position is being settled
      * @param candidate      The position competing to be the subscription's first
      * @param writeVersion   The version to store with the checkpoint that governs
      * @return The checkpoint that governs {@code subscriptionId}'s first position once this call returns, stored with
-     * {@code writeVersion}, or empty when this storage cannot compare {@code candidate} with what it stores, and then
+     * {@code writeVersion}, or empty when this storage doesn't settle the first position for this call, and then
      * nothing is written
      * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
      *                                                       {@code writeVersion}

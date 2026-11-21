@@ -42,14 +42,15 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * An {@code ifAbsent()} write stores no write version, and {@code notOlderThan(v)} accepts any write while none is
- * stored. So a first position this node recorded is saved again with {@code notOlderThan(v)} when a
- * {@link org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource} answers {@code v}, otherwise a node whose
- * lease has moved on could overwrite it. Over {@link InMemoryCheckpointStorage}, which evaluates write conditions for
- * real, so the stored version shows what the model stamped.
+ * With a write version, the model asks the three-argument {@code resolveFirstCheckpointRace} to settle the first
+ * position and store the version in one write. A storage that answers that empty gets the {@code ifAbsent()} write
+ * and no version, and nothing is saved a second time, since a second save would write over, or move later, whatever
+ * another node stored in between. Over {@link InMemoryCheckpointStorage}, which evaluates write conditions for real,
+ * so the stored version shows what the model wrote.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelFirstPositionWriteVersionTest {
@@ -102,7 +103,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
     }
 
     @Test
-    void a_lost_race_that_resolves_to_this_nodes_own_position_stores_this_nodes_version() {
+    void a_lost_race_that_the_two_argument_resolver_settles_on_this_nodes_position_keeps_that_position_and_stores_no_version() {
         RecordingStorage storage = new RecordingStorageWithAThreeArgumentResolver();
         storage.beforeTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("later-position-of-another-node"));
         storage.replacesTheWinnerWithTheCandidate = true;
@@ -114,16 +115,14 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
 
         assertAll(
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(FIRST_POSITION),
-                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
-                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION),
-                () -> assertThatThrownBy(() -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale-node-position"), CheckpointWriteCondition.notOlderThan(1)))
-                        .as("a node with an older version writing over it")
-                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
+                () -> assertThat(storage.conditionsSaved).as("conditions saved with").containsExactly(CheckpointWriteCondition.ifAbsent()),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty(),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION)
         );
     }
 
     @Test
-    void a_lost_race_whose_stored_position_read_back_is_the_one_this_node_read_stores_this_nodes_version() {
+    void a_lost_race_whose_stored_position_read_back_is_the_one_this_node_read_starts_from_it_and_stores_no_version() {
         RecordingStorage storage = new RecordingStorageWithAThreeArgumentResolver();
         storage.beforeTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(FIRST_POSITION));
         Feed feed = new Feed();
@@ -134,30 +133,64 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
 
         assertAll(
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(FIRST_POSITION),
-                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
-                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION),
-                () -> assertThatThrownBy(() -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale-node-position"), CheckpointWriteCondition.notOlderThan(1)))
-                        .as("a node with an older version writing over it")
-                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
+                () -> assertThat(storage.conditionsSaved).as("conditions saved with").containsExactly(CheckpointWriteCondition.ifAbsent()),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty(),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION)
         );
     }
 
     @Test
-    void a_stamp_refused_because_a_newer_lease_holder_wrote_since_still_starts_the_subscription_from_the_recorded_position() {
+    void an_earlier_first_position_another_node_resolves_after_this_nodes_if_absent_write_is_not_moved_later_by_a_second_save() {
         RecordingStorage storage = new RecordingStorageWithAThreeArgumentResolver();
-        storage.afterTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
-        Feed feed = new Feed();
-        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+        storage.replacesTheWinnerWithTheCandidate = true;
+        storage.afterTheIfAbsentWrite = () -> storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, new StringBasedCheckpoint(EARLIER_FIRST_POSITION));
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(new Feed(), storage, id -> OptionalLong.of(2));
 
         durable.subscribe(SUBSCRIPTION_ID, __ -> {
         });
 
         assertAll(
-                () -> assertThat(storage.conditionsSaved).as("conditions saved with")
-                        .containsExactly(CheckpointWriteCondition.ifAbsent(), CheckpointWriteCondition.notOlderThan(2)),
-                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(EARLIER_FIRST_POSITION),
+                () -> assertThat(storage.conditionsSaved).as("conditions saved with").containsExactly(CheckpointWriteCondition.ifAbsent()),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty()
+        );
+    }
+
+    @Test
+    void a_newer_version_stored_just_before_the_three_argument_resolver_writes_writes_nothing_and_starts_from_the_position_stored() {
+        StorageWithAHookInTheThreeArgumentResolver storage = new StorageWithAHookInTheThreeArgumentResolver();
+        storage.beforeTheThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("thrown by subscribe").isNull(),
+                () -> assertThat(storage.conditionsSaved).as("conditions saved with").isEmpty(),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("newer-nodes-position"),
                 () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L),
-                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("newer-nodes-position")
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly("newer-nodes-position")
+        );
+    }
+
+    @Test
+    void a_three_argument_resolver_that_fails_with_anything_but_a_refused_write_condition_fails_the_recording_and_writes_nothing() {
+        StorageWithAHookInTheThreeArgumentResolver storage = new StorageWithAHookInTheThreeArgumentResolver();
+        storage.beforeTheThreeArgumentResolver = () -> {
+            throw new IllegalStateException("the storage is unavailable");
+        };
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        assertAll(
+                () -> assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+                })).as("subscribe").isInstanceOf(IllegalStateException.class).hasMessage("the storage is unavailable"),
+                () -> assertThat(storage.conditionsSaved).as("conditions saved with").isEmpty(),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID)).as("stored position").isNull(),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty(),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
         );
     }
 
@@ -269,13 +302,29 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
     }
 
     /**
-     * Overrides the three-argument resolver too, answering that it settled nothing, so the model still saves the
-     * version after an {@code ifAbsent()} write.
+     * Overrides the three-argument resolver too, answering that it settled nothing, so the model goes on to the
+     * {@code ifAbsent()} write.
      */
     private static final class RecordingStorageWithAThreeArgumentResolver extends RecordingStorage {
         @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Delegates the three-argument resolver to the real {@link InMemoryCheckpointStorage} after a hook has run, which
+     * stands in for another node writing just before the resolver does.
+     */
+    private static final class StorageWithAHookInTheThreeArgumentResolver extends RecordingStorage {
+        @Nullable Runnable beforeTheThreeArgumentResolver;
+
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            if (beforeTheThreeArgumentResolver != null) {
+                beforeTheThreeArgumentResolver.run();
+            }
+            return delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
         }
     }
 

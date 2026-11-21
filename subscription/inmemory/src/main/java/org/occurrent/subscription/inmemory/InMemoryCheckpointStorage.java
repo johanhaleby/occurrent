@@ -24,6 +24,7 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
@@ -37,6 +38,8 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * {@link CheckpointWriteCondition} is evaluated for real, not refused. The checkpoint and its version are two
  * separate maps, since {@link CheckpointWriteCondition#any()} writes the former and leaves the latter untouched.
+ * {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} takes the same lock as a save, so a first position and
+ * its write version are stored together, and a checkpoint already stored is kept.
  */
 @NullMarked
 public class InMemoryCheckpointStorage implements CheckpointStorage {
@@ -78,6 +81,33 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
                 checkpoints.put(subscriptionId, checkpoint);
             }
             return checkpoint;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Settles the first position under the same lock as {@link #save(String, Checkpoint, CheckpointWriteCondition)}.
+     * This storage can't tell which of two positions is earlier, so a stored checkpoint is kept and answered, and
+     * {@code writeVersion} is stored with it. {@code candidate} is stored only when no checkpoint is. Never answers
+     * empty.
+     *
+     * @throws IllegalArgumentException if {@code writeVersion} is negative
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(candidate, Checkpoint.class.getSimpleName() + " cannot be null");
+        CheckpointWriteCondition condition = CheckpointWriteCondition.notOlderThan(writeVersion);
+        lock.lock();
+        try {
+            Long stored = versions.get(subscriptionId);
+            if (stored != null && stored > writeVersion) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
+            }
+            Checkpoint governing = checkpoints.computeIfAbsent(subscriptionId, ignored -> candidate);
+            versions.put(subscriptionId, writeVersion);
+            return Optional.of(governing);
         } finally {
             lock.unlock();
         }

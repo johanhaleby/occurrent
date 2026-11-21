@@ -584,26 +584,19 @@ first position of a subscription that starts at the model default with no checkp
 In 0.34.0 that first position was written with `CheckpointWriteCondition.ifAbsent()` and no write version, so a node
 that had lost its lease could write over it until the new lease holder saved its next checkpoint. From 0.35.0 the
 model first calls the new `CheckpointStorage.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion)`,
-which stores the first position and the version in one write. `NativeMongoCheckpointStorage` and
-`SpringMongoCheckpointStorage` implement it, so there the old lease holder's writes are refused from the first write on.
-
-`SpringRedisCheckpointStorage`, `InMemoryCheckpointStorage` and a `CheckpointStorage` of your own answer that call
-empty. The model then writes the first position with `ifAbsent()` and saves it again with
-`notOlderThan(writeVersion)`. A node with an older version can save a later checkpoint between those two writes, and
-the second write then stores the first position over it, so the events between the two positions are delivered again.
+which stores the first position and the version in one write. When the storage holds a newer version, the call writes
+nothing and the subscription starts from the checkpoint stored. `NativeMongoCheckpointStorage`,
+`SpringMongoCheckpointStorage`, `SpringRedisCheckpointStorage` and `InMemoryCheckpointStorage` implement it, so there
+the old lease holder's writes are refused from the first write on.
 
 ### What to do
 
-Nothing, unless you implement `CheckpointStorage` yourself. To get the version stored with the first position in one
-A storage of your own that overrides the two-argument `resolveFirstCheckpointRace` and not the three-argument one gets
-the `ifAbsent()` write alone, with no version, as in 0.34.0. Another node can store an earlier first position through
-the two-argument method between the two writes, and the second write would move it later again and skip the events
-between the two. Until the next checkpoint write stores the version, a node that had lost its lease can write over the
-first position, which delivers events again.
-
-write there, override the three-argument `resolveFirstCheckpointRace` as its javadoc describes. A storage that
-overrides the two-argument `resolveFirstCheckpointRace` should override both. Over one that overrides only the
-two-argument method, the model logs a warning when it is created and stores the first position without a version. There is no OpenRewrite recipe for this.
+Nothing, unless you implement `CheckpointStorage` yourself. A storage of your own that doesn't override the
+three-argument `resolveFirstCheckpointRace`, or answers it empty, gets the `ifAbsent()` write and no version, as in
+0.34.0. Until the next checkpoint write stores the version, a node that had lost its lease can write over the first
+position, which delivers events again but skips none. To get the version stored with the first position in one write,
+override the three-argument `resolveFirstCheckpointRace` as its javadoc describes. There is no OpenRewrite recipe for
+this.
 
 ## A capability that acts on a subscription is not found past a wrapper
 
