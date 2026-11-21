@@ -1010,8 +1010,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * doesn't encode at all, the record holds the data's bytes in BSON binary instead, next to the name of the data's
      * class, and the store logs a warning that names the instance, the input and the difference. A release then hands
      * the converter a {@code JsonCloudEventData} read from those bytes when the data was one, and a
-     * {@link BytesCloudEventData} for data of any other class. A map with a {@code BigDecimal} or a key that isn't a
-     * {@code String} at any depth is held this way, and so is a {@code JsonCloudEventData}.
+     * {@link BytesCloudEventData} for data of any other class. The bytes are read by the CloudEvents JSON format with
+     * its default options and not by the format the application registered, so an option such as
+     * {@code withForceJsonDataToBase64()} doesn't turn the data into bytes. A map with a {@code BigDecimal} or a key
+     * that isn't a {@code String} at any depth is held this way, and so is a {@code JsonCloudEventData}.
      * <p>
      * A record that doesn't fit in one document, or in the write that sends it, is encoded to BSON and split across
      * chunks of 8 MiB in the collection named after the instances with {@code _skipped_input_chunks} appended. The
@@ -1023,6 +1025,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * <ul>
      *     <li>an attribute or an extension comes back as another value or as a value of another class, such as a
      *     {@code String} with an unpaired surrogate.</li>
+     *     <li>the data held as its bytes comes back as another class than the one a release hands the converter.</li>
      *     <li>encoding, decoding or reading back the record throws even with the data held as its bytes.</li>
      *     <li>the saga id, the quarantine id and the key leave no room for a chunk of 8 MiB beside them in one
      *     document.</li>
@@ -1149,7 +1152,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // reading it back with toSkippedInput, the method a release reads it with. When the data doesn't come back as it was
     // delivered, or doesn't encode, the record holds the data's bytes and its class instead, and a release rebuilds the
     // data from them. A record too large for one document is split across chunks. Refused only for an event whose
-    // attributes or extensions don't come back, or whose saga id, quarantine id and key leave no room for a chunk.
+    // attributes or extensions don't come back, whose data held as its bytes doesn't come back as the class a release
+    // promises, or whose saga id, quarantine id and key leave no room for a chunk.
     // Checked here, since the driver throws exceptions that name neither the instance nor the input, and a retry would
     // send the same record again
     private static HeldRecord checkedRecord(String sagaId, Document filter, SkippedInput input, CodecRegistry codecs) {
@@ -1261,7 +1265,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // How the restored event differs from the delivered one in an attribute, an extension or, withData, its data, at any
     // depth, or null when every value is equal and of the same class. A map or a list may come back as another
-    // implementation of Map or List
+    // implementation of Map or List. Without withData the data was held as its bytes, and only its class is checked,
+    // against the class SkippedInputData promises a release hands back for them
     private static @Nullable String difference(CloudEvent delivered, CloudEvent restored, boolean withData) {
         if (delivered.getSpecVersion() != restored.getSpecVersion()) {
             return "Its spec version " + delivered.getSpecVersion() + " comes back as " + restored.getSpecVersion();
@@ -1282,11 +1287,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 return "Its extension '" + extension + "'" + change.how();
             }
         }
-        if (!withData) {
-            return null;
-        }
         CloudEventData deliveredData = delivered.getData();
         CloudEventData restoredData = restored.getData();
+        if (!withData && deliveredData != null && restoredData != null) {
+            // Held as its bytes, so checked against the class a release promises for them
+            return SkippedInputData.classDifference(deliveredData, restoredData);
+        }
         if (deliveredData == null || restoredData == null || deliveredData.getClass() != restoredData.getClass()) {
             Change change = change("", deliveredData, restoredData);
             return change == null ? null : "Its data" + change.how();

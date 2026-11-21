@@ -148,10 +148,14 @@ the name of the data's class in `dataClass`. A `BigDecimal` in a map comes back 
 with a key that isn't a `String` makes the BSON codec throw a `ClassCastException`, and the `JsonCloudEventData` the
 CloudEvents JSON format reads a JSON object into comes back as a `BytesCloudEventData`, so all three are held this way.
 A release hands the converter a `JsonCloudEventData` that the CloudEvents JSON format reads from those bytes when
-`dataClass` names one, and a `BytesCloudEventData` with the same bytes for data of any other class. A
+`dataClass` names one, and a `BytesCloudEventData` with the same bytes for data of any other class. The bytes are read
+by a `JsonFormat` with its default options, not by the format the application registered with `EventFormatProvider`,
+since a format made with `withForceJsonDataToBase64()` reads them back as a `BytesCloudEventData`. A
 `JsonCloudEventData` built from a node rather than read by the format comes back as the node its JSON reads as, such
-as a `DoubleNode` of `1.1` for a `DecimalNode` of `1.10`. The store logs a warning that names the instance, the input
-and the difference, since the converter then gets bytes where it was delivered a map or an object.
+as a `DoubleNode` of `1.1` for a `DecimalNode` of `1.10`. The check compares the class of the data it reads back from
+the bytes with the class a release promises, and refuses the event when they differ. The store logs a warning that
+names the instance, the input and the difference, since the converter then gets bytes where it was delivered a map or
+an object.
 
 A record that doesn't fit in one document, at most 16 MiB, or in the write that sends it, at most 16 MiB and 16 KiB
 with its filter, is encoded to BSON and split into chunks of 8 MiB. Each chunk is a document in a collection named

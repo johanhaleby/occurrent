@@ -63,9 +63,10 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Data it can't copy is held as its bytes, and every read rebuilds it the way {@code SpringMongoSagaStateStore} rebuilds
  * data it holds as bytes. A {@code JsonCloudEventData} comes back as a {@code JsonCloudEventData} that the CloudEvents
- * JSON format reads from those bytes, and data of any other class, such as a {@code PojoCloudEventData} of an object,
- * comes back as a {@code BytesCloudEventData}. {@link #compareAndSaveSkipped} throws an {@link IllegalStateException},
- * and records nothing, only for an event with an extension it can't copy.
+ * JSON format with its default options reads from those bytes, whatever format the application registered, and data of
+ * any other class, such as a {@code PojoCloudEventData} of an object, comes back as a {@code BytesCloudEventData}.
+ * {@link #compareAndSaveSkipped} throws an {@link IllegalStateException}, and records nothing, for an event with an
+ * extension it can't copy, and for data whose copy isn't of the class a release hands the converter.
  *
  * @param <S> the user state type
  */
@@ -334,7 +335,13 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         }
         CloudEventData data = event.getData();
         if (data != null) {
-            copy.withData(copyOf(data));
+            CloudEventData held = copyOf(data);
+            String difference = SkippedInputData.classDifference(data, held);
+            if (difference != null) {
+                throw new IllegalStateException("InMemorySagaStateStore cannot record the input '" + input.key() + "' that saga instance '" + sagaId + "' skipped. "
+                                                + difference + ", so a release would hand the converter another event than the one it was delivered.");
+            }
+            copy.withData(held);
         }
         return new SkippedInput(input.seq(), input.key(), copy.build());
     }

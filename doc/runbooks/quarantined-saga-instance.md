@@ -437,7 +437,9 @@ difference. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any d
 doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
 `BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
 those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
-reads a map or an object from the data gets its bytes instead.
+reads a map or an object from the data gets its bytes instead. The bytes are read by a `JsonFormat` with its default
+options, so a JSON format you register with `withForceJsonDataToBase64()` doesn't turn the `JsonCloudEventData` into
+a `BytesCloudEventData`.
 
 A record that doesn't fit in the 16 MiB MongoDB stores in one document is split into chunks of 8 MiB in
 `<sagaCollection>_skipped_input_chunks`, each with `sagaId`, `quarantineId`, `key`, `chunk` and `bytes`. The record

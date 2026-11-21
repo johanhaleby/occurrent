@@ -21,9 +21,11 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.BytesCloudEventData;
 import io.cloudevents.core.data.PojoCloudEventData;
+import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonCloudEventData;
 import io.cloudevents.jackson.JsonFormat;
+import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -172,6 +174,22 @@ abstract class SkippedDataReleaseContract {
     }
 
     @Test
+    void json_data_is_held_released_and_equal_to_the_original_as_JsonCloudEventData_when_the_registered_JSON_format_forces_data_to_base64() {
+        EventFormatProvider formats = EventFormatProvider.getInstance();
+        EventFormat registeredBefore = requireNonNull(formats.resolveFormat(JsonFormat.CONTENT_TYPE));
+        CloudEvent delivered = new JsonFormat().deserialize(("{\"specversion\":\"1.0\",\"id\":\"case\",\"source\":\"urn:test\","
+                + "\"type\":\"probe\",\"subject\":\"" + ORDER + "\",\"datacontenttype\":\"application/json\",\"data\":{\"orderId\":\"" + ORDER + "\",\"value\":42}}").getBytes(UTF_8));
+        assertThat(delivered.getData()).as("the event is delivered with JsonCloudEventData").isInstanceOf(JsonCloudEventData.class);
+
+        formats.registerFormat(new JsonFormat().withForceJsonDataToBase64());
+        try {
+            assertHeldAndReleasedAsDelivered(delivered, JsonCloudEventData.class);
+        } finally {
+            formats.registerFormat(registeredBefore);
+        }
+    }
+
+    @Test
     void a_map_holding_a_BigDecimal_at_depth_is_held_released_and_equal_to_the_original() {
         Map<String, Object> amount = new LinkedHashMap<>();
         amount.put("amount", new BigDecimal("1234567890.123456789"));
@@ -260,7 +278,7 @@ abstract class SkippedDataReleaseContract {
     private void assertHeldAndReleasedAsDelivered(CloudEvent delivered, Class<? extends CloudEventData> releasedAs) {
         quarantineTheInstance();
         write(delivered);
-        await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(held()).as("the trigger and the event").hasSize(2));
+        awaitHeldTheTriggerAndTheEvent();
         CloudEvent original = stored(delivered.getId());
         CloudEvent held = held().stream().map(SkippedInput::event).filter(event -> event.getId().equals(delivered.getId())).findFirst().orElseThrow();
 
@@ -275,6 +293,16 @@ abstract class SkippedDataReleaseContract {
                 () -> assertSameEvent("released", original, released, releasedAs),
                 () -> assertThat(dispatched).as("the release applied the trigger and the event").containsExactly(new Pack(TRIGGER), new Pack(delivered.getId()))
         );
+    }
+
+    // Gives up quietly, so a store that refuses the save fails the assertion that names it and not an await that times out
+    private void awaitHeldTheTriggerAndTheEvent() {
+        try {
+            await().atMost(Duration.ofSeconds(60)).until(() -> held().size() == 2);
+        } catch (ConditionTimeoutException ignored) {
+            // asserted below
+        }
+        assertThat(held()).as("the store accepted the save of the trigger and the event").hasSize(2);
     }
 
     private static void assertSameEvent(String which, CloudEvent original, CloudEvent actual, Class<? extends CloudEventData> dataClass) {
