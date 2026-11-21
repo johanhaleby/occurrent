@@ -790,12 +790,13 @@ class CheckpointRegistrationTest {
         }
 
         @Test
-        void a_delivery_started_after_a_restart_position_was_stored_on_the_restarted_read_saves_and_is_current() {
+        void a_delivery_started_on_a_read_made_after_a_restart_position_was_stored_saves_and_is_current() {
             // Given
             registration.reading();
             Delivery stale = registration.delivering();
             registration.reading();
             restartPosition("r1", Write.RETURNS);
+            registration.reading();
             Delivery restarted = registration.delivering();
 
             // When
@@ -814,6 +815,61 @@ class CheckpointRegistrationTest {
             assertThat(askedByStale).as("asked by the save of the delivery started before the restart").isEmpty();
             assertThat(allowed).as("allowed with e6 stored by the current delivery").isTrue();
             assertThat(asked).containsExactly("save q1");
+        }
+
+        @Test
+        void a_delivery_of_a_read_made_before_a_restart_position_that_was_stored_on_the_thread_of_that_read_is_stopped_from_saving_when_another_thread_read_after_it() throws InterruptedException {
+            // Given
+            registration.reading();
+            readOnAnotherThread();
+            restartPosition("r1", Write.RETURNS);
+            asked.clear();
+
+            // When
+            Delivery older = registration.delivering();
+            save(older, "e5", Write.RETURNS);
+            end(older, "e5");
+
+            // Then
+            assertThat(stored).as("stored after the delivery of the read made before the restart").isEqualTo("r1");
+            assertThat(asked).as("asked by the save of the delivery of the read made before the restart").isEmpty();
+        }
+
+        @Test
+        void a_delivery_of_a_read_made_before_a_restart_position_that_was_written_and_threw_on_the_thread_of_that_read_is_stopped_from_saving_when_another_thread_read_after_it() throws InterruptedException {
+            // Given
+            registration.reading();
+            readOnAnotherThread();
+            restartPosition("r1", Write.WRITES_THEN_THROWS);
+            asked.clear();
+
+            // When
+            Delivery older = registration.delivering();
+            save(older, "e5", Write.RETURNS);
+            end(older, "e5");
+
+            // Then
+            assertThat(stored).as("stored after the delivery of the read made before the restart").isEqualTo("r1");
+            assertThat(asked).as("asked by the save of the delivery of the read made before the restart").isEmpty();
+        }
+
+        @Test
+        void a_delivery_started_on_a_read_made_after_a_restart_position_saves_when_the_restart_ran_on_a_thread_whose_last_read_was_older() throws InterruptedException {
+            // Given
+            registration.reading();
+            readOnAnotherThread();
+            restartPosition("r1", Write.RETURNS);
+            registration.reading();
+            asked.clear();
+
+            // When
+            Delivery restarted = registration.delivering();
+            save(restarted, "e6", Write.RETURNS);
+            end(restarted, "e6");
+
+            // Then
+            assertThat(asked).containsExactly("save e6");
+            assertThat(stored).isEqualTo("e6");
         }
 
         @Test
@@ -964,6 +1020,14 @@ class CheckpointRegistrationTest {
         } catch (CheckpointWriteConditionNotFulfilledException refused) {
             asked.add("refused");
         }
+    }
+
+    // The registration keeps the last read per thread, so a read by another thread needs one. Joined, so it is over
+    // before the test goes on
+    private void readOnAnotherThread() throws InterruptedException {
+        Thread other = new Thread(registration::reading);
+        other.start();
+        other.join();
     }
 
     private void restartPosition(String position, Write write) {

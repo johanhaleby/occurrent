@@ -343,15 +343,13 @@ final class CheckpointRegistration {
         positionThatThrew = restartedFrom.asString();
     }
 
-    // The run that lost the history has stopped delivering by then, so a save started before it comes from a run a
-    // pause stopped and would move the checkpoint back past the restart position. Also when the write threw, since it
-    // may have written. The MongoDB models ask on the thread that reads, so the read that thread made last still saves
+    // The run that lost the history has stopped delivering by then, so a save of a read made before it comes from a
+    // run a pause stopped and would move the checkpoint back past the restart position. Also when the write threw,
+    // since it may have written. The listener may run on any thread, so the save of every read made before it is
+    // refused, and only a read made after it saves. The MongoDB models end the run that lost the history and read
+    // again first
     private void restartedAfterHistoryLoss() {
         repositions++;
-        Read restarted = lastReadOnThisThread.get();
-        if (restarted != null) {
-            lastReadOnThisThread.set(new Read(restarted.number(), repositions));
-        }
         // No delivery started so far has a later read, nor a number past deliveries
         readOfLatestCurrentDelivery = reads.get();
         latestCurrentDelivery = NO_DELIVERY;
