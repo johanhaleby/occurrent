@@ -203,6 +203,75 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
+    void a_String_extension_with_an_unpaired_surrogate_is_refused_with_the_extension_named_and_nothing_written() {
+        CloudEvent event = baseEvent().withExtension("surrogateext", "a\uD800b").build();
+        StoredSaga instance = anInstance();
+
+        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
+                        .hasMessageContaining("'surrogateext'").hasMessageContaining(String.class.getName()),
+                () -> assertNothingWritten()
+        );
+    }
+
+    @Test
+    void map_data_whose_nested_map_has_a_key_that_is_not_a_String_is_refused_with_the_path_named_and_nothing_written() {
+        Map<Object, Object> nested = new LinkedHashMap<>();
+        nested.put(7, "pen");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("orderId", ORDER);
+        data.put("line", nested);
+        CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
+        StoredSaga instance = anInstance();
+
+        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
+                        .hasMessageContaining("'line' of its data"),
+                () -> assertNothingWritten()
+        );
+    }
+
+    @Test
+    void map_data_with_maps_inside_a_list_is_held_and_read_back_with_every_leaf_of_the_same_class_and_value() {
+        Map<String, Object> pen = new LinkedHashMap<>();
+        pen.put("name", "pen");
+        pen.put("quantity", Integer.valueOf(3));
+        pen.put("sku", Long.valueOf(9_000_000_000L));
+        pen.put("price", Double.valueOf(1.25d));
+        pen.put("gift", Boolean.TRUE);
+        Map<String, Object> ink = new LinkedHashMap<>();
+        ink.put("name", "ink");
+        ink.put("quantity", Integer.valueOf(-1));
+        ink.put("sku", Long.valueOf(-5L));
+        ink.put("price", Double.valueOf(0.1d));
+        ink.put("gift", Boolean.FALSE);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("orderId", ORDER);
+        data.put("lines", List.of(pen, ink));
+        CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
+
+        CloudEvent held = heldAndRead(event);
+
+        assertThat(held.getData()).isInstanceOf(PojoCloudEventData.class);
+        Object value = ((PojoCloudEventData<?>) requireNonNull(held.getData())).getValue();
+        assertThat(value).isInstanceOf(Map.class);
+        Map<?, ?> map = (Map<?, ?>) value;
+        assertThat(map.keySet()).isEqualTo(Set.of("orderId", "lines"));
+        assertThat(map.get("lines")).isInstanceOf(List.class);
+        List<?> lines = (List<?>) map.get("lines");
+        assertThat(lines).hasSize(2);
+        assertAll(
+                () -> assertThat(map.get("orderId")).isInstanceOf(String.class).isEqualTo(ORDER),
+                () -> assertLeaves(lines.get(0), pen),
+                () -> assertLeaves(lines.get(1), ink)
+        );
+    }
+
+    @Test
     void integral_extensions_are_restored_to_their_class_and_value() {
         CloudEvent held = heldAndRead(baseEvent()
                 .withExtension("byteext", (Number) Byte.valueOf((byte) -7))
@@ -386,6 +455,18 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 () -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("no record is written").isZero(),
                 () -> assertThat(stateStore.find(ORDER).orElseThrow().version()).as("the instance is not written").isEqualTo(1L)
         );
+    }
+
+    private static void assertLeaves(Object restoredLine, Map<String, Object> delivered) {
+        assertThat(restoredLine).isInstanceOf(Map.class);
+        Map<?, ?> line = (Map<?, ?>) restoredLine;
+        assertThat(line.keySet()).isEqualTo(delivered.keySet());
+        assertAll(delivered.entrySet().stream().map(leaf -> (Executable) () -> {
+            Object actual = line.get(leaf.getKey());
+            assertThat(actual).as(leaf.getKey()).isNotNull();
+            assertThat(actual.getClass()).as(leaf.getKey() + " class").isEqualTo(leaf.getValue().getClass());
+            assertThat(actual).as(leaf.getKey()).isEqualTo(leaf.getValue());
+        }));
     }
 
     private static Executable restored(CloudEvent held, String name, Object expected) {
