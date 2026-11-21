@@ -179,6 +179,9 @@ The save is dropped when one of these came after that read:
 
 * a resume at a position, a put-back or a restart position, whether its write returned or threw, since each one stores
   where the subscription reads from next
+* a plain resume of the paused subscription that goes to the stored checkpoint, since the resumed run reads from there
+  and the replaced run's save would write an earlier checkpoint over it. The resume reads the stored checkpoint under
+  the same lock, so no save is written between that read and the drop
 * a save from a later read, or from the same read and a delivery started later, since a run reads and delivers one
   event at a time on one thread, so only a run that a resume replaced saves after a later read has
 
@@ -191,6 +194,23 @@ run that returns from its action for e1 after the resumed run stored e2 writes e
 e2 again while quiet saves wait for the next event. A quiet position handed out before a restart position was stored
 would write over it, and once the history no longer holds that quiet position, a restart from it skips the events
 written after the restart position.
+
+A plain resume that goes to the stored checkpoint stores nothing, so the model notes the checkpoint it read as stored
+and as the position of a resume. A quiet position handed out after the resume, or a delivery the resumed run reads,
+then saves as it would after a resume at a position. A plain resume where the wrapped model goes on from the position
+it has read to, because the subscription still holds its own start or the model can't be repositioned, doesn't count.
+The resumed run continues the replaced one's reads, so its saves follow them, and dropping the replaced run's saves
+there would hold quiet saves until the next event stores its checkpoint.
+
+The first position the model records for a subscription that starts at the model default follows the same rule. The
+evaluation of the start position notes how many times the subscription was repositioned before it reads the stored
+checkpoint. When it found nothing stored and a resume at a position, a put-back, a plain resume to the stored
+checkpoint or a restart position came after that read, it records nothing and throws `IllegalStateException`. It
+checks under the lock all checkpoint writes take, and both writes of a first position run inside it. Without that, an
+evaluation that found nothing stored before a restart position R2 was written would record its earlier position P1,
+and a storage that keeps the earlier of two first positions, as the MongoDB storages do for an operation time, would
+replace R2 with P1. The blocking MongoDB models evaluate the start position again after a refusal, and that evaluation
+starts from R2.
 
 When nothing was stored before, the new checkpoint stays. Deleting it could remove a checkpoint that another node, or
 the resumed subscription's own events, wrote in the meantime. With nothing stored, a restart subscribes the wrapped
@@ -214,8 +234,12 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
 * The save of an event's checkpoint or of a quiet position from a run that a pause stopped and a resume replaced is
   dropped once a resume at a position, a put-back or a restart position came after the read it belongs to, or once the
   resumed run has started saving. It used to write the older checkpoint over the newer one, and a quiet position handed
-  out before a restart position was stored could write over the restart position. This holds after the plain
-  `resumeSubscription(subscriptionId)` as well as after a resume at a position.
+  out before a restart position was stored could write over the restart position. A plain
+  `resumeSubscription(subscriptionId)` that goes to the stored checkpoint drops it right away. One where the wrapped
+  model goes on from its own position drops it once the resumed run has started saving.
+* A first position the model records is dropped, and the evaluation throws `IllegalStateException`, once a resume, a
+  put-back or a restart position came after the evaluation found nothing stored. It used to be written, and could
+  replace the position stored then with an earlier one.
 * `capability(..)` for `Subscribable`, `CancellableSubscriptions` or a model type built on them answers empty on a
   wrapper that doesn't implement it, where it used to answer the model beneath.
 * A `SubscriptionModelWrapper` of an application's own that should be found for an acting capability has to implement

@@ -41,7 +41,7 @@ import java.util.function.Consumer;
  * A wrapped model a test reads from by hand, so it decides when a read happens and what it returns, and on which
  * thread.
  */
-final class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, QuietPositionReportingSubscriptions, HistoryLossReportingSubscriptions {
+class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, QuietPositionReportingSubscriptions, HistoryLossReportingSubscriptions {
     final List<QuietPositionListener> listeners = new CopyOnWriteArrayList<>();
     final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
     final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();

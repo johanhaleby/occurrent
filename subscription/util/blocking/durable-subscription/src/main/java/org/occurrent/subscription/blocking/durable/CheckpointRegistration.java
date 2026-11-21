@@ -95,15 +95,17 @@ final class CheckpointRegistration {
     private long latestSave;
     // Held while the checkpoint for an event, a quiet position, the position of a resume or of a restart after a lost
     // history, a first position an evaluation records outside the settled outcome, or the version an evaluation stores
-    // with the checkpoint it read is written, by a cancel while it marks this registration cancelled and, unless the
-    // checkpoint is kept, deletes it, and by a replacement or a shutdown while it marks this registration cancelled. No
-    // other lock of this model is taken while it is held, apart from the saveLock of an untracked registration of the
-    // same id, which a resume at a position and a restart after a lost history take inside the tracked one
+    // with the checkpoint it read is written, while a resume of a paused subscription reads the checkpoint stored and
+    // goes to it, by a cancel while it marks this registration cancelled and, unless the checkpoint is kept, deletes
+    // it, and by a replacement or a shutdown while it marks this registration cancelled. No other lock of this model is
+    // taken while it is held, apart from the saveLock of an untracked registration of the same id, which a resume and a
+    // restart after a lost history take inside the tracked one
     final ReentrantLock saveLock = new ReentrantLock();
     private boolean cancelled;
-    // Counts the resumes at a position, the put-backs after one failed and the restarts after a lost history, each of
-    // which stores where the subscription reads from next. Moved before the write and never back, so a count taken
-    // before one never comes round again. Written while holding saveLock, so a save that started before one and
+    // Counts the resumes at a position, the resumes at the checkpoint stored, the put-backs after a resume at a
+    // position failed and the restarts after a lost history, each of which sets where the subscription reads from
+    // next. Moved before the write, or with the read of a resume at the checkpoint stored, and never back, so a count
+    // taken before one never comes round again. Written while holding saveLock, so a save that started before one and
     // checks it under saveLock is refused, and a save already under way finishes first
     private volatile long repositions;
     // The latest resume at a position, and the one whose position that resume read as stored before it, which a
@@ -191,13 +193,14 @@ final class CheckpointRegistration {
         return quietTickAllowed;
     }
 
-    // Called holding saveLock, before a resume at a position writes it
+    // Called holding saveLock, before a resume at a position writes it, and by a resume at the checkpoint stored with
+    // the read of it
     void repositioning() {
         repositions++;
     }
 
-    // Called holding saveLock, once the write of a resume at a position has returned. previous is what the resume
-    // read as stored before it
+    // Called holding saveLock, once the write of a resume at a position has returned, or with the read of a resume at
+    // the checkpoint stored. previous is what the resume read as stored before it
     void repositionStored(Checkpoint position, @Nullable Checkpoint previous) {
         repositionMayBeStored(position, previous);
         stored(position);
@@ -392,6 +395,33 @@ final class CheckpointRegistration {
         }
     }
 
+    // Taken by an evaluation of the start position before it reads what is stored, as a read of the wrapped model takes
+    // it, so the first position it records is refused once a resume, a put-back or a restart came after that read
+    long repositions() {
+        return repositions;
+    }
+
+    // What the save returned. Refused without saving once this registration writes nothing more, or once a resume, a
+    // put-back or a restart after a lost history came after the evaluation read that nothing was stored. Each of those
+    // stores where the subscription reads from next, and a first position resolved against it could replace it with
+    // an earlier one. Both writes of a first position run inside save, so no write of those comes between them
+    Checkpoint saveFirstPositionUnlessCancelledOrRepositioned(long repositionsWhenRead, Supplier<Checkpoint> save,
+                                                              Supplier<IllegalStateException> cancelledRefusal,
+                                                              Supplier<IllegalStateException> repositionedRefusal) {
+        saveLock.lock();
+        try {
+            if (cancelled) {
+                throw cancelledRefusal.get();
+            }
+            if (repositionedSince(repositionsWhenRead)) {
+                throw repositionedRefusal.get();
+            }
+            return save.get();
+        } finally {
+            saveLock.unlock();
+        }
+    }
+
     // Saves nothing once this registration has stopped writing or the delivery is superseded
     void saveUnlessCancelledRepositionedOrSuperseded(Delivery delivery, Checkpoint checkpoint, Runnable save) {
         saveLock.lock();
@@ -418,7 +448,12 @@ final class CheckpointRegistration {
     // save of a later read, or of the same read and a later delivery. A run reads and delivers one event at a time on
     // one thread, so only a replaced run saves second. A quiet position comes before every delivery of its read
     private boolean superseded(long read, long repositionsWhenRead, long delivery) {
-        return repositions != repositionsWhenRead || read < readOfLatestSave || (read == readOfLatestSave && delivery < latestSave);
+        return repositionedSince(repositionsWhenRead) || read < readOfLatestSave || (read == readOfLatestSave && delivery < latestSave);
+    }
+
+    // Checked holding saveLock. The count is moved holding it too, before the write it stands for
+    private boolean repositionedSince(long repositionsWhenRead) {
+        return repositions != repositionsWhenRead;
     }
 
     // Called holding saveLock, by a save that isn't superseded, before it writes. A save of an earlier read is

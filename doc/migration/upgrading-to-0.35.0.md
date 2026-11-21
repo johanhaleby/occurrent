@@ -477,7 +477,10 @@ nothing was stored before, the new checkpoint stays.
 The MongoDB subscription models stop waiting for a running event handler one second into a pause, so a handler can
 still be running when the resume stores the position. Once it returns, the checkpoint of its event isn't stored over
 that position, and neither is a quiet position read before the resume. A restart then resumes from the position you
-asked for.
+asked for. A plain `resumeSubscription(id)` that goes to the stored checkpoint drops those saves the same way. An
+evaluation of the start position that found no checkpoint stored before such a resume, or a restart after a lost
+history, stored a position records no first position over it. It throws `IllegalStateException`, and evaluating again
+starts from the stored checkpoint.
 
 A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
 durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live
