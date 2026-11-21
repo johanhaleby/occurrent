@@ -140,7 +140,10 @@ public class DurableSubscriptionModelConfig {
      * predicate declined to store, and not while an event is being delivered. After a pause and a resume, an action of
      * the paused run that is still running keeps the save off until it returns, for as long as that takes. So with a
      * predicate that declines some events, such as {@link EveryN} with {@code n} above 1, a subscription that goes
-     * quiet right after a declined event gets no position saved until the predicate stores one.
+     * quiet right after a declined event gets no position saved until the predicate stores one. A position read before
+     * a resume at a position isn't saved either, nor one read before the position a restart after a lost history
+     * starts from was stored, nor one a paused run read once the resumed run has started saving. So the stored
+     * checkpoint doesn't move back.
      * <p>
      * After a checkpoint write throws, the next quiet save reads the stored checkpoint first, since the write may have
      * gone through. Once the subscription has delivered an event, it saves the position only when the read returns the

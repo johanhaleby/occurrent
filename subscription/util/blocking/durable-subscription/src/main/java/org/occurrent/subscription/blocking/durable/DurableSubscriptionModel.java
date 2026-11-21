@@ -481,7 +481,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         if (registration == null) {
             return null;
         }
-        long repositions = registration.reading().repositions();
+        Read read = registration.reading();
         if (interval == null || !registration.quietTickAllowed() || System.nanoTime() - registration.lastWrite.get() < interval.toNanos()) {
             return null;
         }
@@ -493,7 +493,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             log.warn("Could not read the write version for subscription {}, so its quiet position is not saved this time. Trying again in {}.", subscriptionId, interval, e);
             return null;
         }
-        return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, registration, repositions);
+        return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, registration, read);
     }
 
     // The listener gets the id and not the run, so the read is numbered for the registration a subscribe is creating and
@@ -516,12 +516,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // event. Any other failure is logged and tried again after the interval, since the subscription has lost nothing.
     // So is a failed read of what is stored
     private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, CheckpointRegistration registration,
-                                   long repositions) {
+                                   Read handedOutAt) {
         runUnderLockFor(subscriptionId, () -> {
             if (registrations.get(subscriptionId) != registration) {
                 return;
             }
-            registration.saveQuietPositionIfStoredCovers(repositions, quietPosition, () -> {
+            registration.saveQuietPositionIfStoredCovers(handedOutAt, quietPosition, () -> {
                 registration.lastWrite.set(System.nanoTime());
                 try {
                     storage.save(subscriptionId, quietPosition, writeCondition);
@@ -1237,7 +1237,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * <p>
      * An action still running when the subscription was paused, because the wrapped model stopped waiting for it,
      * doesn't store the checkpoint of its event once the resumed subscription has started saving the checkpoint of one
-     * of its own events, so the stored checkpoint doesn't move back.
+     * of its own events or a quiet position, or has stored the position it restarts from after its history was lost.
+     * Neither does a quiet position read before the pause. So the stored checkpoint doesn't move back.
      * <p>
      * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited
      * for. If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes
