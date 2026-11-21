@@ -339,14 +339,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // describes.
     @Override
     public void stop() {
-        anyCatchupModel().runInTurn(this, "stop()", () -> {
-            List<AbstractCatchupSubscriptionModel.ActionInFlight> admitted = new ArrayList<>();
-            List<Runnable> steps = new ArrayList<>();
-            presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
-            steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
-            steps.add(getWrappedSubscriptionModel()::stop);
-            AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
-        });
+        anyCatchupModel().runInTurn(this, "stop()", this::stopTheReplaysAndTheLiveDelegate);
+    }
+
+    // Under the model lock. Also run by a start(..) once more for a stop() made from inside it
+    private void stopTheReplaysAndTheLiveDelegate() {
+        anyCatchupModel().stopBegins();
+        List<AbstractCatchupSubscriptionModel.ActionInFlight> admitted = new ArrayList<>();
+        List<Runnable> steps = new ArrayList<>();
+        presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
+        steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
+        steps.add(getWrappedSubscriptionModel()::stop);
+        AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
     }
 
     // The claim is shared by every child, so any of them hands it out
@@ -392,31 +396,45 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 replaysOnResume = resumeSubscriptionsAutomatically
                         ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
                         : null;
-                anyCatchupModel().startTheLiveDelegate(this, shutdownsBegunBefore, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null));
             } catch (Throwable e) {
-                boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
-                        && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
-                attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns, e));
+                undoStart(attempts, e);
                 throw e;
             }
-            // A shutdown that didn't wait for this start has forgotten the catch-ups by now, so nothing is resumed after it
-            if (anyCatchupModel().shuttingDown) {
-                return;
-            }
-            // Each also when an earlier one throws, so a parked replay whose claim fails holds up no other subscription
-            List<Runnable> resumes = new ArrayList<>();
-            if (resumeSubscriptionsAutomatically) {
-                resumes.add(() -> AbstractCatchupSubscriptionModel.runEach(presentCatchupModels().toList(), AbstractCatchupSubscriptionModel::relaunchParkedReplays));
-            }
-            if (replaysOnResume != null) {
-                resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), id -> {
-                    if (!anyCatchupModel().shuttingDown) {
-                        resumeSubscription(id);
-                    }
-                }));
-            }
-            AbstractCatchupSubscriptionModel.runEach(resumes, Runnable::run);
+            anyCatchupModel().startUnlessStoppedFromInside(this, this::stopTheReplaysAndTheLiveDelegate, () -> {
+                try {
+                    anyCatchupModel().startTheLiveDelegate(this, shutdownsBegunBefore, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null));
+                } catch (Throwable e) {
+                    undoStart(attempts, e);
+                    throw e;
+                }
+                // A shutdown that didn't wait for this start has forgotten the catch-ups by now, so nothing is resumed
+                // after it. A stop() made from inside this start has stopped the model, so nothing is resumed after it
+                // either
+                if (anyCatchupModel().shuttingDown || anyCatchupModel().stoppedSinceTheLastStart()) {
+                    return;
+                }
+                // Each also when an earlier one throws, so a parked replay whose claim fails holds up no other subscription
+                List<Runnable> resumes = new ArrayList<>();
+                if (resumeSubscriptionsAutomatically) {
+                    resumes.add(() -> AbstractCatchupSubscriptionModel.runEach(presentCatchupModels().toList(), AbstractCatchupSubscriptionModel::relaunchParkedReplays));
+                }
+                if (replaysOnResume != null) {
+                    resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), id -> {
+                        if (!anyCatchupModel().shuttingDown && !anyCatchupModel().stoppedSinceTheLastStart()) {
+                            resumeSubscription(id);
+                        }
+                    }));
+                }
+                AbstractCatchupSubscriptionModel.runEach(resumes, Runnable::run);
+            });
         });
+    }
+
+    // Each child that was stopped stops again, unless the delegate runs or a resume of it came in the meantime
+    private void undoStart(Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts, Throwable e) {
+        boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
+                && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
+        attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns, e));
     }
 
     // Asks the catch-up children too, because a replay is running before the live delegate has registered the

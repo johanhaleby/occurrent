@@ -353,6 +353,20 @@ counts as under way until then, so a `start(..)` made in between doesn't call th
 start returns or throws what it would have without the call. When that call throws, it is logged at `ERROR`, and the
 next `shutdown()` calls the wrapped model's `shutdown()` again.
 
+A `stop()` made on the thread of a `start(..)`, from the same code, also takes the lock at once and takes effect at
+once. The model then ends stopped with the wrapped model stopped, as if the stop came after the start. Made before the
+wrapped model's `start(..)`, the stop has already stopped the wrapped model, so the start doesn't call the wrapped
+model's `start(..)` and resumes nothing. Made inside it, or from a method of the wrapped model the start calls after it,
+such as `isPaused(..)`, the stop keeps the start from resuming anything after it. Once the wrapped model's `start(..)`
+and the resumes have returned or thrown, the start makes the whole stop again under the lock, because the wrapped model
+may have gone on to start after the stop returned. The start returns or throws what it would have without the stop, and
+a throw from the repeated stop is logged at `ERROR`. A `start(..)` made on the same thread after that stop is the later
+call, and the model ends started. A `stop()` from a `CatchupListener`, or from a `StartAt.dynamic` function asked while
+the start resumes one subscription, throws `IllegalStateException` and changes nothing, since that thread runs a replay
+or holds the subscription's claim. The children of one dispatcher share a flag that every `stop()` sets and every
+`start(..)` clears as it begins. Every `start(..)` and `stop()` runs under the model lock, so a stop the flag shows
+while a start holds the lock was made on the start's own thread.
+
 Once the wrapped model's `shutdown()` has returned normally under the lock, a later `shutdown()` doesn't call it there
 again. One that threw left the wrapped model running, so the next `shutdown()` calls it again. A `start(..)` after a
 `shutdown()`, with no handed call left to wait for, calls the wrapped model's `start(..)`, as 0.34.0 did, and the next `shutdown()` calls its `shutdown()`
