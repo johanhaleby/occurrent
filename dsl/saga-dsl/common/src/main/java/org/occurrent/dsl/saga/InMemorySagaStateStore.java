@@ -16,13 +16,22 @@
 
 package org.occurrent.dsl.saga;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.BytesCloudEventData;
+import io.cloudevents.core.data.PojoCloudEventData;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.net.URI;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -39,6 +48,12 @@ import static java.util.Objects.requireNonNull;
  * in the form {@link SagaCodec} gives it, so an instance goes through the codec on every save and read as it does in any
  * other store. The state of a core saga is that state object as it is, and the state of a flow saga is the map
  * {@link SagaCodec} encodes it to, which the codec rebuilds on every read.
+ * <p>
+ * The record of a skipped input holds a copy of its event, taken when it is recorded, and every read returns a copy of
+ * that. Changing the delivered event afterwards, or an event a read returned, doesn't change the record. The copy
+ * takes bytes, and a {@code Map} or a {@code List} at any depth that holds bytes, a {@code String}, a {@code Boolean}, a
+ * {@code Character}, or a number of a {@code java.lang} or {@code java.math} class. {@link #compareAndSaveSkipped}
+ * throws an {@link IllegalStateException}, and records nothing, for an event with data or an extension it can't copy.
  *
  * @param <S> the user state type
  */
@@ -90,8 +105,9 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
         requireNonNull(input, "input cannot be null");
+        SkippedInput held = copyOf(saga.sagaId(), input);
         return compareAndSet(saga, expectedVersion, withoutStateUnlessInsert(saga, expectedVersion), quarantineId,
-                records -> records.containsKey(input.key()) ? records : with(records, input));
+                records -> records.containsKey(held.key()) ? records : with(records, held));
     }
 
     @Override
@@ -238,7 +254,83 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         return records.values().stream()
                 .sorted(SkippedInput.ORDER)
                 .limit(limit)
+                .map(record -> copyOf(sagaId, record))
                 .toList();
+    }
+
+    private static final Set<Class<?>> UNCHANGEABLE = Set.of(String.class, Boolean.class, Character.class, Byte.class, Short.class,
+            Integer.class, Long.class, Float.class, Double.class, BigInteger.class, BigDecimal.class);
+
+    // A copy that shares nothing the producer of the event or a reader of the record can change
+    private static SkippedInput copyOf(String sagaId, SkippedInput input) {
+        CloudEvent event = input.event();
+        CloudEventBuilder copy = CloudEventBuilder.fromSpecVersion(event.getSpecVersion()).withId(event.getId()).withSource(event.getSource()).withType(event.getType());
+        if (event.getDataContentType() != null) {
+            copy.withDataContentType(event.getDataContentType());
+        }
+        if (event.getDataSchema() != null) {
+            copy.withDataSchema(event.getDataSchema());
+        }
+        if (event.getSubject() != null) {
+            copy.withSubject(event.getSubject());
+        }
+        if (event.getTime() != null) {
+            copy.withTime(event.getTime());
+        }
+        for (String name : event.getExtensionNames()) {
+            switch (requireNonNull(event.getExtension(name))) {
+                case String value -> copy.withExtension(name, value);
+                case Boolean value -> copy.withExtension(name, value);
+                case URI value -> copy.withExtension(name, value);
+                case OffsetDateTime value -> copy.withExtension(name, value);
+                case byte[] value -> copy.withExtension(name, value.clone());
+                case Number value when UNCHANGEABLE.contains(value.getClass()) -> copy.withExtension(name, value);
+                case Object value -> throw cannotCopy(sagaId, input, "the extension '" + name + "', a " + value.getClass().getName());
+            }
+        }
+        CloudEventData data = event.getData();
+        if (data instanceof BytesCloudEventData bytes) {
+            copy.withData(BytesCloudEventData.wrap(bytes.toBytes().clone()));
+        } else if (data instanceof PojoCloudEventData<?> pojo && (pojo.getValue() instanceof Map<?, ?> || pojo.getValue() instanceof List<?>)) {
+            Object value = requireNonNull(copyOf(sagaId, input, pojo.getValue()));
+            byte[] bytes = pojo.toBytes().clone();
+            copy.withData(PojoCloudEventData.wrap(value, ignored -> bytes.clone()));
+        } else if (data != null) {
+            throw cannotCopy(sagaId, input, "its data, a " + data.getClass().getName());
+        }
+        return new SkippedInput(input.seq(), input.key(), copy.build());
+    }
+
+    private static @Nullable Object copyOf(String sagaId, SkippedInput input, @Nullable Object value) {
+        return switch (value) {
+            case null -> null;
+            case byte[] bytes -> bytes.clone();
+            case Map<?, ?> map -> {
+                Map<Object, @Nullable Object> copy = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    Object key = entry.getKey();
+                    if (key == null || !UNCHANGEABLE.contains(key.getClass())) {
+                        throw cannotCopy(sagaId, input, "a key in its data, " + (key == null ? "null" : "a " + key.getClass().getName()));
+                    }
+                    copy.put(key, copyOf(sagaId, input, entry.getValue()));
+                }
+                yield copy;
+            }
+            case List<?> list -> {
+                List<@Nullable Object> copy = new ArrayList<>(list.size());
+                for (Object element : list) {
+                    copy.add(copyOf(sagaId, input, element));
+                }
+                yield copy;
+            }
+            case Object other when UNCHANGEABLE.contains(other.getClass()) -> other;
+            case Object other -> throw cannotCopy(sagaId, input, "a " + other.getClass().getName() + " in its data");
+        };
+    }
+
+    private static IllegalStateException cannotCopy(String sagaId, SkippedInput input, String what) {
+        return new IllegalStateException("InMemorySagaStateStore cannot record the input '" + input.key() + "' that saga instance '" + sagaId
+                                         + "' skipped, because it cannot copy " + what + ". The record holds a copy of the event, so that a change to the delivered event doesn't change the record.");
     }
 
     private static Map<String, SkippedInput> with(Map<String, SkippedInput> records, SkippedInput input) {
