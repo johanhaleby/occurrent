@@ -253,7 +253,7 @@ jobs:
           # is named separately in mongodb-native rather than riding along, because it does start a container. The
           # leaves are listed one by one for that reason, since the bare `testing` prefix would pull it back in here.
           - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/junit-jupiter-reactor testing/spring-boot test-support broker/api/blocking" }
-          # example modules run MongoDB containers with timing-sensitive Awaitility tests, so the shard keeps an in-run
+          # Most example modules run MongoDB containers with timing-sensitive Awaitility tests, so the shard keeps an in-run
           # retry, and no other subtree lodges here because the retry would hide its flaky tests. It was once split in two
           # to start fewer containers per runner, but `example/domain` alone now starts as many as the whole tree did then.
           - { name: example,                     paths: "example/domain example/projection example/forwarder example/snapshot example/saga example/broker", args: "-Dsurefire.rerunFailingTestsCount=2" }
