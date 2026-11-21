@@ -19,8 +19,11 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.changestream.ChangeStreamDocument;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterAll;
@@ -35,18 +38,24 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -123,15 +132,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             Checkpoint later = requireNonNull(nativeModel.superGlobalCheckpoint());
             nativeModel.answers = earlier;
             assertThat(later.asString()).as("test setup, the other node's position is later").isNotEqualTo(earlier.asString());
-            NativeMongoCheckpointStorage storage = new NativeMongoCheckpointStorage(database.getCollection("checkpoints-" + UUID.randomUUID())) {
-                @Override
-                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                    if (condition instanceof CheckpointWriteCondition.IfAbsent) {
-                        super.save(subscriptionId, later, condition);
-                    }
-                    return super.save(subscriptionId, checkpoint, condition);
-                }
-            };
+            RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, later, CheckpointWriteCondition.ifAbsent()));
             DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
 
             durable.subscribe(SUBSCRIPTION_ID, __ -> {
@@ -162,30 +163,138 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             Checkpoint later = requireNonNull(nativeModel.superGlobalCheckpoint());
             nativeModel.answers = later;
             assertThat(later.asString()).as("test setup, this node's position is later").isNotEqualTo(earlier.asString());
-            NativeMongoCheckpointStorage storage = new NativeMongoCheckpointStorage(database.getCollection("checkpoints-" + UUID.randomUUID())) {
-                @Override
-                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                    Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
-                    if (condition instanceof CheckpointWriteCondition.IfAbsent) {
-                        super.resolveFirstCheckpointRace(subscriptionId, earlier);
-                        super.save(subscriptionId, earlier, CheckpointWriteCondition.notOlderThan(1));
-                    }
-                    return saved;
-                }
-            };
+            RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, earlier, CheckpointWriteCondition.notOlderThan(1)));
             DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
             CountDownLatch delivered = new CountDownLatch(1);
 
             durable.subscribe(SUBSCRIPTION_ID, __ -> delivered.countDown()).waitUntilStarted();
 
             assertAll(
-                    () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(earlier.asString()),
+                    () -> assertThat(storage.answered.get()).as("the position this node starts from")
+                            .isNotNull().extracting(Checkpoint::asString).isEqualTo(earlier.asString()),
                     () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
                     () -> assertThat(delivered.await(5, TimeUnit.SECONDS)).as("the event between the two positions is delivered").isTrue()
             );
         } finally {
             nativeModel.shutdown();
             executor.shutdown();
+        }
+    }
+
+    @Test
+    void a_node_whose_first_position_is_recorded_after_another_node_stored_a_checkpoint_for_a_delivered_event_keeps_that_checkpoint_and_starts_from_it() {
+        MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
+        MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
+        ExecutorService executor = Executors.newCachedThreadPool();
+        NativeMongoSubscriptionModel nativeModel = new NativeMongoSubscriptionModel(database, eventCollection.getNamespace().getCollectionName(), RFC_3339_STRING, executor);
+        try {
+            MongoResumeTokenCheckpoint deliveredEvent = resumeTokenOfAWrittenEvent(eventStore, eventCollection);
+            RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, deliveredEvent, CheckpointWriteCondition.notOlderThan(1)));
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
+
+            durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            }).waitUntilStarted();
+
+            assertAll(
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
+                    () -> assertThat(storage.answered.get()).as("the checkpoint this node starts from")
+                            .isNotNull().extracting(Checkpoint::asString).isEqualTo(deliveredEvent.asString())
+            );
+        } finally {
+            nativeModel.shutdown();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void a_node_with_an_older_version_starts_from_the_first_position_a_node_with_a_newer_one_stored_and_leaves_it_and_its_version_as_they_were() {
+        MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
+        ExecutorService executor = Executors.newCachedThreadPool();
+        EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
+        try {
+            MongoOperationTimeCheckpoint earlier = (MongoOperationTimeCheckpoint) requireNonNull(nativeModel.globalCheckpoint());
+            // Ahead of the cluster time, so no event of this test lies at or after it and nothing delivered can replace it
+            MongoOperationTimeCheckpoint laterFirstPosition = new MongoOperationTimeCheckpoint(new BsonTimestamp(earlier.operationTime.getTime() + 3600, 0));
+            nativeModel.answers = earlier;
+            RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, laterFirstPosition, CheckpointWriteCondition.notOlderThan(2)), true);
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(1));
+
+            assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            }).waitUntilStarted()).doesNotThrowAnyException();
+
+            assertAll(
+                    () -> assertThat(storage.refused.get()).as("the version of this node, older than the stored one, was refused")
+                            .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(laterFirstPosition.asString()),
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
+            );
+        } finally {
+            nativeModel.shutdown();
+            executor.shutdown();
+        }
+    }
+
+    private static MongoCollection<Document> checkpointCollection() {
+        return database.getCollection("checkpoints-" + UUID.randomUUID());
+    }
+
+    // A token taken from the change stream, since a subscription starting from it asks the change stream to resume after it
+    private static MongoResumeTokenCheckpoint resumeTokenOfAWrittenEvent(MongoEventStore eventStore, MongoCollection<Document> eventCollection) {
+        try (MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = eventCollection.watch().cursor()) {
+            eventStore.write("delivered-stream", List.of(event("delivered", "SomethingHappened")));
+            cursor.next();
+            return new MongoResumeTokenCheckpoint(requireNonNull(cursor.getResumeToken()));
+        }
+    }
+
+    /**
+     * Lets another node store a checkpoint right before this node settles its first position, and records what the
+     * settling answered or refused. With {@code beforeAnyFirstWrite} the other node also writes before an
+     * {@code ifAbsent()} write, whichever of the two this node makes first.
+     */
+    private static final class RaceHookStorage extends NativeMongoCheckpointStorage {
+        private final Consumer<NativeMongoCheckpointStorage> otherNodeWrites;
+        private final boolean beforeAnyFirstWrite;
+        private final AtomicBoolean otherNodeHasWritten = new AtomicBoolean();
+        final AtomicReference<@Nullable Checkpoint> answered = new AtomicReference<>();
+        final AtomicReference<@Nullable RuntimeException> refused = new AtomicReference<>();
+
+        RaceHookStorage(MongoCollection<Document> checkpointCollection, Consumer<NativeMongoCheckpointStorage> otherNodeWrites) {
+            this(checkpointCollection, otherNodeWrites, false);
+        }
+
+        RaceHookStorage(MongoCollection<Document> checkpointCollection, Consumer<NativeMongoCheckpointStorage> otherNodeWrites, boolean beforeAnyFirstWrite) {
+            super(checkpointCollection);
+            this.otherNodeWrites = otherNodeWrites;
+            this.beforeAnyFirstWrite = beforeAnyFirstWrite;
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (beforeAnyFirstWrite && condition instanceof CheckpointWriteCondition.IfAbsent) {
+                otherNodeWritesFirst();
+            }
+            return super.save(subscriptionId, checkpoint, condition);
+        }
+
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            otherNodeWritesFirst();
+            try {
+                Optional<Checkpoint> governing = super.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+                governing.ifPresent(answered::set);
+                return governing;
+            } catch (CheckpointWriteConditionNotFulfilledException e) {
+                refused.set(e);
+                throw e;
+            }
+        }
+
+        private void otherNodeWritesFirst() {
+            if (otherNodeHasWritten.compareAndSet(false, true)) {
+                otherNodeWrites.accept(this);
+            }
         }
     }
 

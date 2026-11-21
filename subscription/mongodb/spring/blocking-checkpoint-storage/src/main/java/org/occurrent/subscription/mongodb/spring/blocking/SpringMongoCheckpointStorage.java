@@ -154,6 +154,8 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
     /**
      * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
      * in the same {@code findOneAndUpdate}, see {@link MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     * A stored resume token or generic checkpoint is kept and answered, and gets {@code writeVersion} too. Answers
+     * empty, writing nothing, only for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint}.
      */
     @Override
     public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
@@ -161,13 +163,10 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
             return Optional.empty();
         }
         Document candidateDocument = MongoCommons.generateCheckpointDocument(subscriptionId, candidate);
-        Supplier<Document> resolve = () -> requireNonNull(mongoOperations.getCollection(checkpointCollection).findOneAndUpdate(
-                eq(ID, subscriptionId),
-                singletonList(MongoCommons.buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
-                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
+        Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument, writeVersion);
         // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
         Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
-        return MongoCommons.interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion);
+        return Optional.of(MongoCommons.interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion));
     }
 
     /**
@@ -180,6 +179,19 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
         return requireNonNull(collection.findOneAndUpdate(
                 eq(ID, subscriptionId),
                 singletonList(MongoCommons.buildFirstCheckpointRaceResolution(candidateDocument)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} is,
+     * reached the same way {@link #persistConditionalCheckpointDocument} is. See
+     * {@link MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     */
+    Document persistFirstCheckpointRaceResolution(String subscriptionId, Document candidateDocument, long writeVersion) {
+        MongoCollection<Document> collection = mongoOperations.getCollection(checkpointCollection);
+        return requireNonNull(collection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(MongoCommons.buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
                 new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
     }
 
