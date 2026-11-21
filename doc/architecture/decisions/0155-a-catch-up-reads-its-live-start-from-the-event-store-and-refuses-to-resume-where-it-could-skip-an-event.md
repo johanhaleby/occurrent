@@ -181,7 +181,7 @@ longest catch-up replay. A replay that outlasts it loses its live start, and the
 message names the longest replay, measured from the T0 read to the `canResumeFrom` check, and says the change stream
 history must reach back at least that far.
 
-### A history loss in the live phase stops the subscription by default
+### A history loss in the live phase pauses the subscription
 
 A catch-up owns every subscription made through it, live-only ones included, from just before the wrapped model opens
 until the subscription is cancelled. When MongoDB no longer has the history to resume a subscription, the catch-up
@@ -189,17 +189,16 @@ decides:
 
 1. A loss of a live start the catch-up already took over lets the takeover go on.
 2. A loss of the live start the catch-up handed over, as the wrapped model first opens, starts the takeover of ADR 146.
-3. A loss on a subscription that replayed or continued a replay from the beginning in this run and opted in with
-   `REPLAY_FROM_BEGINNING` replays from the beginning, with the replay count starting from 1.
-4. Every other loss on an owned subscription pauses it with `CatchupCannotResumeException`.
-5. A subscription no catch-up owns is left to the subscription model, as before.
+3. Every other loss on an owned subscription pauses it with `CatchupCannotResumeException`. The subscription skips no
+   event, and the other subscriptions keep running.
+4. A subscription no catch-up owns is left to the subscription model, as before.
 
 A paused subscription logs one error, and `resumeSubscription` throws `CatchupCannotResumeException` until it's
 cancelled. On the blocking stack `start(true)` throws it too, and on the reactor stack it pauses the subscription again
 with one more error. An unnamed `Flux` fails with it. `restart-on-change-stream-history-lost` no longer affects a
 subscription a catch-up runs, which in Spring Boot is every subscription by default, `NOW` and `DEFAULT` included.
 
-Telling row 2 from row 4 needs to know whether the wrapped model has opened before:
+Telling row 2 from row 3 needs to know whether the wrapped model has opened before:
 
 - Both `HistoryLossListener` interfaces get a default `handleHistoryLoss(String subscriptionId, Checkpoint lostFrom,
   boolean openedBefore)`. The two-argument form answers true.
@@ -209,24 +208,13 @@ Telling row 2 from row 4 needs to know whether the wrapped model has opened befo
   SubscriptionFilter filter, StartAt startAt)`, which breaks its implementers. The released
   `subscribeFailingIfStartLost` is unchanged.
 
-The opt-in for row 3:
+The catch-up pauses the subscription rather than replaying it from the beginning, because a replay runs the handler
+again for every event, including any mail it sends.
 
-- `org.occurrent.annotation.HistoryLossBehavior`, with `DEFAULT` and `REPLAY_FROM_BEGINNING`, is the attribute
-  `historyLossBehavior` on `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection`, `@Saga` and
-  `@Snapshot`. It requires `startAt = BEGINNING`. Spring Boot collects the answers in a `HistoryLossRecoveries` bean.
-- `org.occurrent.subscription.HistoryLossRecovery`, with `STOP` and `REPLAY_FROM_BEGINNING`, is set programmatically
-  with `CatchupSubscriptionModelConfig.historyLossRecovery(Function<String, HistoryLossRecovery>)`, the reactor
-  constructor parameter `historyLossRecovery`, or the unnamed `subscribe(filter, startAt, historyLossRecovery)`.
-
-Stopping is the default because a replay runs the handler again for every event, including any mail it sends. A
-subscription that resumed from a stored checkpoint after a restart stops even when it opted in, since its origin isn't
-known. A recovery stops with `CatchupCannotResumeException` once it loses its own live start three times before the
-subscription is live again. Under competing consumers, a lease that moves to another node turns a recovery into a stop.
-An unnamed `Flux` taken through `ReactorDurableSubscriptionModel` or the reactor `DcbSubscriptions` unnamed forms can't
-opt in.
-
-A recovery replays from the beginning, and not from some bounded time before the loss, because nothing bounds how long
-an append takes from reserving its position to committing:
+It doesn't restart the subscription from the last position it delivered either, or from some bounded time before the
+loss. An event that reserved a lower position can commit after that position was delivered, and only the change stream
+history that is gone would have delivered it. Nothing bounds how long an append takes from reserving its position to
+committing:
 
 - The position is reserved outside the transaction, so the transaction lifetime bounds start to commit, not reservation
   to commit. Retries can take 120 seconds for each of 15 attempts, and a stalled thread has no bound at all.
@@ -234,7 +222,13 @@ an append takes from reserving its position to committing:
 
 ADR 148 dropped its design 4 for the same reason.
 
-Keeping the origin across a restart would need a new live checkpoint form, and I'm not proposing one.
+[#1322](https://github.com/johanhaleby/occurrent/issues/1322) takes that reason away for a store that opts in to it.
+Such a store reserves an event's position inside the append transaction, so positions commit in order, and a
+subscription that delivered position N has seen every event below N. Its last delivered position is then a safe place
+to restart from, for every subscription over that store, with nothing to opt in to on the subscription and no replay
+from the beginning. [#1590](https://github.com/johanhaleby/occurrent/issues/1590) is the recovery from that position.
+Until then, someone recovers a paused subscription by hand, as
+[the manual recovery](#a-paused-subscription-is-recovered-by-hand) describes.
 
 ### The application can store the resume point itself
 
@@ -264,10 +258,33 @@ StartAt.checkpoint(new StringBasedCheckpoint(readFromMyStore())))`. A node that 
 it last ran, which can deliver events again and skips none. A marked string given to a bare MongoDB subscription
 model opens at the model's default with no error. A live checkpoint resumes only while the oplog still has it.
 
+### A paused subscription is recovered by hand
+
+A paused subscription delivers nothing until someone cancels it and subscribes it again, from one of two starts:
+
+- The beginning, when the handler can take every event again, or once the application has deleted what the handler
+  built. Cancelling a subscription under `DurableSubscriptionModel`, which the blocking Spring Boot starter builds,
+  deletes its stored checkpoint, so a subscription registered again with `startAt = BEGINNING` replays from the
+  beginning.
+- A checkpoint the application stored with its own state, as
+  [the resume point the application stores](#the-application-can-store-the-resume-point-itself) describes, passed
+  back with `StartAt.checkpoint` or `DcbStartAt.checkpoint`, or answered from `SubscriptionResumePoints`. The
+  checkpoint of a replayed event resumes, replays from the beginning or is refused, as
+  [the starts a catch-up refuses](#the-starts-a-catch-up-refuses) says, and skips no event in any of the three. The
+  checkpoint of a live event holds a change stream resume token, which the catch-up accepts only while the oplog
+  still has it and refuses with `CatchupCannotResumeException` otherwise. So a live checkpoint helps only when it's
+  newer than the token the subscription lost, for example when the subscription's own checkpoint storage is written
+  less often than the application stores its checkpoint.
+
+On a blocking catch-up model the application calls directly, `resumeSubscription(id, startAt)` at a resume token the
+oplog still has resumes the paused subscription without a cancel. Cancelling it and subscribing again from now skips
+every event since the lost token.
+
 ## Alternatives considered
 
-- **Reserve positions inside the transaction**, design 3 in ADR 148. Every append conflicts on one counter, the
-  contention [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) removed.
+- **Reserve positions inside the transaction on every store**, design 3 in ADR 148. Every append conflicts on one
+  counter, the contention [ADR 21](0021-dcb-write-path-query-scoped-concurrency.md) removed. #1322 proposes it as a
+  mode a store opts in to.
 - **A complete-through position with an age rule**, designs 4 to 6 in ADR 148. An age rule is unsafe for the reasons
   above. A gap-free prefix is sound, but it stalls for good at the first abandoned block, since gaps are permanent.
 - **A commit-ordered finalizer.** It needs a leader-elected process that must run, a write per event, and every event
@@ -288,10 +305,9 @@ model opens at the model's default with no error. A live checkpoint resumes only
 - **Refuse every 0.34 time checkpoint.** That breaks every user on the default sort, whose time checkpoints are safe.
 - **Route a position start with no filter to the agnostic model.** It changes what an existing DCB caller gets, with no
   error.
-- **The opt-in as a boolean attribute, inside `StartAt`, or as a per-call option.** A per-call option would have to pass
-  through competing consumers and both durable models.
-- **Replay from the beginning by default for every subscription whose origin is the beginning.** It repeats side effects
-  nobody asked to repeat.
+- **Replay from the beginning after a loss, by default or for a subscription that opts in.** It runs the handler again
+  for every event, side effects included. Its only reason is that positions don't commit in order, and #1322 takes that
+  reason away, so #1590 recovers from the last delivered position instead.
 - **The checkpoint in a CloudEvent extension.** It leaks into every event the application forwards or appends again.
 - **A helper at each `EventMetadata.from` call site.** Every call site in user code would miss it.
 - **A default method for `subscribeFailingOnHistoryLoss`.** It moves the signal from compile time to run time and still
@@ -329,7 +345,8 @@ model opens at the model's default with no error. A live checkpoint resumes only
 - A subscription model outside Occurrent that calls the two-argument `handleHistoryLoss` gets a stop instead of the
   first-open takeover.
 - When `ReactorMongoSubscriptionModel` reads ahead, and on an unnamed `Flux`, a transient error at the first attempt
-  followed by `ChangeStreamHistoryLost` stops the subscription, or recovers it when opted in, where ADR 146 replayed.
+  followed by `ChangeStreamHistoryLost` stops the subscription, where ADR 146 replayed.
 - The catch-up no longer needs `hostInfo`.
-- A recovery with `REPLAY_FROM_BEGINNING` costs a full replay.
+- A subscription paused by a history loss stays paused until someone recovers it by hand. Recovery from its last
+  delivered position waits for #1322 and #1590.
 - A no-live run hands over at T0 instead of at the present, so it delivers more duplicates.
