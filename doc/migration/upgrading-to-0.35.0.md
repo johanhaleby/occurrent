@@ -3002,8 +3002,10 @@ To resume from a checkpoint the application kept, when it stores the checkpoint 
 
 1. Cancel the subscription.
 2. Subscribe again from that checkpoint, or answer it from a `SubscriptionResumePoints` bean. A checkpoint from a
-   replayed event always resumes without a gap. A resume token from a live event resumes only while the oplog still
-   has it.
+   replayed event never resumes with a gap. When the oplog no longer has the live start that checkpoint holds and its
+   replay didn't start at the beginning, the subscribe throws `CatchupCannotResumeException`. Under
+   `startupMode = BACKGROUND` or `occurrent.subscription.mode=manual` the subscription is paused instead, as above. A
+   resume token from a live event resumes only while the oplog still has it.
 
 On a blocking catch-up subscription model you call directly, you can keep the subscription instead of cancelling it,
 when the token you kept is from a live event and the oplog still has it. Call
