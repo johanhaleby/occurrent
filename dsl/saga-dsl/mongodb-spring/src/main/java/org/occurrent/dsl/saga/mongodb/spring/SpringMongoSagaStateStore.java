@@ -35,6 +35,7 @@ import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.BytesCloudEventData;
 import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
@@ -82,6 +83,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -249,7 +251,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String EXTENSION_VALUE = "value";
     private static final String EXTENSION_URI = "uri";
     private static final String EXTENSION_TIMESTAMP = "timestamp";
-    private static final String EXTENSION_NUMBER = "number";
+    private static final String EXTENSION_BYTE = "byte";
+    private static final String EXTENSION_SHORT = "short";
+    private static final String EXTENSION_FLOAT = "float";
+    private static final String EXTENSION_BIG_INTEGER = "bigInteger";
+    private static final String EXTENSION_BIG_DECIMAL = "bigDecimal";
 
     /**
      * How many times a read or a write calls MongoDB before it gives up, 10, the same number
@@ -686,18 +692,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY), event.build());
     }
 
-    // The event's attributes as CloudEvents JSON, its extensions with their types, and its data the way a converter read
-    // it when it was delivered. Data delivered as a map, which is how the MongoDB event store delivers a JSON object, is
-    // held as a document, so a release hands the converter a map with the same values. Its bytes are held beside it unless
-    // they are the document's own JSON. Other data is held as its bytes, in BSON binary, which keeps binary data at its
-    // own size
-    private static Document heldEvent(CloudEvent event, CodecRegistry codecs) {
-        CloudEventBuilder attributes = CloudEventBuilder.from(event).withoutData();
+    // The event the way a converter read it on delivery. A map is held as a document, with its bytes beside it unless they
+    // are the document's own JSON, and bytes in BSON binary, which keeps binary data at its own size. Data of another
+    // class, or an extension of a class the record doesn't hold, is refused before anything is written
+    private static Document heldEvent(String sagaId, String key, CloudEvent event, CodecRegistry codecs) {
         Document extensions = new Document();
         for (String name : event.getExtensionNames()) {
-            extensions.append(name, heldExtension(Objects.requireNonNull(event.getExtension(name))));
-            attributes.withoutExtension(name);
+            extensions.append(name, heldExtension(sagaId, key, name, Objects.requireNonNull(event.getExtension(name))));
         }
+        // After the extensions, since CloudEventBuilder.from throws for an extension class it doesn't know, naming neither
+        // the instance nor the input
+        CloudEventBuilder attributes = CloudEventBuilder.from(event).withoutData();
+        extensions.keySet().forEach(attributes::withoutExtension);
         Document held = new Document(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(attributes.build()), StandardCharsets.UTF_8));
         if (!extensions.isEmpty()) {
             held.append(SKIPPED_EXTENSIONS, extensions);
@@ -706,51 +712,114 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (data == null) {
             return held;
         }
-        byte[] bytes = data.toBytes();
-        Document document = data instanceof PojoCloudEventData<?> pojo && pojo.getValue() instanceof Map<?, ?> map ? throughBson(map, codecs) : null;
-        if (document == null) {
-            return held.append(SKIPPED_DATA, bytes);
+        if (data instanceof PojoCloudEventData<?> pojo && pojo.getValue() instanceof Map<?, ?> map) {
+            byte[] bytes = data.toBytes();
+            Document document = throughBson(sagaId, key, map, codecs);
+            held.append(SKIPPED_DATA_DOCUMENT, document);
+            if (!Arrays.equals(bytes, document.toJson().getBytes(StandardCharsets.UTF_8))) {
+                held.append(SKIPPED_DATA, bytes);
+            }
+            return held;
         }
-        held.append(SKIPPED_DATA_DOCUMENT, document);
-        if (!Arrays.equals(bytes, document.toJson().getBytes(StandardCharsets.UTF_8))) {
-            held.append(SKIPPED_DATA, bytes);
+        // A release rebuilds held bytes as a BytesCloudEventData, so data of any other class would reach the converter as
+        // another class
+        if (data.getClass() != BytesCloudEventData.class) {
+            throw cannotRecord(sagaId, key, "Its data is a " + data.getClass().getName() + ", and the record holds data only as a map or as a "
+                    + BytesCloudEventData.class.getName() + ", so a release would hand the converter data of another class.");
         }
-        return held;
+        return held.append(SKIPPED_DATA, data.toBytes());
     }
 
-    // The map as BSON reads it back, or null when a key isn't a string, BSON cannot encode a value, or a value reads back
-    // as another one, such as a BigDecimal, which reads back as a Decimal128
-    private static @Nullable Document throughBson(Map<?, ?> map, CodecRegistry codecs) {
+    // The map as BSON reads it back. Refused unless every key is a string and every value reads back equal and of the
+    // same class, since a BigDecimal, for one, reads back as a Decimal128. A nested map or list may read back as another
+    // implementation of Map or List
+    private static Document throughBson(String sagaId, String key, Map<?, ?> map, CodecRegistry codecs) {
         Document original = new Document();
         for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (!(entry.getKey() instanceof String key)) {
-                return null;
+            if (!(entry.getKey() instanceof String field)) {
+                throw cannotRecord(sagaId, key, "Its data is a map with the key '" + entry.getKey() + "' of the class " + className(entry.getKey())
+                        + ", and BSON keeps only string keys.");
             }
-            original.put(key, entry.getValue());
+            original.put(field, entry.getValue());
         }
         Codec<Document> codec = codecs.get(Document.class);
+        Document decoded;
         try {
-            Document decoded = new RawBsonDocument(original, codec).decode(codec);
-            return original.equals(decoded) ? decoded : null;
+            decoded = new RawBsonDocument(original, codec).decode(codec);
         } catch (CodecConfigurationException | BSONException e) {
-            return null;
+            throw cannotRecord(sagaId, key, "Its data is a map that BSON can't encode. " + e.getMessage());
         }
+        String changed = firstChangedValue("", map, decoded);
+        if (changed != null) {
+            throw cannotRecord(sagaId, key, "Its data is a map whose value at '" + changed + "' reads back from BSON as another value or as a value of "
+                    + "another class, so a release would hand the converter another map.");
+        }
+        return decoded;
     }
 
-    // BSON keeps a string, an Integer, a Long, a Double, a Boolean and bytes as they are. A URI, a timestamp and any
-    // other number are tagged with their type, since BSON would read them back as other types
-    private static Object heldExtension(Object value) {
+    // The path of the first value that reads back as another value or as a value of another class, or null when every
+    // value reads back as it was
+    private static @Nullable String firstChangedValue(String path, @Nullable Object original, @Nullable Object decoded) {
+        if (original instanceof Map<?, ?> originalMap) {
+            if (!(decoded instanceof Map<?, ?> decodedMap) || originalMap.size() != decodedMap.size()) {
+                return path;
+            }
+            for (Map.Entry<?, ?> entry : originalMap.entrySet()) {
+                String field = path.isEmpty() ? String.valueOf(entry.getKey()) : path + "." + entry.getKey();
+                if (!decodedMap.containsKey(entry.getKey())) {
+                    return field;
+                }
+                String changed = firstChangedValue(field, entry.getValue(), decodedMap.get(entry.getKey()));
+                if (changed != null) {
+                    return changed;
+                }
+            }
+            return null;
+        }
+        if (original instanceof List<?> originalList) {
+            if (!(decoded instanceof List<?> decodedList) || originalList.size() != decodedList.size()) {
+                return path;
+            }
+            for (int i = 0; i < originalList.size(); i++) {
+                String changed = firstChangedValue(path + "[" + i + "]", originalList.get(i), decodedList.get(i));
+                if (changed != null) {
+                    return changed;
+                }
+            }
+            return null;
+        }
+        if (original == null) {
+            return decoded == null ? null : path;
+        }
+        return decoded != null && original.getClass() == decoded.getClass() && original.equals(decoded) ? null : path;
+    }
+
+    private static String className(@Nullable Object value) {
+        return value == null ? "null" : value.getClass().getName();
+    }
+
+    // BSON keeps a String, an Integer, a Long, a Double, a Boolean and bytes as they are. The other classes are tagged with
+    // their class and restored to it. Any class but these is refused
+    private static Object heldExtension(String sagaId, String key, String name, Object value) {
         return switch (value) {
             case String string -> string;
-            case Integer integer -> integer;
+            case Integer number -> number;
             case Long number -> number;
             case Double number -> number;
             case Boolean bool -> bool;
             case byte[] bytes -> bytes;
             case URI uri -> taggedExtension(EXTENSION_URI, uri.toString());
             case OffsetDateTime time -> taggedExtension(EXTENSION_TIMESTAMP, time.toString());
-            case Number number -> isDecimal(number.toString()) ? taggedExtension(EXTENSION_NUMBER, number.toString()) : number.doubleValue();
-            default -> value.toString();
+            case Byte number -> taggedExtension(EXTENSION_BYTE, number.toString());
+            case Short number -> taggedExtension(EXTENSION_SHORT, number.toString());
+            // Float.valueOf reads Float.toString back as the same Float, NaN and both infinities included
+            case Float number -> taggedExtension(EXTENSION_FLOAT, number.toString());
+            // Neither class is final, and a subclass would be restored as the class itself
+            case BigInteger number when number.getClass() == BigInteger.class -> taggedExtension(EXTENSION_BIG_INTEGER, number.toString());
+            case BigDecimal number when number.getClass() == BigDecimal.class -> taggedExtension(EXTENSION_BIG_DECIMAL, number.toString());
+            default -> throw cannotRecord(sagaId, key, "Its extension '" + name + "' is a " + value.getClass().getName() + ", and the record holds an "
+                    + "extension only as a String, a Boolean, a byte[], a URI, an OffsetDateTime, a Byte, a Short, an Integer, a Long, a Float, a Double, "
+                    + "a BigInteger or a BigDecimal, so a release would hand the converter another value.");
         };
     }
 
@@ -758,19 +827,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return new Document(EXTENSION_TYPE, type).append(EXTENSION_VALUE, value);
     }
 
-    private static boolean isDecimal(String number) {
-        try {
-            new BigDecimal(number);
-            return true;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
     private static void withHeldExtension(CloudEventBuilder event, String name, Object value) {
         switch (value) {
             case String string -> event.withExtension(name, string);
-            case Number number -> event.withExtension(name, number);
+            case Integer number -> event.withExtension(name, number);
+            case Long number -> event.withExtension(name, number);
+            case Double number -> event.withExtension(name, number);
             case Boolean bool -> event.withExtension(name, bool);
             case Binary binary -> event.withExtension(name, binary.getData());
             case byte[] bytes -> event.withExtension(name, bytes);
@@ -779,7 +841,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 switch (tagged.getString(EXTENSION_TYPE)) {
                     case EXTENSION_URI -> event.withExtension(name, URI.create(tag));
                     case EXTENSION_TIMESTAMP -> event.withExtension(name, OffsetDateTime.parse(tag));
-                    case EXTENSION_NUMBER -> event.withExtension(name, new BigDecimal(tag));
+                    case EXTENSION_BYTE -> event.withExtension(name, Byte.valueOf(tag));
+                    case EXTENSION_SHORT -> event.withExtension(name, Short.valueOf(tag));
+                    case EXTENSION_FLOAT -> event.withExtension(name, Float.valueOf(tag));
+                    case EXTENSION_BIG_INTEGER -> event.withExtension(name, new BigInteger(tag));
+                    case EXTENSION_BIG_DECIMAL -> event.withExtension(name, new BigDecimal(tag));
                     default -> throw new IllegalStateException("Extension '" + name + "' of a skipped input has the unknown type '" + tagged.getString(EXTENSION_TYPE) + "'");
                 }
             }
@@ -790,18 +856,29 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     /**
      * {@inheritDoc}
      * <p>
-     * The record holds the event's attributes as a CloudEvents JSON string and its extensions with their types. A
-     * number extension that isn't an {@code Integer}, a {@code Long} or a {@code Double} reads back as a
-     * {@code BigDecimal}. Data delivered as a map, which is how the MongoDB event store delivers a JSON object, is held as
-     * a document, with its bytes beside it unless they are the document's own JSON, and a release hands the converter a
-     * map with the same values and the same bytes. Other data, and a map with a value BSON reads back as another value,
-     * such as a {@code BigDecimal}, is held as its bytes in BSON binary.
+     * The record holds the event exactly as it was delivered, so a release hands the converter the same data class, the
+     * same values of the same Java classes, the same bytes and content type, and the extensions with the same values and
+     * the same classes. The attributes are a CloudEvents JSON string. A {@code String}, an {@code Integer}, a
+     * {@code Long}, a {@code Double}, a {@code Boolean} and a {@code byte[]} extension are stored as they are, and a
+     * {@code URI}, an {@code OffsetDateTime}, a {@code Byte}, a {@code Short}, a {@code Float}, a {@code BigInteger} and
+     * a {@code BigDecimal} extension as a string tagged with its class. Data delivered as a map, which is how the MongoDB
+     * event store delivers a JSON object, is held as a document, with its bytes beside it unless they are the document's
+     * own JSON. Data delivered as a {@link BytesCloudEventData} is held as its bytes in BSON binary.
      * <p>
-     * MongoDB stores at most 16 MiB in the record, and the record holds the saga id, the quarantine id, the key and the
-     * attributes beside the data, so an event whose data comes that close to 16 MiB doesn't fit. A map from another feed
-     * than the MongoDB event store is held both as a document and as its bytes, so it fits only up to about half that.
-     * This then throws an {@link IllegalStateException} that
-     * names the instance and the input, before it writes anything. A subscription that retries the event stops on it.
+     * This throws an {@link IllegalStateException} that names the instance, the input and what the record can't hold,
+     * before it writes anything, when:
+     * <ul>
+     *     <li>the record goes over the 16 MiB MongoDB stores in one, which the saga id, the quarantine id, the key and
+     *     the attributes share with the data. A map from another feed than the MongoDB event store is held both as a
+     *     document and as its bytes, so it fits only up to about half that.</li>
+     *     <li>the data is a map with a key that isn't a string, or with a value BSON can't encode or reads back as
+     *     another value or as a value of another class, such as a {@code BigDecimal}, which reads back as a
+     *     {@code Decimal128}.</li>
+     *     <li>the data is of another class than a map or a {@link BytesCloudEventData}, such as a
+     *     {@code JsonCloudEventData}.</li>
+     *     <li>an extension is of another class than the ones above.</li>
+     * </ul>
+     * A subscription that retries the event stops on it.
      */
     @Override
     public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
@@ -816,10 +893,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     : database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), withoutState(saga)).getMatchedCount() > 0;
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
             Document held = new Document(SKIPPED_SEQ, input.seq());
-            held.putAll(heldEvent(input.event(), skippedInputs(databaseFactory.getMongoDatabase()).getCodecRegistry()));
+            CodecRegistry codecs = skippedInputCodecs();
+            held.putAll(heldEvent(saga.sagaId(), input.key(), input.event(), codecs));
             // Set on insert, so a record of the key keeps its first seq and event
             Document record = new Document("$setOnInsert", held);
-            refuseTooLargeRecord(saga.sagaId(), input.key(), filter, record);
+            refuseTooLargeRecord(saga.sagaId(), input.key(), filter, record, codecs);
             return transition(writeInstance, database -> skippedInputs(database).updateOne(filter, record, new UpdateOptions().upsert(true)));
         });
     }
@@ -883,8 +961,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // Checked before the transaction, since the driver throws a BsonMaximumSizeExceededException that names neither the
     // instance nor the input, and a retry sends the same record again
-    private void refuseTooLargeRecord(String sagaId, String key, Document filter, Document record) {
-        CodecRegistry codecs = skippedInputs(databaseFactory.getMongoDatabase()).getCodecRegistry();
+    // Looked up before the transaction, so a failure to get the database is translated the way a failure inside it is
+    private CodecRegistry skippedInputCodecs() {
+        try {
+            return skippedInputs(databaseFactory.getMongoDatabase()).getCodecRegistry();
+        } catch (RuntimeException e) {
+            throw translated(e);
+        }
+    }
+
+    private static void refuseTooLargeRecord(String sagaId, String key, Document filter, Document record, CodecRegistry codecs) {
         // An upsert stores the fields of the filter, the fields it sets on insert and an ObjectId as the _id
         Document stored = new Document(ID, new ObjectId());
         stored.putAll(filter);
@@ -892,12 +978,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         int storedSize = new RawBsonDocument(stored, codecs.get(Document.class)).getByteBuffer().remaining();
         int statementSize = encodedSize(statement(filter.toBsonDocument(BsonDocument.class, codecs), record.toBsonDocument(BsonDocument.class, codecs)), codecs);
         if (storedSize > MAX_DOCUMENT_SIZE || statementSize > MAX_STATEMENT_SIZE) {
-            throw new IllegalStateException("Saga instance '" + sagaId + "' cannot record the input '" + key + "' it skips. Its record takes "
-                    + storedSize + " bytes of BSON, where MongoDB stores at most " + MAX_DOCUMENT_SIZE + ", and the write that sends it takes "
-                    + statementSize + " bytes, where the driver sends at most " + MAX_STATEMENT_SIZE + ". The record holds the event's data "
-                    + "together with its attributes, the saga id, the quarantine id and the key, so data that close to "
-                    + "MongoDB's limit leaves no room for them. Nothing is written for the input.");
+            throw cannotRecord(sagaId, key, "Its record takes " + storedSize + " bytes of BSON, where MongoDB stores at most " + MAX_DOCUMENT_SIZE
+                    + ", and the write that sends it takes " + statementSize + " bytes, where the driver sends at most " + MAX_STATEMENT_SIZE
+                    + ". The record holds the event's data together with its attributes, the saga id, the quarantine id and the key, so data "
+                    + "that close to MongoDB's limit leaves no room for them.");
         }
+    }
+
+    private static IllegalStateException cannotRecord(String sagaId, String key, String reason) {
+        return new IllegalStateException("Saga instance '" + sagaId + "' cannot record the input '" + key + "' it skips. " + reason
+                + " Nothing is written for the input.");
     }
 
     // An update or replacement as the driver writes it into the update command, see SplittablePayload

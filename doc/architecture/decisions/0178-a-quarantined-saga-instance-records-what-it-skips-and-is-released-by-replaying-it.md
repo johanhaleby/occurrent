@@ -113,8 +113,41 @@ the key and the event. A quarantine can record any number of inputs without grow
 MongoDB's 16 MB limit, so there is no limit on how many it records.
 
 A store keeps a record's event and returns it from `findSkippedInputs`. The saga keeps no other copy of a skipped
-event. A release converts the event again, so `SpringMongoSagaStateStore` keeps what the converter
-read when the event was delivered. In the record, `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions with their types. BSON keeps a string, an `Integer`, a `Long`, a `Double`, a `Boolean` and bytes as they are, and a URI, a timestamp and any other number are stored with a tag that names the type. Data delivered as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON. Other data, and a map with a value BSON reads back as another value, such as a `BigDecimal`, is held in `data` as its bytes in BSON binary. A release hands the converter the data the way the delivery did, a map as a map and bytes as bytes, and the extensions with the values and types they had. Written as CloudEvents JSON, binary data would grow by a third as base64, and a 13 MiB binary event would not fit in a record at all. JSON data parsed into a document would read a field such as `{"$numberLong": "42"}` as MongoDB Extended JSON and come back as `42`. A map released as its bytes would hand the converter the MongoDB event store's JSON of it, where a date is `{"$date": ...}`, instead of the map it converted on delivery. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id, the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. A map from another feed, such as one a Jackson converter built, is held both as a document and as its bytes, so it fits only up to about half that. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it.
+event. A release converts the event again, so `SpringMongoSagaStateStore` hands the converter the event exactly as it
+was delivered, or refuses to record it. Exactly as delivered means the same `CloudEventData` class, the same data with
+the same Java classes, the same bytes and content type, and the extensions with the same values and the same Java
+classes.
+
+In the record, `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. BSON
+keeps a `String`, an `Integer`, a `Long`, a `Double`, a `Boolean` and a `byte[]` as they are. A `URI`, an
+`OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` are stored as a string with a tag
+that names the class, and read back as that class, a `Float` NaN or infinity included.
+
+Data delivered as a `PojoCloudEventData` that holds a map, which is how the MongoDB event store delivers a JSON object,
+is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON, and a release hands the
+converter a map again. Data delivered as a `BytesCloudEventData` is held in `data` as its bytes in BSON binary, and a
+release hands the converter a `BytesCloudEventData` again. Written as CloudEvents JSON, binary data would grow by a third
+as base64, and a 13 MiB binary event would not fit in a record at all. JSON data parsed into a document would read a
+field such as `{"$numberLong": "42"}` as MongoDB Extended JSON and come back as `42`. A map released as its bytes would
+hand the converter the MongoDB event store's JSON of it, where a date is `{"$date": ...}`, instead of the map it
+converted on delivery.
+
+`compareAndSaveSkipped` throws an `IllegalStateException` before it writes anything, so the instance and its records
+stay as they were, in these cases:
+
+- The record doesn't fit. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id,
+  the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. A map
+  from another feed, such as one a Jackson converter built, is held both as a document and as its bytes, so it fits
+  only up to about half that.
+- The data is a map with a key that isn't a string, or with a value BSON can't encode or reads back as another value
+  or as a value of another class. A `BigDecimal` reads back as a `Decimal128`, for one. Held as its bytes, the map would
+  reach the converter as bytes instead, and Jackson reads a `BigDecimal` in an `Object` field from bytes as a `Double`.
+- The data is of any other class, such as the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object
+  into, since a release would hand the converter a `BytesCloudEventData`.
+- An extension is of any other class than the ones above.
+
+The message names the instance, the input and what the record can't hold. A subscription that retries the event stops
+on it.
 
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
@@ -435,8 +468,8 @@ on its first deploy, instead of quarantining without knowing it.
   saga id, the quarantine id and the key keeps a key from being recorded twice, and an index on the saga id, the
   quarantine id and the sequence number serves the order release reads them in.
 - A record document holds the attributes of its input's event as a CloudEvents JSON string, in its `event` field,
-  its extensions with their types in `extensions`, and its data in `dataDocument` when it was delivered as a map and in
-  `data` as bytes otherwise. Every
+  its extensions with their classes in `extensions`, and its data in `dataDocument` when it was delivered as a map and
+  in `data` when it was delivered as bytes, see section 2. Every
   record has an `event`, K's record included, which the write that quarantines the instance writes. The collection is new in 0.35.0, so
   no released document changes.
 - A document a 0.34.0 node wrote has none of these fields and reads as not releasing, with no quarantine id.

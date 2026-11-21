@@ -409,8 +409,8 @@ db.getCollection("saga-order-fulfilment")
 `failureReleasedAt` is stored as epoch milliseconds. The inputs still to replay are documents in the collection named
 after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the input the instance
 stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`, `dataDocument` and `data` when
-the event has them. `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions with their types. BSON keeps a string, an `Integer`, a `Long`, a `Double`, a `Boolean` and bytes as they are, and a URI, a timestamp and any other number are stored with a tag that names the type. Data delivered as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON. Other data, and a map with a value BSON reads back as another value, such as a `BigDecimal`, is held in `data` as its bytes in BSON binary. A release hands the converter the data the way the delivery did, a map as a map and bytes as bytes, and the extensions with the values and types they had. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id, the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. A map from another feed, such as one a Jackson converter built, is held both as a document and as its bytes, so it fits only up to about half that. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it. A
-release replays them in order of `seq`, and only those under the instance's `failureQuarantineId`:
+the event has them. A release replays them in order of `seq`, and only those under the instance's
+`failureQuarantineId`:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs")
@@ -420,6 +420,27 @@ db.getCollection("saga-order-fulfilment_skipped_inputs")
 ```
 
 A key is `<streamId>@<streamVersion>` for an event from a stream.
+
+`event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `String`, an
+`Integer`, a `Long`, a `Double`, a `Boolean` and a `byte[]` are stored as they are, and a `URI`, an `OffsetDateTime`, a
+`Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` as a string with a tag that names the class. Data
+delivered as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its
+bytes in `data` unless they are the document's own JSON. Data delivered as a `BytesCloudEventData` is held in `data` as
+its bytes in BSON binary. A release hands the converter the event exactly as it was delivered, with the same data class,
+the same values of the same Java classes, the same bytes and the same extension classes.
+
+`compareAndSaveSkipped` throws an `IllegalStateException` for an input it can't record that way, before it writes
+anything, so the instance and its records stay as they were. The message names the instance, the input and what the
+record can't hold. A subscription that retries the event stops on it. That happens when:
+
+- The record goes over the 16 MiB MongoDB stores in one. The attributes, the saga id, the quarantine id and the key
+  share it with the data, so data that comes that close to 16 MiB doesn't fit. A map from another feed, such as one a
+  Jackson converter built, is held both as a document and as its bytes, so it fits only up to about half that.
+- The data is a map with a key that isn't a string, or with a value BSON can't encode or reads back as another value
+  or as a value of another class, such as a `BigDecimal`, which reads back as a `Decimal128`.
+- The data is of another class than a map or a `BytesCloudEventData`, such as the `JsonCloudEventData` the CloudEvents
+  JSON format reads a JSON object into.
+- An extension is of another class than the ones above.
 
 These records are the only copy of the skipped events that the saga keeps, and erasing an event from the event store
 doesn't erase its copy here. Release or delete the quarantined instances before you erase an event from the event
