@@ -709,7 +709,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * A record is replayed against the instance read again after the records, and the write that applies it expects
      * that version. The write that applies a record deletes it, so a record missing from the records read was applied in
      * a write the first read of the instance can miss. The second read has it, so a replay never computes or dispatches
-     * from a state without a record applied before it, such as a start event.
+     * from a state without a record applied before it, such as a start event. After the second read the release checks
+     * that the instance has the same quarantine id and that the record is still the first under it. Otherwise another
+     * release applied the record in between, and the loop reads the instance again as it does for a lost write. Every
+     * write a release makes for a record, the one that applies it, the one that deletes it, the failure record and the
+     * write that quarantines the instance again, comes after such a check and expects the version read before it.
      * <p>
      * A release dispatches a record's commands before the write that applies it, so like a live input it dispatches them
      * at least once. A write that loses only to skipped inputs recorded in between is written again without
@@ -780,11 +784,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 continue;
             }
             afterRecord = Objects.requireNonNull(afterRecord);
-            if (!quarantineId.equals(afterRecord.quarantineId())) {
+            SkippedInput record = first.getFirst();
+            // Every write below expects this read's version, so a record still first here is still first when that write
+            // wins. Another release may have applied and deleted it since the records were read, and the stream marks
+            // cannot show that for an input with no stream
+            if (!quarantineId.equals(afterRecord.quarantineId()) || !isFirstRecord(records, sagaId, quarantineId, record)) {
+                lostInARow = lostAgain(sagaId, lostInARow);
                 continue;
             }
             current = afterRecord;
-            SkippedInput record = first.getFirst();
             CloudEvent cloudEvent = record.event();
             EventMeta meta = extractMeta(cloudEvent).meta();
             boolean saved;
@@ -842,7 +850,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // record of the event when the event failed with failure. The write that quarantines it is checked too, first the
     // one with the record's pending entry and the reason, then the bare one. When neither fits, nothing
     // is written. The ERROR says whether a further release gets past the record, which it does when the store can take
-    // applied with the marks trimmed. Null when the instance changed since current was read, and the caller reads it again
+    // applied with the marks trimmed. Null when the instance changed since current was read, and the caller reads it again.
+    // The caller checked after reading current that record is the first record under its quarantine id, and the write
+    // expects current's version, so it never quarantines the instance on a record another release deleted
     private SagaSubscription.@Nullable ReleaseResult quarantineAgainTooLarge(SagaStateStoreSkippedInputs records, String sagaId, SkippedInput record, EventMeta meta,
                                                                            SagaEnvelope<S> current, @Nullable SagaEnvelope<S> applied, String cannotWrite,
                                                                            @Nullable Throwable failure, Instant now) {
