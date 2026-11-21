@@ -81,6 +81,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
     private static final Checkpoint EVENT_AFTER_THE_RESUME = new StringBasedCheckpoint("event-after-the-resume");
     private static final Checkpoint EVENT_READ_BEFORE_THE_PAUSE = new StringBasedCheckpoint("event-read-before-the-pause");
     private static final Checkpoint EVENT_OF_THE_RUN_THE_FAILED_RESUME_STARTED = new StringBasedCheckpoint("event-of-the-run-the-failed-resume-started");
+    private static final Checkpoint EVENT_STORED_BEFORE_THE_RESUME = new StringBasedCheckpoint("event-stored-before-the-resume");
     private static final Checkpoint QUIET = new StringBasedCheckpoint("quiet");
 
     private final PausableModel wrapped = new PausableModel();
@@ -456,6 +457,58 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
             model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(LATER_THAN_THE_EVENT));
 
             // Then
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
+
+        @Test
+        void no_quiet_position_is_saved_once_the_put_back_has_replaced_the_position_a_handler_returning_during_the_resume_found_stored() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model);
+            CompletableFuture<Void> handler = deliverAHandlerThatStaysRunning(EVENT_OF_THE_RUNNING_HANDLER);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.whenResuming = () -> {
+                wrapped.whenResuming = () -> {
+                };
+                handlerReturns(handler);
+            };
+            wrapped.failsResume = true;
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // Then
+            await().during(300, MILLISECONDS).atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            });
+        }
+
+        @Test
+        void a_quiet_position_is_saved_after_a_failed_resume_put_back_the_checkpoint_of_an_event_stored_before_it() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model);
+            wrapped.deliver(SUBSCRIPTION_ID, EVENT_STORED_BEFORE_THE_RESUME);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EVENT_STORED_BEFORE_THE_RESUME);
             await().atMost(2, SECONDS).untilAsserted(() -> {
                 Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
                 if (saver != null) {

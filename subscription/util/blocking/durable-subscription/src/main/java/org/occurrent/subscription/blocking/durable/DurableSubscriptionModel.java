@@ -1168,6 +1168,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // throws, since the position may have been stored anyway, and when the resume fails, which only delivers
             // its event again
             List<CheckpointRegistration> writing = registrationsWritingFor(subscriptionId);
+            writing.forEach(CheckpointRegistration::beforeResuming);
             underSaveLocksOf(writing, () -> {
                 writing.forEach(CheckpointRegistration::repositioning);
                 storage.save(subscriptionId, position, writeCondition);
@@ -1188,6 +1189,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     writing.forEach(CheckpointRegistration::puttingBack);
                     putBack(subscriptionId, previous, writeCondition, e);
                 });
+                writing.forEach(CheckpointRegistration::latestAsBeforeTheResume);
                 throw e;
             }
         });
@@ -1597,6 +1599,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         private int deliveriesUnderWay;
         // Counts the deliveries of every run of this subscribe
         private long deliveries;
+        private long deliveriesEnded;
+        // What latestStored was before a resume at a position, and how many deliveries had started and ended then, so a
+        // put-back after the resume failed can tell whether that answer still holds
+        private boolean latestStoredBeforeTheResume;
+        private long deliveriesBeforeTheResume;
+        private long deliveriesEndedBeforeTheResume;
         // Numbers the reads of every run of this subscribe. A run reads and delivers on one thread, and asks the
         // listener before each read, so a delivery belongs to the read its thread made last
         private final AtomicLong reads = new AtomicLong();
@@ -1663,6 +1671,29 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
 
+        void beforeResuming() {
+            deliveryLock.lock();
+            try {
+                latestStoredBeforeTheResume = latestStored;
+                deliveriesBeforeTheResume = deliveries;
+                deliveriesEndedBeforeTheResume = deliveriesEnded;
+            } finally {
+                deliveryLock.unlock();
+            }
+        }
+
+        // The put-back replaced what the resume and any delivery since then stored, so the answer from before the resume
+        // holds only while no delivery has started or ended since
+        void latestAsBeforeTheResume() {
+            deliveryLock.lock();
+            try {
+                latestStored = latestStoredBeforeTheResume && deliveries == deliveriesBeforeTheResume && deliveriesEnded == deliveriesEndedBeforeTheResume;
+                quietSaveAllowed = deliveriesUnderWay == 0 && latestStored;
+            } finally {
+                deliveryLock.unlock();
+            }
+        }
+
         // The position a resume at a position stored is the latest one stored, also when a delivery a failed resume
         // refused was the latest before it. A delivery still under way decides again when it finishes
         void latestIsStored() {
@@ -1699,6 +1730,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             deliveryLock.lock();
             try {
                 deliveriesUnderWay--;
+                deliveriesEnded++;
                 if (delivery == latestCurrentDelivery) {
                     latestStored = stored || storedReposition > repositionsWhenDelivered;
                 }
