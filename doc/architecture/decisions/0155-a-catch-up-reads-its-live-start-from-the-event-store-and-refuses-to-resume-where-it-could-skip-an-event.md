@@ -273,8 +273,9 @@ starts below, as
 [the upgrade guide](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 describes.
 
-With one instance, or on a subscription model the application calls directly without competing consumers, someone
-cancels the subscription and subscribes it again from one of two starts:
+When one process runs the subscription and nothing else writes to its checkpoint storage under that id, someone
+cancels the subscription and subscribes it again from one of two starts. Calling the subscription model directly
+doesn't make that so, since two `DurableSubscriptionModel`s can share one `CheckpointStorage`. The starts are:
 
 - The beginning, when the handler can take every event again, or once the application has deleted what the handler
   built. Cancelling a subscription under `DurableSubscriptionModel` deletes its stored checkpoint, so a subscribe

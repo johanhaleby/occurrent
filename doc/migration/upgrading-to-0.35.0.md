@@ -3053,13 +3053,38 @@ To continue from now, when skipping the events since the lost token is acceptabl
 
 When more than one instance of the application runs a subscription, every instance reads what is stored under its id.
 For a durable or catch-up subscription that is its checkpoint, and for a subscription with `source = PUSH` it is its
-catch-up marker. Delete or replace it like this instead of cancelling the subscription on one instance:
+catch-up marker. How to change it depends on where the handler keeps what it builds.
 
-1. Stop every instance of the application.
+When every instance writes to one store, such as a read model in MongoDB, delete or replace it like this instead of
+cancelling the subscription on one instance:
+
+1. Stop every instance of the application that can write the checkpoint or marker.
 2. Delete the stored checkpoint or marker, or replace the checkpoint with the one to start from. Spring Boot stores
    both in the collection `occurrent.subscription.mongodb.collection` names, `subscriptions` by default, as the
    document whose `_id` is the subscription id.
 3. Start every instance again with the same start. In Spring Boot that is the same start attribute on the annotation.
+
+The instance that starts first runs the subscription from that start, and what it writes to the store is there for
+every instance. An instance that starts after it finds the checkpoint or marker the first one stored, and resumes
+after it or skips its replay. The store already has those events from the first instance.
+
+When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
+instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its
+replay, so what that instance builds misses those events. That happens on every start, also when nothing was deleted.
+Give each instance a subscription id of its own instead:
+
+- The checkpoint and the catch-up marker are stored under the subscription id, so each instance then reads only what
+  it stored itself, and a change to it needs only that instance stopped.
+- Under the blocking starter the lease is taken per subscription id too, so each instance holds the lease of its own
+  id and runs its subscription.
+- For a subscription with `source = PUSH` the broker decides which live events reach an instance, not the id. Each
+  instance needs a RabbitMQ queue or a Kafka consumer group of its own, or it gets only some of the live events.
+- An annotation's `id` is a constant, so every instance of the application has the same one. Subscribe such a
+  subscription in code instead.
+
+When what an instance builds is gone after a restart, an id of its own still resumes from what that instance stored
+before it. Store nothing for it then, so every start replays from its start. For example, build a
+`CatchupThenPushSubscriptionModel` with `null` as its catch-up marker storage.
 
 `cancelSubscription(id)` deletes what every instance shares, and the other instances keep running and can store it
 again before the instance you recover subscribes again:
@@ -3075,10 +3100,19 @@ again before the instance you recover subscribes again:
   is done. When it does that after your cancel deleted the marker, the subscribe on the instance you recover finds the
   marker and skips its replay on the blocking stack, or replays only the events after it on the reactive stack.
 
-A new subscription id needs none of this. Nothing is stored under it, so the subscription starts from its start, and
-the catch-up of a subscription with `source = PUSH` replays the whole history. Use one for a rebuild or a changed
-filter, or when the application can't stop every instance at once. Once no instance runs the old id, delete what is
-stored under it.
+A new subscription id that every instance shares needs no instance stopped when every instance writes to one store.
+Nothing is stored under it, so the subscription starts from its start, and the catch-up of a subscription with
+`source = PUSH` replays the whole history. Use one for a rebuild or a changed filter, or when the application can't
+stop every instance at once. Once no instance runs the old id, delete what is stored under it. When each instance keeps
+what it builds for itself, a new id that every instance shares has the same problem as the old one, since every
+instance that starts after the first finds what the first one stored under it.
+
+A step in this guide that says "with one instance" means that one process runs the subscription and nothing else
+writes to its checkpoint storage under that id. A subscription model that the application calls directly doesn't
+make that so. Two `DurableSubscriptionModel`s can share one `CheckpointStorage`, and a cancel on one deletes the
+checkpoint the other one keeps writing. A subscription that stores nothing can always be cancelled and subscribed again
+without stopping anything, such as one on a `SynchronousSubscriptionModel`, which takes no `CheckpointStorage`, or an
+unnamed reactor `Flux`.
 
 ### How to keep it from happening
 

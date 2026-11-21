@@ -2028,6 +2028,10 @@ What to do:
 2. When a later subscribe with the same id has to start from its own `StartAt`, also after a restart, wait for the
    `Mono`, for example with `cancelSubscription(id).block()` or by chaining on it. When it fails, or the process ended
    before it completed, call `cancelSubscription(id)` again. That works in a new process that never subscribed the id.
+   With more than one instance running the subscription, stop every instance instead, delete its stored checkpoint and
+   start them all again with the same start, as
+   [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+   describes.
 3. A class that implements either interface stops compiling. Return `Mono<Void>`. An implementation that cancels
    synchronously and stores nothing returns `Mono.empty()`.
 4. An implementation that deletes stored state asynchronously starts the delete when the method is called, returns a
@@ -2251,7 +2255,10 @@ the delete over, or the model is shut down, the cancel's `Mono` doesn't complete
 fails, and the delete is still tried again after that. A `shutdown()` stops the tries, also one waiting to be tried
 again. A try already under way runs to its end, and otherwise the `Mono` fails with the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
 so such a try can still reach the store after the `shutdown()`. When the checkpoint stays stored, call
-`cancelSubscription(id)` again once a model runs, as step 2 describes.
+`cancelSubscription(id)` again once a model runs, as step 2 describes. With more than one instance running the
+subscription, delete it with every instance stopped instead, and start them all again with the same start, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes.
 
 When `ReactorDurableSubscriptionModel` drives the subscription itself, no call waits for where the feed is, on any
 thread. A `subscribe(..)` from the subscription-model default, or from `StartAt.now()`, asks the wrapped model's
