@@ -138,11 +138,12 @@ public interface SagaStateStoreSkippedInputs {
      * {@link SagaStateStore#find(String)}. An instance this returns can be older than the one stored, and the release
      * acts on it through a compare-and-set on its version. The record never comes from another moment than the instance.
      * <p>
-     * A store that can't read the two from one moment where it is called throws an {@link IllegalStateException}
+     * A store that can't read the two from one moment where it is called throws a {@link SagaReadRefusedException}
      * instead, before it reads anything. {@code SpringMongoSagaStateStore} throws one inside a MongoDB transaction of the
      * caller's, so a release runs outside one.
      *
      * @return the instance and its first record, or empty when the store does not hold the instance
+     * @throws SagaReadRefusedException when the store can't read the two from one moment where it is called
      */
     Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId);
 

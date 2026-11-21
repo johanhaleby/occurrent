@@ -152,6 +152,12 @@ driver asks for a snapshot at or after that time (`afterClusterTime`). That snap
 read saw. When it doesn't find the instance either, the instance was deleted after the linearizable read, which started
 after the call did.
 
+The session of the linearizable read isn't causally consistent. The driver takes the operation time of every reply
+into the session, an error reply included, and a causally consistent session sends it as `afterClusterTime` on its
+next read whatever the read concern. MongoDB refuses `afterClusterTime` at `linearizable` with `InvalidOptions`, so
+after one failed attempt every retry of the read would fail, also once the server is back. A session that isn't
+causally consistent still keeps the latest operation time, which is at or after the read that succeeded.
+
 `findWithFirstSkippedInput` refuses a caller's transaction, see point 4.
 
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A
@@ -253,8 +259,8 @@ The store doesn't check that write concern. Spring keeps the transaction's `Clie
 refusal would break every saga run inside a caller's transaction, and a warning would fire on every such call whatever
 the concern is. The SPI and the store's javadoc say that the caller's commit decides.
 
-`findWithFirstSkippedInput` throws an `IllegalStateException` inside a caller's MongoDB transaction, in all three cases
-above and under `SYNCHRONIZATION_NEVER`, before it reads anything. A transaction at read concern `local` or `majority`
+`findWithFirstSkippedInput` throws a `SagaReadRefusedException`, an `IllegalStateException`, inside a caller's
+MongoDB transaction, in all three cases above and under `SYNCHRONIZATION_NEVER`, before it reads anything. A transaction at read concern `local` or `majority`
 on a sharded cluster reads each shard at its own moment, so it could return an instance that applied a replay together
 with the record that replay deleted, the pair the read exists to rule out. Only `snapshot` reads the shards at one
 moment. The store can't tell the read concern of the transaction for the same reason it can't tell the write concern,
@@ -263,6 +269,13 @@ deployment means a release that works against a test replica set doesn't start f
 production. In Occurrent only a release reads with it, from `SagaSubscription.release(sagaId)` and from the timer
 poller. The poller runs on a thread of its own, so it's never inside a caller's transaction, and the delivery of an
 input never reads with it. A caller that released inside a transaction releases outside it instead.
+
+`SagaSubscription.release(sagaId)` throws the `SagaReadRefusedException` as it is. For any other failure of the read
+it reads the instance again, without its state and then whole, to tell a state that doesn't decode from another
+failure. Inside the caller's transaction those reads would run in it, and for an absent instance the store inserts and
+deletes a document there to read it, so a validator on the collection or a concurrent insert of the same id could abort
+the caller's transaction before the refusal reached it. A store of your own that throws a plain
+`IllegalStateException` instead gets those reads.
 
 ## Consequences
 
@@ -308,3 +321,8 @@ input never reads with it. A caller that released inside a transaction releases 
 - **Read every empty snapshot again at `linearizable`, a bounded number of times, and throw when the attempts run
   out.** Each new snapshot can be from before the linearizable read for the same reason as the first one. Passing the
   time of the linearizable read to the new transaction gives a snapshot after it on the first attempt.
+- **A new session for every attempt of the linearizable read.** It also keeps the time of a failed attempt out of the
+  next one, but the store would have to keep the session of the attempt that succeeded and close every other one. One
+  session that isn't causally consistent gives the same reads.
+- **Tell the store's refusal from a decoding failure by its message.** A message is for a person, and a store of your
+  own words its own. A type the SPI names is what a store throws and what the release checks.

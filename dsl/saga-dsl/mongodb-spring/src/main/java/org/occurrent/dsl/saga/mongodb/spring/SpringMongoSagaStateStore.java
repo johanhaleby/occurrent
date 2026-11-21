@@ -54,6 +54,7 @@ import org.bson.types.ObjectId;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.saga.SagaReadRefusedException;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
@@ -148,7 +149,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * after an election. A standalone server refuses transactions, and so every write of a skipped input there, so the
  * store reads the instance and then its first skipped input at read concern {@code majority}.
  * <p>
- * {@link #findWithFirstSkippedInput} throws an {@link IllegalStateException} inside a MongoDB transaction of the
+ * {@link #findWithFirstSkippedInput} throws a {@link SagaReadRefusedException} inside a MongoDB transaction of the
  * caller's, before it reads anything, so a release can't run in one. A transaction at read concern {@code local} or
  * {@code majority} on a sharded cluster reads each shard as it is at its own moment, and could return an instance with a
  * record that a later version of it already deleted. The store can't tell the read concern of a transaction it joins,
@@ -708,7 +709,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         if (MongoDatabaseUtils.isTransactionActive(databaseFactory)) {
-            throw new IllegalStateException(CALLERS_TRANSACTION_MESSAGE);
+            throw new SagaReadRefusedException(CALLERS_TRANSACTION_MESSAGE);
         }
         Query byId = Query.query(where(ID).is(sagaId));
         if (deployment == MongoDeployment.OTHER) {
@@ -722,8 +723,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         // An absence in the snapshot is read again at read concern linearizable, as find does. An instance found then is
         // read in a new snapshot that starts after that read, since a new primary right after an election can still hand
-        // out a snapshot from before it
-        try (ClientSession linearizable = databaseFactory.getSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
+        // out a snapshot from before it. The session isn't causally consistent, since the driver would send the operation
+        // time of a failed attempt as afterClusterTime on the next, which linearizable refuses. It still keeps the
+        // operation time of every reply, and the new snapshot starts after the latest
+        try (ClientSession linearizable = databaseFactory.getSession(ClientSessionOptions.builder().causallyConsistent(false).build())) {
             if (retried(() -> readInstance(linearizable, byId, ReadConcern.LINEARIZABLE)) == null) {
                 return Optional.empty();
             }

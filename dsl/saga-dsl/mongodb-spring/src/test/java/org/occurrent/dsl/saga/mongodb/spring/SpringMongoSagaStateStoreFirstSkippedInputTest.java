@@ -18,12 +18,14 @@ package org.occurrent.dsl.saga.mongodb.spring;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCommandException;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandFailedEvent;
 import com.mongodb.event.CommandListener;
 import com.mongodb.event.CommandStartedEvent;
 import com.mongodb.event.CommandSucceededEvent;
@@ -49,7 +51,6 @@ import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -69,6 +70,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
@@ -89,12 +91,13 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 class SpringMongoSagaStateStoreFirstSkippedInputTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+    private static final MongoDBContainer mongoDBContainer = FailPoint.container().withReuse(true);
 
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final String COLLECTION = "saga-first-skipped";
     private static final String SKIPPED_COLLECTION = COLLECTION + "_skipped_inputs";
     private static final String QUARANTINE_ID = "q-1";
+    private static final int HOST_UNREACHABLE = 6;
 
     record Payment(long amount) {
     }
@@ -110,6 +113,7 @@ class SpringMongoSagaStateStoreFirstSkippedInputTest {
 
     private final List<Seen> seen = new CopyOnWriteArrayList<>();
     private final Map<Long, BsonTimestamp> operationTimeOfFindReply = new ConcurrentHashMap<>();
+    private final Map<Long, BsonTimestamp> operationTimeOfFailedFindReply = new ConcurrentHashMap<>();
     private final List<Trigger> triggers = new CopyOnWriteArrayList<>();
     private MongoClient client;
     private MongoClient otherClient;
@@ -121,7 +125,18 @@ class SpringMongoSagaStateStoreFirstSkippedInputTest {
     @BeforeEach
     void connect() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-first-skipped-" + UUID.randomUUID().toString().substring(0, 8)));
-        client = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(new CommandListener() {
+        client = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(recordingListener()).build());
+        template = new MongoTemplate(client, requireNonNull(connectionString.getDatabase()));
+        template.setWriteConcern(WriteConcern.MAJORITY);
+        store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, RetryStrategy.none());
+        otherClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).build());
+        otherTemplate = new MongoTemplate(otherClient, requireNonNull(connectionString.getDatabase()));
+        otherTemplate.setWriteConcern(WriteConcern.MAJORITY);
+        otherStore = new SpringMongoSagaStateStore<>(otherTemplate, COLLECTION, Payment.class, null, RetryStrategy.none());
+    }
+
+    private CommandListener recordingListener() {
+        return new CommandListener() {
             @Override
             public void commandStarted(CommandStartedEvent event) {
                 BsonDocument command = event.getCommand();
@@ -140,20 +155,20 @@ class SpringMongoSagaStateStoreFirstSkippedInputTest {
             }
 
             @Override
+            public void commandFailed(CommandFailedEvent event) {
+                if (event.getCommandName().equals("find") && event.getThrowable() instanceof MongoCommandException failure && failure.getResponse().isTimestamp("operationTime")) {
+                    operationTimeOfFailedFindReply.put((long) event.getRequestId(), failure.getResponse().getTimestamp("operationTime"));
+                }
+            }
+
+            @Override
             public void commandSucceeded(CommandSucceededEvent event) {
                 BsonDocument reply = event.getResponse();
                 if (event.getCommandName().equals("find") && reply.isTimestamp("operationTime")) {
                     operationTimeOfFindReply.put((long) event.getRequestId(), reply.getTimestamp("operationTime"));
                 }
             }
-        }).build());
-        template = new MongoTemplate(client, requireNonNull(connectionString.getDatabase()));
-        template.setWriteConcern(WriteConcern.MAJORITY);
-        store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, RetryStrategy.none());
-        otherClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).build());
-        otherTemplate = new MongoTemplate(otherClient, requireNonNull(connectionString.getDatabase()));
-        otherTemplate.setWriteConcern(WriteConcern.MAJORITY);
-        otherStore = new SpringMongoSagaStateStore<>(otherTemplate, COLLECTION, Payment.class, null, RetryStrategy.none());
+        };
     }
 
     @AfterEach
@@ -382,5 +397,53 @@ class SpringMongoSagaStateStoreFirstSkippedInputTest {
                 () -> assertThat(triggers).as("triggers that did not fire").isEmpty(),
                 () -> assertThat(snapshotFinds.getLast().afterClusterTime()).as("the second snapshot asks for a time").isNotNull()
         );
+    }
+
+    // The driver advances the operation time of a session from every reply, an error reply included, and sends it as
+    // afterClusterTime on the next read of a causally consistent session whatever the read concern. MongoDB refuses
+    // afterClusterTime with linearizable, so a linearizable read retried in such a session could never succeed. The
+    // driver's own retry of a read is off, so the retry is the store's
+    @Test
+    void retries_a_linearizable_read_that_failed_with_an_operation_time_without_asking_for_a_time_and_reads_the_snapshot_after_the_retry() {
+        theInstanceAppearsAtTheLinearizableRead("order-10");
+        AtomicReference<FailPoint> failedFind = new AtomicReference<>();
+        triggers.add(new Trigger(SpringMongoSagaStateStoreFirstSkippedInputTest::linearizableFindOfTheInstance, () -> failedFind.set(FailPoint.failing(client, "find", 1, HOST_UNREACHABLE))));
+        try (MongoClient retryingClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(new ConnectionString(mongoDBContainer.getReplicaSetUrl(template.getDb().getName())))
+                .retryReads(false).addCommandListener(recordingListener()).build())) {
+            MongoTemplate retryingTemplate = new MongoTemplate(retryingClient, template.getDb().getName());
+            retryingTemplate.setWriteConcern(WriteConcern.MAJORITY);
+            SpringMongoSagaStateStore<Payment> retryingStore = new SpringMongoSagaStateStore<>(retryingTemplate, COLLECTION, Payment.class, null, RetryStrategy.fixed(10).maxAttempts(3));
+            seen.clear();
+
+            AtomicReference<Optional<StoredSagaWithFirstSkippedInput>> read = new AtomicReference<>(Optional.empty());
+            Throwable thrown;
+            try {
+                thrown = catchThrowable(() -> read.set(retryingStore.findWithFirstSkippedInput("order-10")));
+            } finally {
+                FailPoint armed = failedFind.get();
+                if (armed != null) {
+                    armed.close();
+                }
+            }
+
+            Optional<StoredSagaWithFirstSkippedInput> result = read.get();
+            List<Seen> linearizableFinds = seen.stream().filter(SpringMongoSagaStateStoreFirstSkippedInputTest::linearizableFindOfTheInstance).toList();
+            List<Seen> snapshotFinds = inATransaction(COLLECTION, "find");
+            BsonTimestamp failedReplyTime = linearizableFinds.isEmpty() ? null : operationTimeOfFailedFindReply.get(linearizableFinds.getFirst().requestId());
+            BsonTimestamp retriedReplyTime = linearizableFinds.size() < 2 ? null : operationTimeOfFindReply.get(linearizableFinds.getLast().requestId());
+            assertAll(
+                    () -> assertThat(thrown).as("thrown by the read").isNull(),
+                    () -> assertThat(result).as("the instance the retried linearizable read found").isPresent(),
+                    () -> assertThat(result.orElseThrow().saga().version()).as("the version written").isEqualTo(2L),
+                    () -> assertThat(result.orElseThrow().firstSkippedInput()).isEqualTo(new SkippedInput(1, "a@1", heldEvent("a@1"))),
+                    () -> assertThat(failedReplyTime).as("operationTime in the error reply of the failed linearizable read, so the retry is in the window").isNotNull(),
+                    () -> assertThat(linearizableFinds).as("the failed linearizable read and its retry").hasSize(2),
+                    () -> assertThat(linearizableFinds.getLast().afterClusterTime()).as("the retried linearizable read asks for no time").isNull(),
+                    () -> assertThat(retriedReplyTime).as("operationTime in the reply of the retried linearizable read").isNotNull(),
+                    () -> assertThat(snapshotFinds).as("one snapshot read before the linearizable reads and one after").hasSize(2),
+                    () -> assertThat(snapshotFinds.getLast().afterClusterTime()).as("the second snapshot asks for a time").isNotNull(),
+                    () -> assertThat(snapshotFinds.getLast().afterClusterTime()).as("at or after the reply of the retried linearizable read").isGreaterThanOrEqualTo(retriedReplyTime)
+            );
+        }
     }
 }

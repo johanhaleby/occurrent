@@ -648,10 +648,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Read whole, so an instance whose state does not decode is refused here rather than marked releasing with nothing
     // able to apply to it. A read that fails while the instance reads fine without its state, and not whole, failed on
     // decoding the state, and is refused with the decoding failure named. Any other failure of the read, such as a record
-    // that doesn't decode, propagates as it is
+    // that doesn't decode, propagates as it is. A store that refuses to read where it is called read nothing, and the
+    // reads that check the decoding would run in the same place, such as inside a transaction of the caller's
     private SagaEnvelopes.@Nullable WithFirstSkippedInput<S> findToRelease(SagaStateStoreSkippedInputs records, String sagaId) {
         try {
             return envelopes.findWithFirstSkippedInput(records, sagaId).orElse(null);
+        } catch (SagaReadRefusedException refused) {
+            throw refused;
         } catch (Throwable readFailure) {
             rethrowIfNotTheInstances(readFailure);
             boolean stateFails;

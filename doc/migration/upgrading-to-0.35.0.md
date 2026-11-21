@@ -1043,8 +1043,10 @@ has to have made its write survive a failover, since the runner acknowledges the
 its quarantine id, by `seq` and then by `key`, as one write left them, so a read of the instance followed by a read of
 its records doesn't do, since each can miss a different write. A store that keeps both in one table can read them in
 one transaction that sees both as they were at the same moment. An empty result has to hold every write acknowledged before the call started, as for
-`find`. A store that can't read the two from one moment where it is called throws an `IllegalStateException` instead,
-before it reads anything, as `SpringMongoSagaStateStore` does inside a MongoDB transaction of the caller's. It implements `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
+`find`. A store that can't read the two from one moment where it is called throws a `SagaReadRefusedException` instead,
+before it reads anything, as `SpringMongoSagaStateStore` does inside a MongoDB transaction of the caller's. `release`
+throws that exception as it is. For a plain `IllegalStateException` it reads the instance again first, to tell whether
+its state decodes. It implements `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
 set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
 poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
 one listed and from the first id again once a poll lists fewer than `limit`. It implements `requireAtomicTransitions()`,
@@ -1492,8 +1494,8 @@ behind when your transaction commits, and a change stream on the saga collection
 must accept a document that holds only `_id`, so a validator that requires other fields makes such a read of an absent
 instance fail.
 
-Call `SagaSubscription.release(sagaId)` outside such a transaction. Inside one it throws an `IllegalStateException`
-before it reads anything, whatever read concern the transaction has. A release reads the instance and its first
+Call `SagaSubscription.release(sagaId)` outside such a transaction. Inside one it throws a `SagaReadRefusedException`,
+an `IllegalStateException`, before it reads or writes anything, whatever read concern the transaction has. A release reads the instance and its first
 recorded input in a transaction of the store's at read concern `snapshot`, since a transaction at `local` or `majority`
 on a sharded cluster can read the two from different moments, and the store can't read the concern of your
 transaction.
