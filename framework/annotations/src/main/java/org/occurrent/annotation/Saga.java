@@ -215,13 +215,13 @@ public @interface Saga {
      * {@link Catchup#NONE} goes straight to the live feed and needs no event store at all. Setting this on a
      * {@link Source#EVENT_STORE} saga is rejected, since that saga chooses its history with {@link #startAt()}.
      * <p>
-     * A start that finds the stored catch-up marker skips the replay, so a rebuild needs a new {@link #id()}. That new
-     * id replays the whole history into the saga, and every instance its TTL removed is recreated from its start event
-     * and dispatches its commands again. Keep completed instances for as long as the history a rebuild replays.
-     * While an instance on the old id still runs, a new id is safe only when the saga under the new id writes
-     * records that no instance on the old id writes. Otherwise stop every instance on the old id before the first
-     * one on the new id starts. With more than one instance, whether a new id is enough also depends on where each
-     * instance keeps what it builds and which broker queue or consumer group it consumes, as
+     * A start that finds the stored catch-up marker skips the replay, so a rebuild needs a new {@link #id()}. Under a
+     * new id the saga replays the whole history and can repeat everything it did, the state it writes and the commands
+     * it dispatches. The default MongoDB store keeps the instances of each saga id in a {@code saga-<id>} collection,
+     * so under a new id every instance is recreated from its start event and dispatches its commands again. Stop every
+     * instance on the old id before the first one on the new id starts. Stopping them doesn't prevent the repeats.
+     * With more than one instance, what else a new id needs depends on where each instance keeps what it builds and
+     * which broker queue or consumer group it consumes, as
      * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
      * upgrade guide</a> describes.
      */

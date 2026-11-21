@@ -171,10 +171,11 @@ other sections compile fine and behave differently, so read them first.
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
   `cancelSubscription(id)` on the blocking `CatchupThenPushSubscriptionModel` still deletes the catch-up marker, but a
-  rebuild takes a new subscription id. While an instance on the old id still runs, a new id is safe only when the new
-  subscription writes records that no instance on the old id writes. Otherwise stop every instance on the old id
-  before the first one on the new id starts. With more than one instance, whether a new id is enough also depends on
-  where each instance keeps what it builds and which broker queue or consumer group it consumes, as
+  rebuild takes a new subscription id. Under a new id the subscription starts from the beginning of the history and
+  repeats everything its handler does, the records it writes, the commands it dispatches and the messages it sends.
+  Stop every instance on the old id before the first one on the new id starts. Stopping them doesn't prevent the
+  repeats. With more than one instance, what else a new id needs depends on where each instance keeps what it builds
+  and which broker queue or consumer group it consumes, as
   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
@@ -3067,15 +3068,14 @@ To continue from now, when skipping the events since the lost token is acceptabl
 
 When more than one instance of the application runs a subscription, every instance reads what is stored under its id.
 For a durable or catch-up subscription that is its checkpoint, and for a subscription with `source = PUSH` it is its
-catch-up marker. Three things about how the application runs decide how to change it, and whether a new subscription
-id is enough:
+catch-up marker. Two things about how the application runs decide how to change it, and what else a new subscription
+id needs:
 
 - Where the handler keeps what it builds. Either every instance writes to one store, such as a read model in MongoDB,
   or each instance keeps its own, for example in memory.
 - For a subscription with `source = PUSH`, which RabbitMQ queue or Kafka consumer group each instance consumes.
   Instances that consume one queue or group share its events, and each event goes to one of them. The application
   names the queue or the group when it builds the source, and a new subscription id doesn't change it.
-- Whether instances on the old id still run while instances on a new id start.
 
 When every instance writes to one store, delete or replace it like this instead of cancelling the subscription on one
 instance:
@@ -3131,17 +3131,14 @@ subscription with `source = PUSH` replays the whole history. Use one for a rebui
 no instance runs the old id, delete what is stored under it.
 
 A new id keeps the new subscription apart from the checkpoint and the marker of the old one, but not from the store
-the old one writes to, or from the queue or consumer group it consumes. While an instance on the old id still runs, a
-new id is safe only when the new subscription writes records that no instance on the old id writes, such as a
-collection of its own that readers switch to once it has caught up. Otherwise stop every instance on the old id before
-the first instance on the new id starts.
+the old one writes to, or from the queue or consumer group it consumes. Under the new id the subscription repeats
+everything its handler does for every event from its start, the records it writes, the commands it dispatches and the
+messages it sends. For a rebuild that is the whole history. Stop every instance on the old id before the first
+instance on the new id starts. Stopping them doesn't prevent the repeats.
 
 What else a new id takes depends on the deployment:
 
 - When every instance writes to one store, give every instance the same new id.
-- When every instance writes to one store and the subscription has `source = PUSH`, also let the new subscription
-  consume a RabbitMQ queue or a Kafka consumer group that no instance on the old id consumes. Or stop every instance on
-  the old id before the first instance on the new id starts.
 - When each instance keeps what it builds for itself, a new id that every instance shares has the same problem as the
   old one, since every instance that starts after the first finds what the first one stored under it. Give each
   instance a new id of its own, and for `source = PUSH` keep each instance on a queue or consumer group of its own.
@@ -3951,19 +3948,20 @@ then skips its replay. 0.34.0 had the same gap.
 
 * Subscribe under a new subscription id when a projection has to be rebuilt, or when its filter or its projection
   changes. The marker is stored under the id alone, so under the old id a stored marker skips the replay and the
-  changed projection never sees the history. While an instance on the old id still runs, a new id is safe only when
-  the new subscription writes records that no instance on the old id writes. Otherwise stop every instance on the old
-  id before the first one on the new id starts. With more than one instance, whether a new id is enough also depends
-  on where each instance keeps what it builds and which broker queue or consumer group it consumes, as
+  changed projection never sees the history. Under a new id the subscription starts from the beginning of the history
+  and repeats everything its handler does, the records it writes, the commands it dispatches and the messages it
+  sends. Stop every instance on the old id before the first one on the new id starts. Stopping them doesn't prevent
+  the repeats. With more than one instance, what else a new id needs depends on where each instance keeps what it
+  builds and which broker queue or consumer group it consumes, as
   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes.
-* Rebuild a push `@Saga` under a new id only when its completed instances are kept for as long as the history it
-  replays. A new id replays the whole history into the saga, so every instance that its TTL removed is recreated from
-  its start event and dispatches its commands again. With `catchup = NONE` a new id replays nothing. While an instance
-  on the old id still runs, a new id is safe only when the saga under the new id writes records that no instance on
-  the old id writes. Otherwise stop every instance on the old id before the first one on the new id starts. With more
-  than one instance, whether a new id is enough also depends on where each instance keeps what it builds and which
-  broker queue or consumer group it consumes, as
+* Rebuild a push `@Saga` under a new id too. With `catchup = NONE` a new id replays nothing. Otherwise the saga under
+  the new id replays the whole history and can repeat everything it did, the state it writes and the commands it
+  dispatches. The default MongoDB store keeps the instances of each saga id in a `saga-<id>` collection, so under a
+  new id every instance is recreated from its start event and dispatches its commands again. Stop every instance on
+  the old id before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one
+  instance, what else a new id needs depends on where each instance keeps what it builds and which broker queue or
+  consumer group it consumes, as
   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes.
 * Don't give a durable subscription and a blocking catch-up-then-push model, `CatchupProjectionFeed` or
@@ -4399,21 +4397,22 @@ What you see:
 - The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
   a new id. A start under the old id can resume after a position its earlier filter stored, and skip the events at or
   below it that the new filter matches. 0.34.0 skipped the whole replay in that case.
-- While an instance on the old id still runs, a new id is safe only when the new subscription writes records that no
-  instance on the old id writes. Otherwise stop every instance on the old id before the first one on the new id
-  starts. With more than one instance, whether a new id is enough for a rebuild or a changed filter or projection also
-  depends on where each instance keeps what it builds and which broker queue or consumer group it consumes, as
+- Under a new id the subscription starts from the beginning of the history and repeats everything its handler does,
+  the records it writes, the commands it dispatches and the messages it sends. Stop every instance on the old id
+  before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one instance,
+  what else a new id needs for a rebuild or a changed filter or projection depends on where each instance keeps what
+  it builds and which broker queue or consumer group it consumes, as
   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes.
 - A catch-up that reads a checkpoint stored under the subscription id takes it as its marker. When something other
   than a catch-up stored it, such as a durable subscription that used the id before it moved to `source = PUSH`, and
   it is not a position, that catch-up fails with an `IllegalStateException` that names the id. 0.34.0 took any stored
   checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint with every instance stopped and
-  start them all again with the same start, or subscribe under a new id. While an instance on the old id still runs, a
-  new id is safe only when the new subscription writes records that no instance on the old id writes. Otherwise stop
-  every instance on the old id before the first one on the new id starts. With more than one instance, whether a new
-  id is enough also depends on where each instance keeps what it builds and which broker queue or consumer group it
-  consumes.
+  start them all again with the same start, or subscribe under a new id. Under a new id the subscription starts from
+  the beginning of the history and repeats everything its handler does, the records it writes, the commands it
+  dispatches and the messages it sends. Stop every instance on the old id before the first one on the new id starts.
+  Stopping them doesn't prevent the repeats. With more than one instance, what else a new id needs depends on where
+  each instance keeps what it builds and which broker queue or consumer group it consumes.
   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes both. A start that finds no marker replays the whole history. A failed catch-up
   does not delete that checkpoint, but the push model's `cancelSubscription(id)` does. When a durable checkpoint is a

@@ -116,10 +116,11 @@ import java.util.stream.Stream;
  *       else, so a delete that throws cancels nothing, and the cancel can be tried again. A delete the store loses, or
  *       a marker write it applies after the delete, leaves a marker stored, and the next subscribe of the id then skips
  *       its replay. So a projection that has to be rebuilt, or whose filter changes, subscribes under a new id.
- *       While an instance on the old id still runs, a new id is safe only when the new subscription writes records
- *       that no instance on the old id writes. Otherwise stop every instance on the old id before the first one on
- *       the new id starts. With more than one instance, whether a new id is enough also depends on where each
- *       instance keeps what it builds and which broker queue or consumer group it consumes, as
+ *       Under a new id the subscription starts from the beginning of the history and repeats everything its handler
+ *       does, the records it writes, the commands it dispatches and the messages it sends. Stop every instance on the
+ *       old id before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one
+ *       instance, what else a new id needs depends on where each instance keeps what it builds and which broker queue
+ *       or consumer group it consumes, as
  *       <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
  *       upgrade guide</a> describes.
  *       ADR 179 decides that the reactor stack reads its marker as a position to resume after instead of as done.</li>
