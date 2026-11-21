@@ -43,8 +43,10 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -141,6 +143,45 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
                     () -> assertThatThrownBy(() -> storage.save(SUBSCRIPTION_ID, later, CheckpointWriteCondition.notOlderThan(1)))
                             .as("a node with an older version writing over it")
                             .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
+            );
+        } finally {
+            nativeModel.shutdown();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void a_node_whose_earlier_position_was_stored_in_between_starts_from_that_position_and_not_from_the_later_one_it_captured() {
+        MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
+        MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
+        ExecutorService executor = Executors.newCachedThreadPool();
+        EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
+        try {
+            Checkpoint earlier = nativeModel.globalCheckpoint();
+            eventStore.write("stream", List.of(event("moves-the-clock-on", "SomethingHappened")));
+            Checkpoint later = requireNonNull(nativeModel.superGlobalCheckpoint());
+            nativeModel.answers = later;
+            assertThat(later.asString()).as("test setup, this node's position is later").isNotEqualTo(earlier.asString());
+            NativeMongoCheckpointStorage storage = new NativeMongoCheckpointStorage(database.getCollection("checkpoints-" + UUID.randomUUID())) {
+                @Override
+                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                    Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
+                    if (condition instanceof CheckpointWriteCondition.IfAbsent) {
+                        super.resolveFirstCheckpointRace(subscriptionId, earlier);
+                        super.save(subscriptionId, earlier, CheckpointWriteCondition.notOlderThan(1));
+                    }
+                    return saved;
+                }
+            };
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
+            CountDownLatch delivered = new CountDownLatch(1);
+
+            durable.subscribe(SUBSCRIPTION_ID, __ -> delivered.countDown()).waitUntilStarted();
+
+            assertAll(
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(earlier.asString()),
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
+                    () -> assertThat(delivered.await(5, TimeUnit.SECONDS)).as("the event between the two positions is delivered").isTrue()
             );
         } finally {
             nativeModel.shutdown();

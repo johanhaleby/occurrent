@@ -152,6 +152,25 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
     }
 
     /**
+     * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
+     * in the same {@code findOneAndUpdate}, see {@link MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        if (!(candidate instanceof MongoOperationTimeCheckpoint)) {
+            return Optional.empty();
+        }
+        Document candidateDocument = MongoCommons.generateCheckpointDocument(subscriptionId, candidate);
+        Supplier<Document> resolve = () -> requireNonNull(mongoOperations.getCollection(checkpointCollection).findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(MongoCommons.buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
+        return MongoCommons.interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion);
+    }
+
+    /**
      * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace} is, reached the same way
      * {@link #persistConditionalCheckpointDocument} is. See
      * {@link MongoCommons#buildFirstCheckpointRaceResolution}.
