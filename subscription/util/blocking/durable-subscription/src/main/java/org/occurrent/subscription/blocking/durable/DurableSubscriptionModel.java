@@ -104,7 +104,13 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * with {@link CheckpointWriteCondition#notOlderThan(long)}, and so does a node that lost the race when the stored
  * position is the one it read. A different position adopted from another node gets no version from this node. When
  * that save is refused because the storage holds a newer write version, the refusal is logged and the subscription
- * starts from the position it recorded. A {@link CheckpointStorage} that answers {@code false} from
+ * starts from the position it recorded. So the writes of a node with an older version are refused from the moment the
+ * first position is written only on a storage that implements the three-argument {@code resolveFirstCheckpointRace}, which
+ * {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} do. On another storage, such as
+ * {@code SpringRedisCheckpointStorage} or {@code InMemoryCheckpointStorage}, a node with an older version can save a
+ * later checkpoint between the {@code ifAbsent()} write and the save with the version, and that save then stores the
+ * first position over it. The events between the two positions are delivered again. A {@link CheckpointStorage} that
+ * answers {@code false} from
  * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
  * nodes could overwrite each other's and lose the events between the two positions. Such a subscription is refused with
  * {@link IllegalStateException} where a subscription with no position to record is, before anything is written for it.
