@@ -226,6 +226,12 @@ public interface CheckpointStorage {
      * When the storage resolves a lost race through {@link #resolveFirstCheckpointRace(String, Checkpoint)}, another
      * node can store an earlier first position between those two writes, and the second write moves it later again.
      * {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} override both.
+     * <p>
+     * So only a storage that implements this method refuses the writes of a node with an older version from the moment
+     * the first position is written. With the two writes, a node with an older version can save a later checkpoint between them. That node
+     * lost the {@code ifAbsent()} write, starts from the stored first position and saves the checkpoint of an event it
+     * handled, and the second write of the node with the newer version then stores the first position over that
+     * checkpoint. The events between the two positions are delivered again.
      *
      * @param subscriptionId The id of the subscription whose first position is being settled
      * @param candidate      The position competing to be the subscription's first
