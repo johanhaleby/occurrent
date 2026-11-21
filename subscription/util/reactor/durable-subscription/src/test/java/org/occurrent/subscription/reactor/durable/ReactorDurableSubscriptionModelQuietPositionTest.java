@@ -31,11 +31,15 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions.QuietPositionListener;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.reactivestreams.Subscription;
+import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -43,8 +47,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -160,6 +166,25 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_quiet_save_is_offered_after_a_failed_delivery_once_a_later_event_is_stored() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
+        subscribeFromTheStoredStart(model, storage);
+        Function<CloudEvent, Mono<Void>> action = wrapped.actions.getFirst();
+        RuntimeException failure = new IllegalStateException("The storage cannot save right now");
+        storage.failNextSave = failure;
+        StepVerifier.create(action.apply(eventAt(1))).expectErrorMatches(error -> error == failure).verify(TIMEOUT);
+
+        // When
+        action.apply(eventAt(2)).block(TIMEOUT);
+
+        // Then
+        assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once an event is stored after a delivery that failed").isNotNull();
+    }
+
+    @Test
     void an_event_the_predicate_declined_blocks_quiet_saves_until_a_later_event_is_stored() {
         // Given
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
@@ -177,6 +202,90 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         // Then
         assertThat(offeredAfterTheDeclinedEvent).as("save offered while the latest event is one the predicate declined").isNull();
         assertThat(offeredAfterTheStoredEvent).as("save offered once the latest event is stored").isNotNull();
+    }
+
+    @Test
+    void a_declined_event_delivered_from_the_completion_of_a_stored_one_blocks_quiet_saves() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(2));
+        subscribeFromTheStoredStart(model, storage);
+        Function<CloudEvent, Mono<Void>> action = wrapped.actions.getFirst();
+        action.apply(eventAt(1)).block(TIMEOUT);
+
+        // When the wrapped model delivers event 3 from the completion of event 2, as concatMap does
+        action.apply(eventAt(2)).then(Mono.defer(() -> action.apply(eventAt(3)))).block(TIMEOUT);
+
+        // Then
+        // Read again for 500 ms, since a delivery counted as ended late would only show up after the block returned
+        await().atMost(TIMEOUT).during(Duration.ofMillis(500)).untilAsserted(() ->
+                assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered while the latest event is one the predicate declined").isNull());
+    }
+
+    @Test
+    void a_delivery_cancelled_by_its_subscriber_from_inside_the_completion_is_counted_as_ended_once() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
+        subscribeFromTheStoredStart(model, storage);
+
+        // When
+        CancellingOnCompleteSubscriber subscriber = new CancellingOnCompleteSubscriber();
+        wrapped.actions.getFirst().apply(eventAt(1)).subscribe(subscriber);
+        subscriber.completed.orTimeout(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).join();
+
+        // Then
+        assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once the only delivery has ended and was stored").isNotNull();
+    }
+
+    @Test
+    void a_cancel_that_stalls_before_counting_the_end_of_a_stored_delivery_does_not_let_a_declined_event_end_before_it() throws Exception {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(2));
+        subscribeFromTheStoredStart(model, storage);
+        Function<CloudEvent, Mono<Void>> action = wrapped.actions.getFirst();
+        action.apply(eventAt(1)).block(TIMEOUT);
+        // The cancelling thread is held where it has won the end and not yet counted it, so the completion comes second
+        CountDownLatch cancellerHeld = new CountDownLatch(1);
+        CountDownLatch releaseCanceller = new CountDownLatch(1);
+        AtomicBoolean heldOnce = new AtomicBoolean();
+        model.runBeforeADeliveryEndIsCounted(() -> {
+            if (heldOnce.compareAndSet(false, true)) {
+                cancellerHeld.countDown();
+                awaitUninterruptibly(releaseCanceller);
+            }
+        });
+        CountDownLatch releaseSave = storage.holdSaves();
+        CompletableFuture<Void> declinedDelivered = new CompletableFuture<>();
+        CancellableSubscriber subscriber = new CancellableSubscriber(() ->
+                action.apply(eventAt(3)).subscribe(__ -> {
+                }, declinedDelivered::completeExceptionally, () -> declinedDelivered.complete(null)));
+        Thread canceller = new Thread(subscriber::cancel, "canceller");
+
+        try {
+            // When event 2 is stored while its subscriber cancels, and event 3 is delivered from the completion
+            action.apply(eventAt(2)).subscribe(subscriber);
+            assertThat(storage.saveEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the save of event 2 has reached the storage").isTrue();
+            canceller.start();
+            assertThat(cancellerHeld.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the cancel has won the end of event 2 and is held").isTrue();
+            releaseSave.countDown();
+            Thread completer = requireNonNull(storage.savingThread, "savingThread");
+            // Event 3 has ended without waiting for the cancel, or the completion waits on the monitor the held cancel owns
+            await().atMost(TIMEOUT).until(() -> declinedDelivered.isDone() || isBlockedOnQuietSaves(completer));
+        } finally {
+            releaseSave.countDown();
+            releaseCanceller.countDown();
+            canceller.join(TIMEOUT.toMillis());
+        }
+        declinedDelivered.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+        // Then
+        assertThat(canceller.isAlive()).as("the cancelling thread has finished").isFalse();
+        assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered while the latest event is one the predicate declined").isNull();
     }
 
     @Test
@@ -368,12 +477,100 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         }
     }
 
+    // A raw subscriber, since BaseSubscriber ignores a cancel that comes after the completion
+    private static final class CancellingOnCompleteSubscriber implements CoreSubscriber<Void> {
+        private final CompletableFuture<Void> completed = new CompletableFuture<>();
+        private volatile @Nullable Subscription subscription;
+
+        @Override
+        public void onSubscribe(Subscription subscription) {
+            this.subscription = subscription;
+            subscription.request(Long.MAX_VALUE);
+        }
+
+        @Override
+        public void onNext(Void ignored) {
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            completed.completeExceptionally(error);
+        }
+
+        @Override
+        public void onComplete() {
+            Subscription kept = subscription;
+            if (kept == null) {
+                completed.completeExceptionally(new IllegalStateException("No subscription was received in onSubscribe"));
+                return;
+            }
+            kept.cancel();
+            completed.complete(null);
+        }
+    }
+
+    // A raw subscriber that runs what it is given on completion and can be cancelled from another thread, since
+    // BaseSubscriber ignores a completion that comes after a cancel
+    private static final class CancellableSubscriber implements CoreSubscriber<Void> {
+        private final Runnable onComplete;
+        private volatile @Nullable Subscription subscription;
+
+        private CancellableSubscriber(Runnable onComplete) {
+            this.onComplete = onComplete;
+        }
+
+        @Override
+        public void onSubscribe(Subscription subscription) {
+            this.subscription = subscription;
+            subscription.request(Long.MAX_VALUE);
+        }
+
+        @Override
+        public void onNext(Void ignored) {
+        }
+
+        @Override
+        public void onError(Throwable error) {
+        }
+
+        @Override
+        public void onComplete() {
+            onComplete.run();
+        }
+
+        private void cancel() {
+            requireNonNull(subscription, "subscription").cancel();
+        }
+    }
+
+    private static boolean isBlockedOnQuietSaves(Thread thread) {
+        ThreadInfo info = ManagementFactory.getThreadMXBean().getThreadInfo(thread.threadId());
+        return info != null && info.getThreadState() == Thread.State.BLOCKED
+               && info.getLockName() != null && info.getLockName().contains("ReactorDurableSubscriptionModel$QuietSaves");
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                latch.await();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // Holds a save on a latch until released and fails the next one on request, both on a thread of their own
     private static final class HoldableStorage implements CheckpointStorage {
         private final InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
         private final CountDownLatch saveEntered = new CountDownLatch(1);
         private volatile @Nullable CountDownLatch releaseSave;
         private volatile @Nullable RuntimeException failNextSave;
+        private volatile @Nullable Thread savingThread;
 
         private CountDownLatch holdSaves() {
             CountDownLatch release = new CountDownLatch(1);
@@ -396,6 +593,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
                 }
                 CountDownLatch release = releaseSave;
                 if (release != null) {
+                    savingThread = Thread.currentThread();
                     saveEntered.countDown();
                     try {
                         release.await();
