@@ -1010,9 +1010,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * doesn't encode at all, the record holds the data's bytes in BSON binary instead, next to the name of the data's
      * class, and the store logs a warning that names the instance, the input and the difference. A release then hands
      * the converter a {@code JsonCloudEventData} read from those bytes when the data was one, and a
-     * {@link BytesCloudEventData} for data of any other class. The bytes are read by the CloudEvents JSON format with
-     * its default options and not by the format the application registered, so an option such as
-     * {@code withForceJsonDataToBase64()} doesn't turn the data into bytes. A map with a {@code BigDecimal} or a key
+     * {@link BytesCloudEventData} for data of any other class. The bytes are read the way the CloudEvents JSON format
+     * with its default options reads them and not by the format the application registered, so an option such as
+     * {@code withForceJsonDataToBase64()} doesn't turn the data into bytes. When a {@code double} can't hold one of
+     * the decimal numbers, every decimal number in the data is read as a {@code BigDecimal}, so a number comes back
+     * with its value, though {@code 1.10} may come back as {@code 1.1}. A map with a {@code BigDecimal} or a key
      * that isn't a {@code String} at any depth is held this way, and so is a {@code JsonCloudEventData}.
      * <p>
      * A record that doesn't fit in one document, or in the write that sends it, is encoded to BSON and split across
@@ -1025,7 +1027,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * <ul>
      *     <li>an attribute or an extension comes back as another value or as a value of another class, such as a
      *     {@code String} with an unpaired surrogate.</li>
-     *     <li>the data held as its bytes comes back as another class than the one a release hands the converter.</li>
+     *     <li>the data held as its bytes comes back as another class than the one a release hands the converter, or JSON
+     *     data comes back with another value, such as a binary value as text.</li>
      *     <li>encoding, decoding or reading back the record throws even with the data held as its bytes.</li>
      *     <li>the saga id, the quarantine id and the key leave no room for a chunk of 8 MiB beside them in one
      *     document.</li>
@@ -1265,8 +1268,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // How the restored event differs from the delivered one in an attribute, an extension or, withData, its data, at any
     // depth, or null when every value is equal and of the same class. A map or a list may come back as another
-    // implementation of Map or List. Without withData the data was held as its bytes, and only its class is checked,
-    // against the class SkippedInputData promises a release hands back for them
+    // implementation of Map or List. Without withData the data was held as its bytes, and it's checked against the data
+    // SkippedInputData promises a release hands back for them, its class and the value of JSON data
     private static @Nullable String difference(CloudEvent delivered, CloudEvent restored, boolean withData) {
         if (delivered.getSpecVersion() != restored.getSpecVersion()) {
             return "Its spec version " + delivered.getSpecVersion() + " comes back as " + restored.getSpecVersion();
@@ -1290,8 +1293,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         CloudEventData deliveredData = delivered.getData();
         CloudEventData restoredData = restored.getData();
         if (!withData && deliveredData != null && restoredData != null) {
-            // Held as its bytes, so checked against the class a release promises for them
-            return SkippedInputData.classDifference(deliveredData, restoredData);
+            // Held as its bytes, so checked against the data a release promises for them
+            return SkippedInputData.difference(deliveredData, restoredData);
         }
         if (deliveredData == null || restoredData == null || deliveredData.getClass() != restoredData.getClass()) {
             Change change = change("", deliveredData, restoredData);

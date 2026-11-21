@@ -147,15 +147,20 @@ encoding, decoding or reading it back throws, the record holds the data's bytes 
 the name of the data's class in `dataClass`. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth
 with a key that isn't a `String` makes the BSON codec throw a `ClassCastException`, and the `JsonCloudEventData` the
 CloudEvents JSON format reads a JSON object into comes back as a `BytesCloudEventData`, so all three are held this way.
-A release hands the converter a `JsonCloudEventData` that the CloudEvents JSON format reads from those bytes when
-`dataClass` names one, and a `BytesCloudEventData` with the same bytes for data of any other class. The bytes are read
-by a `JsonFormat` with its default options, not by the format the application registered with `EventFormatProvider`,
-since a format made with `withForceJsonDataToBase64()` reads them back as a `BytesCloudEventData`. A
-`JsonCloudEventData` built from a node rather than read by the format comes back as the node its JSON reads as, such
-as a `DoubleNode` of `1.1` for a `DecimalNode` of `1.10`. The check compares the class of the data it reads back from
-the bytes with the class a release promises, and refuses the event when they differ. The store logs a warning that
-names the instance, the input and the difference, since the converter then gets bytes where it was delivered a map or
-an object.
+A release hands the converter a `JsonCloudEventData` read from those bytes when `dataClass` names one, and a
+`BytesCloudEventData` with the same bytes for data of any other class. The bytes are read the way a `JsonFormat` with
+its default options reads the data of an event, not by the format the application registered with
+`EventFormatProvider`, since a format made with `withForceJsonDataToBase64()` reads them back as a
+`BytesCloudEventData`. That read turns a decimal number into a `double`, so when a `double` can't hold one of the
+decimal numbers in the data, such as `1234567890.123456789`, every decimal number in it is read as a `BigDecimal`
+instead. A `JsonCloudEventData` built from a node rather than read by the format comes back as the node its JSON reads
+as, such as a `DoubleNode` of `1.1` for a `DecimalNode` of `1.10`, which is the same number.
+
+The check compares the data it reads back from the bytes with the data a release promises, its class and, for a
+`JsonCloudEventData`, its JSON value at every depth. A number equals a number of the same value whatever its node
+class, and any other value equals only an equal value of the same node class. The store logs a warning that names the
+instance, the input and the difference, since the converter then gets bytes where it was delivered a map or an
+object.
 
 A record that doesn't fit in one document, at most 16 MiB, or in the write that sends it, at most 16 MiB and 16 KiB
 with its filter, is encoded to BSON and split into chunks of 8 MiB. Each chunk is a document in a collection named
@@ -181,6 +186,9 @@ when:
   such as a `String` with an unpaired surrogate, which comes back as another `String`.
 - Encoding, decoding or reading the record back throws even with the data held as its bytes, such as for an extension
   of a class BSON has no codec for.
+- The data is a `JsonCloudEventData` whose bytes read back as another JSON value. A `BinaryNode` is written as base64
+  and reads back as text, a `POJONode` reads back as the JSON its object is written as, and a `DoubleNode` of `NaN` is
+  written as the text `"NaN"`.
 - The saga id, the quarantine id and the key take so much room that a chunk doesn't fit beside them in one document,
   which takes about 8 MiB between them.
 

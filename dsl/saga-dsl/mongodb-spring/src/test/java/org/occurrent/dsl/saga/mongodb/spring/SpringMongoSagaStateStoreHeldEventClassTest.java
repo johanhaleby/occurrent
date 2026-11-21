@@ -408,6 +408,21 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
+    void json_data_holding_a_binary_value_that_reads_back_as_text_is_refused_and_nothing_is_written() {
+        com.fasterxml.jackson.databind.node.ObjectNode node = new ObjectMapper().createObjectNode();
+        node.put("v", new byte[]{1, 2, 3});
+        CloudEvent event = baseEvent().withDataContentType("application/json").withData(JsonCloudEventData.wrap(node)).build();
+        StoredSaga instance = anInstance();
+
+        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class),
+                () -> assertNothingWritten()
+        );
+    }
+
+    @Test
     void data_that_is_a_BytesCloudEventData_is_held_and_read_back_as_a_BytesCloudEventData_with_its_bytes_and_content_type() {
         byte[] bytes = {0, 1, 2, (byte) 0xff, (byte) 0x80, 'a'};
         CloudEvent event = baseEvent().withDataContentType("application/octet-stream").withData(BytesCloudEventData.wrap(bytes)).build();

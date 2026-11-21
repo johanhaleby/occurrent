@@ -16,8 +16,11 @@
 
 package org.occurrent.dsl.saga;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
+import io.cloudevents.jackson.JsonCloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.BytesCloudEventData;
 import io.cloudevents.core.data.PojoCloudEventData;
@@ -362,6 +365,18 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
         delivered.put(new SubclassedBigDecimal("1.5"), "v");
 
         assertHeldAsBytesAndRead(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render));
+    }
+
+    @Test
+    void json_data_holding_a_binary_value_that_reads_back_as_text_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        ObjectNode node = new ObjectMapper().createObjectNode();
+        node.put("v", new byte[]{1, 2, 3});
+        CloudEvent delivered = CloudEventBuilder.v1().withId("e1").withSource(URI.create("urn:test")).withType("t")
+                .withDataContentType("application/json").withData(JsonCloudEventData.wrap(node)).build();
+
+        assertThatThrownBy(() -> skip(delivered)).isInstanceOf(IllegalStateException.class);
+        assertNothingWasRecorded();
     }
 
     @Test

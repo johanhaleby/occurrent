@@ -35,7 +35,9 @@ import java.util.Optional;
  * same Java classes at any depth, the same bytes, and the extensions with the same values and the same classes. A map or
  * a list inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't
  * hold the data that way may hold its bytes instead, and then returns a {@code JsonCloudEventData} read from those
- * bytes for data that was one, and a {@code BytesCloudEventData} with the same bytes for data of any other class. The
+ * bytes with the same JSON value for data that was one, and a {@code BytesCloudEventData} with the same bytes for data
+ * of any other class. A number in the JSON keeps its value but not always its node class, so {@code 1.10} may come back
+ * as {@code 1.1}. The
  * saga keeps no other copy of a skipped event.
  * <p>
  * Every write of a record is one of the three {@code compareAndSave} methods here, and each writes the instance and its

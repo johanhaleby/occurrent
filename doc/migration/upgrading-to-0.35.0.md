@@ -1001,9 +1001,11 @@ difference. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any d
 doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
 `BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
 those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
-reads a map or an object from the data gets its bytes instead. The bytes are read by a `JsonFormat` with its default
-options, so a JSON format you register with `withForceJsonDataToBase64()` doesn't turn the `JsonCloudEventData` into
-a `BytesCloudEventData`.
+reads a map or an object from the data gets its bytes instead. The bytes are read the way a `JsonFormat` with its
+default options reads them, so a JSON format you register with `withForceJsonDataToBase64()` doesn't turn the
+`JsonCloudEventData` into a `BytesCloudEventData`. When a `double` can't hold one of the decimal numbers in the data,
+such as `1234567890.123456789`, every decimal number in it is read as a `BigDecimal`, so each number comes back with
+its value, though `1.10` may come back as `1.1`.
 
 A record that doesn't fit in the 16 MiB MongoDB stores in one document is split into chunks of 8 MiB in
 `<sagaCollection>_skipped_input_chunks`, each with `sagaId`, `quarantineId`, `key`, `chunk` and `bytes`. The record
@@ -1012,7 +1014,8 @@ joins the chunks again.
 
 `compareAndSaveSkipped` throws an `IllegalStateException`, so the instance and its records stay as they were, only when
 an attribute or an extension doesn't come back as it was delivered, such as a `String` with an unpaired surrogate,
-when the record doesn't encode even with the data held as its bytes, or when the saga id, the quarantine id and the
+when the record doesn't encode even with the data held as its bytes, when JSON data reads back from its bytes as
+another value, such as a binary value that comes back as its base64 text, or when the saga id, the quarantine id and the
 key take about 8 MiB between them and leave no room for a chunk. The message names the instance, the input and, when
 it's known, where in the event the difference is. A subscription that retries such an event stops on it.
 
@@ -1037,7 +1040,8 @@ A store that implements it keeps the skipped inputs, each with its event, and re
 same attributes, the same data class, the same values of the same Java classes at any depth and the same extension
 classes. A map or a list inside the data may come back as another implementation of `Map` or `List`. A store that
 can't hold the data that way may hold its bytes instead, and then returns a `JsonCloudEventData` read from those bytes
-for data that was one, and a `BytesCloudEventData` with the same bytes for data of any other class. A store whose
+with the same JSON value for data that was one, and a `BytesCloudEventData` with the same bytes for data of any other
+class. A number in the JSON keeps its value but may come back as another node class, such as `1.10` as `1.1`. A store whose
 writes have a size limit splits a record that goes over it. A store throws an `IllegalStateException` from
 `compareAndSaveSkipped` before it writes anything for an event it can't hold even so.
 `SpringMongoSagaStateStore` finds out what it can hold with a round trip, as
@@ -1247,8 +1251,9 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
      `Float`, `bigInteger` a `BigInteger` and `bigDecimal` a `BigDecimal`.
    - When the record has `dataClass`, the data is `data`, read as bytes the way binary data in an extension is. When
      `dataClass` is `io.cloudevents.jackson.JsonCloudEventData`, it is a `JsonCloudEventData` of those bytes read as
-     JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. Data of any
-     other class is a `BytesCloudEventData` of those bytes.
+     JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. When a
+     `double` can't hold one of its decimal numbers, read it with Jackson's `USE_BIG_DECIMAL_FOR_FLOATS` instead, so
+     the number keeps its value. Data of any other class is a `BytesCloudEventData` of those bytes.
    - When the record has `dataDocument`, the data is a `PojoCloudEventData` of that document. Its bytes are `data` when
      the record has it, read as bytes the way binary data in an extension is, and otherwise the document as the Java
      driver's `Document.toJson()` writes it, in UTF-8.

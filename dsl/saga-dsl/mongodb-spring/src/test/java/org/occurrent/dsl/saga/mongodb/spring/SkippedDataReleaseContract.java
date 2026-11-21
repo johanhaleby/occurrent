@@ -16,6 +16,10 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.DecimalNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -275,7 +279,51 @@ abstract class SkippedDataReleaseContract {
         assertThat(held()).as("the instance holds the event that failed, the one that does not round trip and the one after it").hasSize(3);
     }
 
-    private void assertHeldAndReleasedAsDelivered(CloudEvent delivered, Class<? extends CloudEventData> releasedAs) {
+    @Test
+    void a_decimal_json_number_past_a_double_is_held_and_released_with_the_delivered_value_as_a_DecimalNode() {
+        CloudEvent delivered = event("case", JsonCloudEventData.wrap(objectHolding(DecimalNode.valueOf(new BigDecimal("1234567890.123456789")))));
+
+        HeldAndReleased run = heldAndReleased(delivered);
+
+        assertAll(
+                () -> assertThat(valueOf(run.original())).as("the event is delivered with a DecimalNode").isInstanceOf(DecimalNode.class),
+                () -> assertThat(valueOf(run.held())).as("held value").isInstanceOf(DecimalNode.class),
+                () -> assertThat(valueOf(run.held()).decimalValue()).as("held value").isEqualByComparingTo(new BigDecimal("1234567890.123456789")),
+                () -> assertThat(valueOf(run.released())).as("released value").isInstanceOf(DecimalNode.class),
+                () -> assertThat(valueOf(run.released()).decimalValue()).as("released value").isEqualByComparingTo(new BigDecimal("1234567890.123456789")),
+                () -> assertThat(dispatched).as("the release applied the trigger and the event").containsExactly(new Pack(TRIGGER), new Pack("case"))
+        );
+    }
+
+    @Test
+    void a_decimal_json_number_that_reads_back_as_a_double_is_held_and_released_with_the_delivered_numeric_value() {
+        CloudEvent delivered = event("case", JsonCloudEventData.wrap(objectHolding(DecimalNode.valueOf(new BigDecimal("1.10")))));
+
+        HeldAndReleased run = heldAndReleased(delivered);
+
+        assertAll(
+                () -> assertThat(valueOf(run.held()).isNumber()).as("held value is a number").isTrue(),
+                () -> assertThat(valueOf(run.held()).decimalValue()).as("held value").isEqualByComparingTo(new BigDecimal("1.1")),
+                () -> assertThat(valueOf(run.released()).isNumber()).as("released value is a number").isTrue(),
+                () -> assertThat(valueOf(run.released()).decimalValue()).as("released value").isEqualByComparingTo(new BigDecimal("1.1")),
+                () -> assertThat(dispatched).as("the release applied the trigger and the event").containsExactly(new Pack(TRIGGER), new Pack("case"))
+        );
+    }
+
+    private static ObjectNode objectHolding(JsonNode value) {
+        ObjectNode node = JsonNodeFactory.instance.objectNode();
+        node.set("v", value);
+        return node;
+    }
+
+    private static JsonNode valueOf(CloudEvent event) {
+        return ((JsonCloudEventData) requireNonNull(event.getData())).getNode().get("v");
+    }
+
+    private record HeldAndReleased(CloudEvent original, CloudEvent held, CloudEvent released) {
+    }
+
+    private HeldAndReleased heldAndReleased(CloudEvent delivered) {
         quarantineTheInstance();
         write(delivered);
         awaitHeldTheTriggerAndTheEvent();
@@ -287,6 +335,14 @@ abstract class SkippedDataReleaseContract {
         subscription.release(ORDER);
         await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE));
         CloudEvent released = converted.stream().filter(event -> event.getId().equals(delivered.getId())).findFirst().orElseThrow();
+        return new HeldAndReleased(original, held, released);
+    }
+
+    private void assertHeldAndReleasedAsDelivered(CloudEvent delivered, Class<? extends CloudEventData> releasedAs) {
+        HeldAndReleased run = heldAndReleased(delivered);
+        CloudEvent original = run.original();
+        CloudEvent held = run.held();
+        CloudEvent released = run.released();
 
         assertAll(
                 () -> assertSameEvent("held", original, held, releasedAs),

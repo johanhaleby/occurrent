@@ -62,11 +62,13 @@ import static java.util.Objects.requireNonNull;
  * keys, and a copy would keep only one of them.
  * <p>
  * Data it can't copy is held as its bytes, and every read rebuilds it the way {@code SpringMongoSagaStateStore} rebuilds
- * data it holds as bytes. A {@code JsonCloudEventData} comes back as a {@code JsonCloudEventData} that the CloudEvents
- * JSON format with its default options reads from those bytes, whatever format the application registered, and data of
- * any other class, such as a {@code PojoCloudEventData} of an object, comes back as a {@code BytesCloudEventData}.
+ * data it holds as bytes. A {@code JsonCloudEventData} comes back as a {@code JsonCloudEventData} read from those bytes
+ * the way the CloudEvents JSON format with its default options reads them, whatever format the application registered,
+ * with every decimal number read as a {@code BigDecimal} when a {@code double} can't hold one of them. Data of any other
+ * class, such as a {@code PojoCloudEventData} of an object, comes back as a {@code BytesCloudEventData}.
  * {@link #compareAndSaveSkipped} throws an {@link IllegalStateException}, and records nothing, for an event with an
- * extension it can't copy, and for data whose copy isn't of the class a release hands the converter.
+ * extension it can't copy, for data whose copy isn't of the class a release hands the converter, and for JSON data
+ * that comes back with another value, such as a binary value as text.
  *
  * @param <S> the user state type
  */
@@ -336,7 +338,7 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         CloudEventData data = event.getData();
         if (data != null) {
             CloudEventData held = copyOf(data);
-            String difference = SkippedInputData.classDifference(data, held);
+            String difference = SkippedInputData.difference(data, held);
             if (difference != null) {
                 throw new IllegalStateException("InMemorySagaStateStore cannot record the input '" + input.key() + "' that saga instance '" + sagaId + "' skipped. "
                                                 + difference + ", so a release would hand the converter another event than the one it was delivered.");
