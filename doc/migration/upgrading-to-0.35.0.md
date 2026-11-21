@@ -970,8 +970,9 @@ instances before you erase an event.
 
 `release` throws an `IllegalStateException` for an instance that 0.34.0 quarantined, since it recorded none of the
 inputs it skipped, and for an instance whose state no longer decodes, with a message that names the decoding failure.
-An instance whose state stops decoding while it is releasing stays releasing. On a store that can list the releasing
-instances, each poll logs a `WARN` and tries again. The runbook covers what is left for those.
+An instance whose state stops decoding while it is releasing stays releasing, and each poll that fails to read it
+counts against the budget of the record the release is on, the way an input that fails again does. Once the budget
+runs out, it's quarantined again on that record. The runbook covers what is left for those.
 
 ### Stored saga state for a release
 
@@ -994,7 +995,9 @@ own JSON. Other data is held in `data` as its bytes in BSON binary, and a releas
 `BytesCloudEventData`.
 
 Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
-the way MongoDB stores it, decodes it, and reads the event back the way a release does. When the data read back isn't
+the way MongoDB stores it, decodes it, and reads the event back the way a release does. It writes the copy of the
+record it checked, decoded from the record's BSON, so a change your application makes to the delivered event after the
+check doesn't reach the record. When the data read back isn't
 the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
 name of the data's class in `dataClass`, and the store logs a `WARN` that names the instance, the input and the
 difference. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`

@@ -165,7 +165,9 @@ public interface SagaStateStoreSkippedInputs {
      * <p>
      * A store whose writes have a size limit splits a record that goes over it, so that data of any class and any size
      * is recorded. {@code SpringMongoSagaStateStore} finds out whether it can hold the data with a round trip, encoding
-     * the record to BSON, decoding it and reading the event back the way a release does. A store throws an
+     * the record to BSON, decoding it and reading the event back the way a release does, and writes the copy it checked.
+     * A store holds a copy of the event that shares no byte array, map or list with {@code input}, so a change to
+     * {@code input} after the check doesn't reach the record. A store throws an
      * {@link IllegalStateException} for an input it can't hold even so, such as one whose extension doesn't come back as
      * the same value, before it writes anything, so the instance and its records stay as they were.
      *

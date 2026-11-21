@@ -252,7 +252,7 @@ runner. On 0.34.0 nothing replays it, and step 6 is what ends it.
 anything of your saga's. Repair the converter or restore the event class, deploy, and read the instance again with
 `SagaStateStore.find` and `SagaCodec`, as in step 3. If it decodes now, you know what the instance held, and step 5 can release it. A release reads
 the instance with its state, so while the state still doesn't decode, `release` throws an `IllegalStateException`
-that names the decoding failure.
+that names the decoding failure, unless a release of the instance is running already.
 
 **A downstream service was refusing the command.** The instance stopped on an event it would handle correctly today,
 and step 5 replays it. On 0.34.0 nothing does.
@@ -378,7 +378,7 @@ release on it dispatches the commands of an input whose write the store then fai
 **When `release` throws.** It throws an `IllegalStateException` before it writes anything when:
 
 - The instance was quarantined by 0.34.0, which recorded none of the inputs it skipped.
-- The instance's state doesn't decode. The message names the decoding failure.
+- The instance's state doesn't decode, and no release of it is running. The message names the decoding failure.
 - The state store doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface. `release`
   throws for it even when the store doesn't hold the saga id, instead of returning `NOT_FOUND`.
 - The instance is stored as `QUARANTINED_RECORDING` without its failure input, quarantine id or skip count, which a
@@ -394,8 +394,10 @@ the field on it by hand or delete it in step 6. Until then every delivery to the
 so does a `findByStatus` page that holds it. For a missing record, restore the records from the same backup as the
 instance and release it again, or delete it in step 6.
 
-An instance whose state stops decoding while it is releasing stays releasing. On a store that can list the releasing
-instances, each poll logs the failure at `WARN` and tries again, so the release goes on once the state decodes.
+An instance whose state stops decoding while it is releasing stays releasing, and each poll that fails to read it
+counts against the budget of the record the release is on, the way an input that fails again does. A `release` call
+on it returns `STILL_RELEASING` instead of throwing. Once the budget runs out, the instance is quarantined again on
+that record, and `release` throws the decoding failure until the state decodes.
 
 **Checking on a release.** `SagaInstance.failure().isReleasing()` is `true` while a release is under way, and
 `failure().releasedAt()` says when it started. Against MongoDB:
@@ -430,7 +432,9 @@ own JSON. Other data is held in `data` as its bytes in BSON binary, and a releas
 `BytesCloudEventData`.
 
 Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
-the way MongoDB stores it, decodes it, and reads the event back the way a release does. When the data read back isn't
+the way MongoDB stores it, decodes it, and reads the event back the way a release does. It writes the copy of the
+record it checked, decoded from the record's BSON, so a change your application makes to the delivered event after the
+check doesn't reach the record. When the data read back isn't
 the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
 name of the data's class in `dataClass`, and the store logs a `WARN` that names the instance, the input and the
 difference. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`

@@ -140,7 +140,9 @@ delivery.
 
 `compareAndSaveSkipped` checks the record with a round trip before it writes anything. It encodes the record to BSON
 the way MongoDB stores it, decodes it, and reads the event back with the method `findSkippedInputs` and
-`findWithFirstSkippedInput` read a record with, so the check and a release read the record the same way.
+`findWithFirstSkippedInput` read a record with, so the check and a release read the record the same way. It writes
+the copy of the record it checked, decoded from the record's BSON, so a change the application makes to the delivered
+bytes, maps or extensions after the check doesn't reach the record.
 
 When the data read back differs from the delivered data in a value at any depth, in its value or its Java class, or
 encoding, decoding or reading it back throws, the record holds the data's bytes in `data` instead, as BSON binary, and
@@ -364,9 +366,12 @@ failure record has no quarantine id, so it has no records to replay. The excepti
 of the saga's subscription isn't one, since a quarantined instance skips every event a restart offers it.
 
 Release also throws `IllegalStateException` for an instance whose state no longer decodes, and the message names the
-decoding failure. To go on, fix how the state decodes and release the instance again, or delete the instance. An
-instance whose state stops decoding while it is releasing stays releasing. Each poll logs the failure at `WARN` and
-tries again, so the release goes on once the state decodes.
+decoding failure. To go on, fix how the state decodes and release the instance again, or delete the instance.
+
+An instance whose state stops decoding while it is releasing, such as on a state a replay saved, stays releasing, and
+each read that fails counts against the budget of the record the release is on, the way a replay that fails does. A
+`release` call on it returns `STILL_RELEASING` instead of throwing. Once the budget runs out, the instance is
+quarantined again on that record, and a later release throws the decoding failure until the state decodes.
 
 ### 5. Release runs on any node, and a crashed release is resumed
 
@@ -461,8 +466,9 @@ applies the records in order, so the input that failed has the first record left
 first without moving anything. The failure record names the input by the key its record is under, a stream key or a
 CloudEvent key.
 
-When a read of the store fails, the release throws and the instance stays releasing. On a store that answers the
-poller's query, the poller tries again on its next poll.
+When the read of the instance and its first record fails, the release reads them again without the state and
+records the failure against that record, as above. When that read fails too, or no record is left, the release throws
+and the instance stays releasing. On a store that answers the poller's query, the poller tries again on its next poll.
 
 ### 6. Timers stay held until the instance is ACTIVE
 

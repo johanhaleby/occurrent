@@ -1006,7 +1006,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * to the converter as a {@link BytesCloudEventData}.
      * <p>
      * Before it writes anything, this encodes the record to BSON the way MongoDB stores it, decodes it, and reads the
-     * event back the way a release reads it. When the data doesn't come back as the same values of the same classes, or
+     * event back the way a release reads it. It writes the copy of the record it checked, decoded from the record's BSON,
+     * so a change to the delivered event after the check, such as to its bytes or a map in its data, doesn't reach the
+     * record. When the data doesn't come back as the same values of the same classes, or
      * doesn't encode at all, the record holds the data's bytes in BSON binary instead, next to the name of the data's
      * class, and the store logs a warning that names the instance, the input and the difference. A release then hands
      * the converter a {@code JsonCloudEventData} read from those bytes when the data was one, and a
@@ -1152,7 +1154,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // The record of an input, checked before the transaction by encoding it the way the upsert stores it, decoding it, and
-    // reading it back with toSkippedInput, the method a release reads it with. When the data doesn't come back as it was
+    // reading it back with toSkippedInput, the method a release reads it with. The record is the document decoded from
+    // that BSON, so the upsert, every retry of it and the chunks write what was checked, and a change to the delivered
+    // bytes, map or extension after this returns changes nothing the store writes. When the data doesn't come back as it was
     // delivered, or doesn't encode, the record holds the data's bytes and its class instead, and a release rebuilds the
     // data from them. A record too large for one document is split across chunks. Refused only for an event whose
     // attributes or extensions don't come back, whose data held as its bytes doesn't come back as the class a release
@@ -1164,6 +1168,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         String asDelivered;
         try {
             addHeldEvent(held, input.event(), false);
+            held = detached(held, codecs);
             asDelivered = difference(input.event(), roundTripped(filter, held, codecs).event(), true);
         } catch (RuntimeException e) {
             asDelivered = "Its data can't be written to BSON and read back" + failingValue(held, codecs) + ", since " + e;
@@ -1174,6 +1179,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             String difference;
             try {
                 addHeldEvent(asBytes, input.event(), true);
+                asBytes = detached(asBytes, codecs);
                 restored = roundTripped(filter, asBytes, codecs).event();
                 difference = difference(input.event(), restored, false);
             } catch (RuntimeException e) {
@@ -1206,6 +1212,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     + "and leave no room for a chunk in one document or in the write that sends it, where the driver sends at most " + MAX_STATEMENT_SIZE + ".");
         }
         return new HeldRecord(pointer, chunks);
+    }
+
+    // A copy of held decoded from its BSON, so it shares no byte array, map or list with the delivered event
+    private static Document detached(Document held, CodecRegistry codecs) {
+        Codec<Document> codec = codecs.get(Document.class);
+        return new RawBsonDocument(held, codec).decode(codec);
     }
 
     // The input a release reads from the record an upsert of held under filter stores, with an ObjectId as the _id

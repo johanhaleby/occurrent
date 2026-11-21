@@ -16,7 +16,11 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.DecimalNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
@@ -199,6 +203,27 @@ class SkippedInputExportTest {
         assertThat(record).as("the record").doesNotContainKey("dataDocument");
         assertThat(rebuild(record).getData()).as("data of the rebuilt event").isInstanceOf(JsonCloudEventData.class);
         assertThat(differences(rebuild(record), delivered)).as("differences between the rebuilt event and the delivered one").isEmpty();
+    }
+
+    @Test
+    void json_data_with_a_decimal_past_a_double_an_overflowing_one_and_mixed_numbers_is_rebuilt_as_the_node_tree_the_store_releases() throws Exception {
+        ObjectNode delivered = (ObjectNode) new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree("{\"high\":1234567890.123456789,\"huge\":1E+400,"
+                + "\"mixed\":{\"int\":1,\"long\":12345678901,\"tenth\":0.1,\"trailing\":1.10,\"arrays\":[1,[2.5,{\"deep\":0.1}]],\"object\":{\"inner\":{\"price\":1.10}}}}");
+        record(builder("held-1").withDataContentType("application/json").withData(JsonCloudEventData.wrap(delivered)).build());
+
+        Document record = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns().getFirst();
+
+        JsonNode rebuilt = ((JsonCloudEventData) requireNonNull(rebuild(record).getData())).getNode();
+        JsonNode released = ((JsonCloudEventData) requireNonNull(stateStore.findSkippedInputs(ORDER, QUARANTINE_ID, LIMIT).getFirst().event().getData())).getNode();
+        List<String> nodeDifferences = new ArrayList<>();
+        nodeDifferences(nodeDifferences, "data", rebuilt, released);
+        assertThat(nodeDifferences).as("differences between the rebuilt node tree and the released one").isEmpty();
+        assertThat(rebuilt.get("high")).as("the decimal past a double, rebuilt").isInstanceOf(DecimalNode.class);
+        assertThat(rebuilt.get("high").decimalValue()).as("the decimal past a double, rebuilt").isEqualByComparingTo(new BigDecimal("1234567890.123456789"));
+        assertThat(rebuilt.get("huge")).as("the overflowing decimal, rebuilt").isInstanceOf(DecimalNode.class);
+        assertThat(rebuilt.get("huge").decimalValue()).as("the overflowing decimal, rebuilt").isEqualByComparingTo(new BigDecimal("1E+400"));
+        assertThat(released.get("high").decimalValue()).as("the decimal past a double, released").isEqualByComparingTo(new BigDecimal("1234567890.123456789"));
+        assertThat(released.get("huge").decimalValue()).as("the overflowing decimal, released").isEqualByComparingTo(new BigDecimal("1E+400"));
     }
 
     @Test
@@ -511,7 +536,7 @@ class SkippedInputExportTest {
             // The recipe: JSON bytes when dataClass names JsonCloudEventData, the bytes as delivered for any other class
             if (dataClass.equals("io.cloudevents.jackson.JsonCloudEventData")) {
                 try {
-                    builder.withData(JsonCloudEventData.wrap(new ObjectMapper().readTree(bytes)));
+                    builder.withData(JsonCloudEventData.wrap(readAsJson(bytes)));
                 } catch (IOException e) {
                     throw new IllegalStateException(e);
                 }
@@ -525,6 +550,44 @@ class SkippedInputExportTest {
             builder.withData(bytes);
         }
         return builder.build();
+    }
+
+    // The recipe for JsonCloudEventData: the bytes read as JSON the way the CloudEvents JSON format reads data, and read with
+    // USE_BIG_DECIMAL_FOR_FLOATS instead when a double cannot hold one of the decimal numbers in them
+    private static JsonNode readAsJson(byte[] bytes) throws IOException {
+        JsonNode asDoubles = new ObjectMapper().readTree(bytes);
+        JsonNode exact = new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(bytes);
+        return aDoubleHoldsEveryDecimalIn(exact) ? asDoubles : exact;
+    }
+
+    private static boolean aDoubleHoldsEveryDecimalIn(JsonNode node) {
+        if (node.isFloatingPointNumber()) {
+            BigDecimal decimal = node.decimalValue();
+            double asDouble = decimal.doubleValue();
+            return Double.isFinite(asDouble) && BigDecimal.valueOf(asDouble).compareTo(decimal) == 0;
+        }
+        for (JsonNode child : node) {
+            if (!aDoubleHoldsEveryDecimalIn(child)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void nodeDifferences(List<String> differences, String path, JsonNode actual, JsonNode expected) {
+        if (actual.getClass() != expected.getClass()) {
+            differences.add(path + ": node class " + actual.getClass().getSimpleName() + " but expected " + expected.getClass().getSimpleName());
+        } else if (expected.isContainerNode()) {
+            compare(differences, path + " size", actual.size(), expected.size());
+            expected.properties().forEach(entry -> nodeDifferences(differences, path + "." + entry.getKey(), actual.path(entry.getKey()), entry.getValue()));
+            if (expected.isArray()) {
+                for (int i = 0; i < Math.min(actual.size(), expected.size()); i++) {
+                    nodeDifferences(differences, path + "[" + i + "]", actual.get(i), expected.get(i));
+                }
+            }
+        } else {
+            compare(differences, path, actual.isFloatingPointNumber() ? actual.decimalValue().toString() : actual.asText(), expected.isFloatingPointNumber() ? expected.decimalValue().toString() : expected.asText());
+        }
     }
 
     // The recipe for a record over 16 MiB: its chunks below `chunks` in order of `chunk`, the bytes joined, `size` of them,

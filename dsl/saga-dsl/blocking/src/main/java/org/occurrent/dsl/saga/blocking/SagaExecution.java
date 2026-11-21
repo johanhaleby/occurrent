@@ -696,9 +696,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     // Read whole, so an instance whose state does not decode is refused here rather than marked releasing with nothing
     // able to apply to it. A read that fails while the instance reads fine without its state, and not whole, failed on
-    // decoding the state, and is refused with the decoding failure named. Any other failure of the read, such as a record
-    // that doesn't decode, propagates as it is. A store that refuses to read where it is called read nothing, and the
-    // reads that check the decoding would run in the same place, such as inside a transaction of the caller's
+    // decoding the state, and is refused with the decoding failure named, unless a release of it is running already. Then
+    // the instance read without its state is returned, and the release goes on with it and counts the failure against
+    // the budget of its first record, see recordReadFailure. Any other failure of the read, such as a record that doesn't
+    // decode, propagates as it is. A store that refuses to read where it is called read nothing, and the reads that check
+    // the decoding would run in the same place, such as inside a transaction of the caller's
     private SagaEnvelopes.@Nullable WithFirstSkippedInput<S> findToRelease(SagaStateStoreSkippedInputs records, String sagaId) {
         try {
             return envelopes.findWithFirstSkippedInput(records, sagaId).orElse(null);
@@ -706,15 +708,20 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             throw refused;
         } catch (Throwable readFailure) {
             rethrowIfNotTheInstances(readFailure);
+            SagaEnvelope<S> withoutState = null;
             boolean stateFails;
             try {
-                stateFails = envelopes.findWithoutState(sagaId).isPresent() && failsToRead(sagaId);
+                withoutState = envelopes.findWithoutState(sagaId).orElse(null);
+                stateFails = withoutState != null && failsToRead(sagaId);
             } catch (Throwable secondFailure) {
                 readFailure.addSuppressed(secondFailure);
                 stateFails = false;
             }
             if (!stateFails) {
                 rethrowAsIs(readFailure);
+            }
+            if (Objects.requireNonNull(withoutState).isReleasing()) {
+                return new SagaEnvelopes.WithFirstSkippedInput<>(withoutState, null);
             }
             throw new IllegalStateException("Saga '" + subscriptionId + "' cannot release instance '" + sagaId + "', because reading its state failed with " + readFailure + ", while reading it without its state worked. "
                                             + "Release the instance again if that error doesn't last. If its state no longer decodes, fix how it decodes and release the instance again, or delete the instance with SagaStateStore.delete(\"" + sagaId + "\"), which throws its state away.", readFailure);
@@ -781,6 +788,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * {@code null} with the instance still releasing, and the next call goes on from that record. With
      * {@code leaveIfWrittenSince}, an instance first read with an {@code updatedAt} after it is left as it is, and this
      * returns {@code null}.
+     * <p>
+     * A read of the instance and its first record that fails, such as on a state a replay saved that doesn't decode any
+     * more, counts against the budget of that record the way a replay that fails does, see {@link #recordReadFailure}.
      */
     private SagaSubscription.@Nullable ReleaseResult continueRelease(String sagaId, SagaStateStoreSkippedInputs records, int maxRecords,
                                                                      @Nullable Instant leaveIfWrittenSince) {
@@ -788,7 +798,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         int replayed = 0;
         boolean firstRead = true;
         while (true) {
-            SagaEnvelopes.WithFirstSkippedInput<S> read = envelopes.findWithFirstSkippedInput(records, sagaId).orElse(null);
+            SagaEnvelopes.WithFirstSkippedInput<S> read;
+            try {
+                read = envelopes.findWithFirstSkippedInput(records, sagaId).orElse(null);
+            } catch (SagaReadRefusedException refused) {
+                throw refused;
+            } catch (Throwable readFailure) {
+                rethrowIfNotTheInstances(readFailure);
+                return recordReadFailure(records, sagaId, readFailure);
+            }
             SagaEnvelope<S> current = read == null ? null : read.envelope();
             SagaSubscription.ReleaseResult ended = resultUnlessReleasing(current);
             if (ended != null) {
@@ -1049,6 +1067,35 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         log.warn("Saga '{}' instance '{}' failed on the event '{}' while it was releasing. It stays releasing, and the timer poller tries the event again.",
                 subscriptionId, sagaId, record.key(), failure);
         return SagaSubscription.ReleaseResult.STILL_RELEASING;
+    }
+
+    // Record that reading a releasing instance and its first record failed, such as on a state a replay saved that
+    // doesn't decode any more, against the budget of that record, the way a failed replay is recorded. The instance and
+    // its first record are read again without the state for it. When that read fails too, the store read nothing to
+    // charge and the failure propagates as it is. So does it for an instance with no record left, since there is no input
+    // whose budget it could count against, and the next poll tries again
+    private SagaSubscription.ReleaseResult recordReadFailure(SagaStateStoreSkippedInputs records, String sagaId, Throwable readFailure) {
+        SagaEnvelopes.WithFirstSkippedInput<S> read = null;
+        try {
+            read = envelopes.findWithFirstSkippedInputWithoutState(records, sagaId).orElse(null);
+        } catch (Throwable secondFailure) {
+            rethrowIfNotTheInstances(secondFailure);
+            readFailure.addSuppressed(secondFailure);
+            rethrowAsIs(readFailure);
+        }
+        SagaEnvelope<S> current = read == null ? null : read.envelope();
+        SagaSubscription.ReleaseResult ended = resultUnlessReleasing(current);
+        if (ended != null) {
+            log.info("Saga '{}' failed to read instance '{}' while it was releasing, but another call or node moved the release on and it is {} now.",
+                    subscriptionId, sagaId, ended, readFailure);
+            return ended;
+        }
+        String quarantineId = Objects.requireNonNull(current).quarantineId();
+        SkippedInput record = Objects.requireNonNull(read).first();
+        if (quarantineId == null || record == null) {
+            rethrowAsIs(readFailure);
+        }
+        return recordReleaseFailure(records, sagaId, Objects.requireNonNull(quarantineId), Objects.requireNonNull(record), extractMeta(record.event()).meta(), readFailure, clock.get());
     }
 
     // Matched by seq and key, not by the event, since a store reads a record back as a new event and a byte array in it
