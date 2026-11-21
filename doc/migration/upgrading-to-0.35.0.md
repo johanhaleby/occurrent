@@ -569,9 +569,15 @@ the second write then stores the first position over it, so the events between t
 ### What to do
 
 Nothing, unless you implement `CheckpointStorage` yourself. To get the version stored with the first position in one
+A storage of your own that overrides the two-argument `resolveFirstCheckpointRace` and not the three-argument one gets
+the `ifAbsent()` write alone, with no version, as in 0.34.0. Another node can store an earlier first position through
+the two-argument method between the two writes, and the second write would move it later again and skip the events
+between the two. Until the next checkpoint write stores the version, a node that had lost its lease can write over the
+first position, which delivers events again.
+
 write there, override the three-argument `resolveFirstCheckpointRace` as its javadoc describes. A storage that
-overrides the two-argument `resolveFirstCheckpointRace` should override both, and the model logs a warning when it is
-created over one that overrides only the two-argument method. There is no OpenRewrite recipe for this.
+overrides the two-argument `resolveFirstCheckpointRace` should override both. Over one that overrides only the
+two-argument method, the model logs a warning when it is created and stores the first position without a version. There is no OpenRewrite recipe for this.
 
 ## A capability that acts on a subscription is not found past a wrapper
 

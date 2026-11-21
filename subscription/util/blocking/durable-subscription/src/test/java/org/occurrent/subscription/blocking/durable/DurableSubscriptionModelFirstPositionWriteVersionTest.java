@@ -56,6 +56,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
 
     private static final String SUBSCRIPTION_ID = "someSubscription";
     private static final String FIRST_POSITION = "first-position";
+    private static final String EARLIER_FIRST_POSITION = "earlier-first-position";
 
     @Test
     void a_first_position_recorded_with_a_version_source_answering_a_version_stores_that_version() {
@@ -102,7 +103,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
 
     @Test
     void a_lost_race_that_resolves_to_this_nodes_own_position_stores_this_nodes_version() {
-        RecordingStorage storage = new RecordingStorage();
+        RecordingStorage storage = new RecordingStorageWithAThreeArgumentResolver();
         storage.beforeTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("later-position-of-another-node"));
         storage.replacesTheWinnerWithTheCandidate = true;
         Feed feed = new Feed();
@@ -123,7 +124,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
 
     @Test
     void a_lost_race_whose_stored_position_read_back_is_the_one_this_node_read_stores_this_nodes_version() {
-        RecordingStorage storage = new RecordingStorage();
+        RecordingStorage storage = new RecordingStorageWithAThreeArgumentResolver();
         storage.beforeTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(FIRST_POSITION));
         Feed feed = new Feed();
         DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
@@ -143,7 +144,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
 
     @Test
     void a_stamp_refused_because_a_newer_lease_holder_wrote_since_still_starts_the_subscription_from_the_recorded_position() {
-        RecordingStorage storage = new RecordingStorage();
+        RecordingStorage storage = new RecordingStorageWithAThreeArgumentResolver();
         storage.afterTheIfAbsentWrite = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
         Feed feed = new Feed();
         DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
@@ -157,6 +158,24 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION),
                 () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L),
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("newer-nodes-position")
+        );
+    }
+
+    @Test
+    void a_storage_that_overrides_only_the_two_argument_resolver_keeps_the_earlier_first_position_another_node_stored_between_the_two_writes() {
+        RecordingStorage storage = new RecordingStorage();
+        storage.replacesTheWinnerWithTheCandidate = true;
+        storage.afterTheIfAbsentWrite = () -> storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, new StringBasedCheckpoint(EARLIER_FIRST_POSITION));
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+
+        assertAll(
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(EARLIER_FIRST_POSITION),
+                () -> assertThat(storage.conditionsSaved).as("conditions saved with").containsExactly(CheckpointWriteCondition.ifAbsent()),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION)
         );
     }
 
@@ -193,7 +212,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
      * Delegates to a real {@link InMemoryCheckpointStorage} and records the condition of every save, with hooks that
      * run around the {@code ifAbsent()} write to stand in for another node writing at that moment.
      */
-    private static final class RecordingStorage implements CheckpointStorage {
+    private static class RecordingStorage implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
         final List<CheckpointWriteCondition> conditionsSaved = new ArrayList<>();
         @Nullable Runnable beforeTheIfAbsentWrite;
@@ -246,6 +265,17 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
                 return Optional.of(delegate.save(subscriptionId, candidate));
             }
             return answersTheWinnerOfALostRace ? Optional.ofNullable(delegate.read(subscriptionId)) : Optional.empty();
+        }
+    }
+
+    /**
+     * Overrides the three-argument resolver too, answering that it settled nothing, so the model still saves the
+     * version after an {@code ifAbsent()} write.
+     */
+    private static final class RecordingStorageWithAThreeArgumentResolver extends RecordingStorage {
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            return Optional.empty();
         }
     }
 

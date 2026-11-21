@@ -224,7 +224,9 @@ public interface CheckpointStorage {
      * {@link CheckpointWriteCondition#ifAbsent()} and then store the version with
      * {@link #save(String, Checkpoint, CheckpointWriteCondition) save(id, candidate, notOlderThan(writeVersion))}.
      * When the storage resolves a lost race through {@link #resolveFirstCheckpointRace(String, Checkpoint)}, another
-     * node can store an earlier first position between those two writes, and the second write moves it later again.
+     * node can store an earlier first position between those two writes, and the second write would move it later
+     * again, so the blocking {@code DurableSubscriptionModel} makes only the {@code ifAbsent()} write on a storage that
+     * overrides only that method, and stores no version with the first position.
      * {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} override both.
      * <p>
      * So only a storage that implements this method refuses the writes of a node with an older version from the moment
