@@ -103,7 +103,11 @@ replay delivers no further event, and after a stop none until `start(true)` or `
 X's action doesn't wait for that action, which can only return after the cancel does. In the blocking catch-up a
 `stop()` made there is handed to the lifecycle thread and takes effect once the action has returned, so it has no
 action of X to wait for. A cancel of X after a `stop()`
-parked its replay doesn't wait again, since the stop did. `shutdown()` doesn't wait. A `pauseSubscription(X)` doesn't
+parked its replay doesn't wait again, since the stop did. `shutdown()` doesn't wait. A `start(..)` whose wrapped model
+throws before it started parks a replay a subscribe began while it ran, and doesn't wait either, since it takes back
+nothing a caller asked for. Like a stop, it tells the call to X's action that the event is no longer wanted, so an
+action that waits for a competing consumer's lease returns, and a later `start(true)` runs the replay again instead of
+waiting behind that action. A `pauseSubscription(X)` doesn't
 wait either. It ends a replay at once only while the replay waits to run again after a failure, when no action runs,
 and otherwise takes effect at the handover ([#1256](https://github.com/johanhaleby/occurrent/issues/1256)), after the
 replay's last call to the action has returned.

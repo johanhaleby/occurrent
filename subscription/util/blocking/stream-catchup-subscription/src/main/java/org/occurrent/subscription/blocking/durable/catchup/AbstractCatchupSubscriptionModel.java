@@ -955,8 +955,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * run and every other subscription is resumed. This model is started all the same.
      * <p>
      * When starting the live delegate throws, a model that was stopped before the call stops again and parks a replay
-     * that ran in the meantime, as {@link #stop()} does. It doesn't stop again when the delegate runs afterwards, or
-     * when a resume of the delegate came while the delegate was starting.
+     * that ran in the meantime, as {@link #stop()} does. Unlike {@link #stop()}, it doesn't wait for a call to the
+     * subscriber's action that such a replay let through, though it tells that call its event is no longer wanted, so
+     * a competing consumer's wait for its lease in the action ends. It doesn't stop again when the delegate runs
+     * afterwards, or when a resume of the delegate came while the delegate was starting.
      * Once a later resume of the delegate returns, the model is started again, unless a {@link #stop()} came first.
      * When the delegate throws on being asked whether it runs, the model stops again, and what the delegate threw is
      * added to the start's failure as suppressed.
@@ -4964,7 +4966,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Allows the next replay on this model to run, as {@link #resumeReplay()} does, before the live delegate is
-     * started. Hand the result to {@link #undoStart(StartAttempt, boolean)} when that start throws.
+     * started. Hand the result to {@link #undoStart(StartAttempt, boolean, Throwable)} when that start throws.
      */
     StartAttempt beginStart() {
         synchronized (lifecycleLock) {
@@ -4992,6 +4994,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Stops this model again after starting the live delegate threw, when the model was stopped before, the delegate
      * is not running, and no other start or stop of this model and no resume of the delegate came since. A delegate
      * that runs after all keeps this model started, so a later subscription replays and hands over to it.
+     * <p>
+     * It parks the replays in flight as {@link #stopReplay()} does, and tells each call to the subscriber's action that
+     * one of them let through that its event is no longer wanted, without waiting for the action to return.
      *
      * @param liveDelegateRuns What {@link #runsAfterFailedStart} answered, asked before this is called, so the
      *                         lifecycle lock is never held while the delegate is called
@@ -5012,11 +5017,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             lifecycleGeneration++;
             stops++;
         }
+        List<ActionInFlight> admitted = new ArrayList<>();
         try {
-            // A start that failed takes nothing back that a caller asked for, so it doesn't wait for the actions
-            parkReplaysInFlight(new ArrayList<>());
+            parkReplaysInFlight(admitted);
         } catch (RuntimeException | Error e) {
             addSuppressed(startFailure, e);
+        } finally {
+            // A start that failed takes nothing back that a caller asked for, so it doesn't wait for the actions. It still
+            // tells each one its event is unwanted, as a stop does, since an action waiting for a lease waits for nothing else
+            admitted.forEach(action -> action.unwanted().complete(null));
         }
     }
 
