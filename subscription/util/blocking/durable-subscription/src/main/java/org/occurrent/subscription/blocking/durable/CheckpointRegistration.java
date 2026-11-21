@@ -140,10 +140,12 @@ final class CheckpointRegistration {
 
     // A position of the subscription is stored, so before the first event a quiet save moves that position on and
     // never stores the first one for a subscription that stores no position of its own. stored is that position, and
-    // a resume compares it with what it finds stored, unless this registration had already noted a write or a read
-    void startPositionStored(Checkpoint stored) {
+    // a resume compares it with what it finds stored, unless this registration had already noted a write or a read.
+    // repositionsWhenRead is the count taken before stored was read. A resume, a put-back or a restart after a lost
+    // history since then noted what is stored itself, and stored may no longer be, so the call changes nothing
+    void startPositionStored(Checkpoint stored, long repositionsWhenRead) {
         underDeliveryLockAndSaveLock(() -> {
-            if (deliveries == 0) {
+            if (deliveries == 0 && !repositionedSince(repositionsWhenRead)) {
                 storedBeforeAnyDelivery = true;
                 if (storedKnown && storedPosition == null) {
                     storedPosition = stored.asString();

@@ -74,7 +74,7 @@ class CheckpointRegistrationTest {
             boolean beforeAnyPositionIsStored = registration.quietTickAllowed();
 
             // When
-            registration.startPositionStored(at("s"));
+            registration.startPositionStored(at("s"), registration.repositions());
 
             // Then
             assertThat(beforeAnyPositionIsStored).as("allowed before a position is stored").isFalse();
@@ -670,7 +670,7 @@ class CheckpointRegistrationTest {
         void a_checkpoint_stored_by_another_node_keeps_quiet_ticks_off_for_a_subscription_whose_start_position_is_stored_and_that_delivered_nothing() {
             // Given
             stored = "s";
-            registration.startPositionStored(at("s"));
+            registration.startPositionStored(at("s"), registration.repositions());
 
             // When
             plainResumeAt("g", false);
@@ -685,7 +685,7 @@ class CheckpointRegistrationTest {
         void the_start_position_found_stored_by_the_resume_still_allows_a_quiet_tick_when_nothing_was_delivered() {
             // Given
             stored = "s";
-            registration.startPositionStored(at("s"));
+            registration.startPositionStored(at("s"), registration.repositions());
 
             // When
             plainResumeAt("s", false);
@@ -700,7 +700,7 @@ class CheckpointRegistrationTest {
         void a_quiet_position_found_stored_by_the_resume_still_allows_a_quiet_tick_when_nothing_was_delivered() {
             // Given
             stored = "s";
-            registration.startPositionStored(at("s"));
+            registration.startPositionStored(at("s"), registration.repositions());
             quietTick("q1", Write.RETURNS);
             asked.clear();
 
@@ -711,6 +711,73 @@ class CheckpointRegistrationTest {
             // Then
             assertThat(asked).containsExactly("save q2");
             assertThat(stored).isEqualTo("q2");
+        }
+    }
+
+    @Nested
+    @DisplayName("a start position read before a reposition")
+    class StartPositionReadBeforeAReposition {
+
+        @Test
+        void a_start_position_read_before_a_plain_resume_stored_a_checkpoint_of_another_node_keeps_quiet_ticks_off_when_nothing_was_delivered() {
+            // Given
+            long repositionsWhenRead = registration.repositions();
+            plainResumeAt("c", false);
+
+            // When
+            registration.startPositionStored(at("s"), repositionsWhenRead);
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("tick off");
+            assertThat(stored).isEqualTo("c");
+        }
+
+        @Test
+        void a_start_position_read_before_a_put_back_keeps_quiet_ticks_off_when_nothing_was_delivered() {
+            // Given
+            long repositionsWhenRead = registration.repositions();
+            putBack("p", Write.RETURNS);
+
+            // When
+            registration.startPositionStored(at("s"), repositionsWhenRead);
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("tick off");
+            assertThat(stored).isEqualTo("p");
+        }
+
+        @Test
+        void a_start_position_read_before_a_restart_after_a_lost_history_does_not_let_a_quiet_save_cover_what_another_node_stores_later() {
+            // Given
+            long repositionsWhenRead = registration.repositions();
+            restartPosition("r", Write.RETURNS);
+            registration.startPositionStored(at("s"), repositionsWhenRead);
+            quietTick("q1", Write.WRITES_THEN_THROWS);
+            stored = "x";
+
+            // When
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("restart r", "save q1", "read");
+            assertThat(stored).isEqualTo("x");
+        }
+
+        @Test
+        void a_start_position_read_after_the_latest_reposition_still_allows_a_quiet_tick_when_nothing_was_delivered() {
+            // Given
+            plainResumeAt("c", false);
+            long repositionsWhenRead = registration.repositions();
+
+            // When
+            registration.startPositionStored(at("c"), repositionsWhenRead);
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q1");
+            assertThat(stored).isEqualTo("q1");
         }
     }
 

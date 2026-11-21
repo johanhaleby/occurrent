@@ -212,7 +212,10 @@ the default of `restartsAt(..)` answers `false` as well, even when it resumes at
 saves are dropped all the same. The model notes the checkpoint it read as stored, but not as the position of a resume,
 so a quiet position is saved once the stored checkpoint covers the latest delivery, for example after the next event
 stores its checkpoint. A subscription that has delivered nothing since the model stored its first position takes any
-stored checkpoint as covering, but not one this resume finds that the subscription didn't store or read itself.
+stored checkpoint as covering, but not one this resume finds that the subscription didn't store or read itself. An
+evaluation of the start position that read a checkpoint before the resume and returns after it doesn't change that,
+since what it read may no longer be stored. The same holds after a resume at a position, a put-back or a restart
+position.
 
 Not noting the checkpoint read there would lose a replay. Say this node stores e5's checkpoint, the subscription is
 paused, and another node stores c0 during the pause to replay from it. The model would still take e5's checkpoint as

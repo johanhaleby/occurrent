@@ -1125,7 +1125,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // The registration learns once a position is stored for a subscription from the model default, the one read,
     // recorded or adopted, and before any evaluation returns it. It learns at most once for each subscribe, and never
-    // for a refused one or for a StartAt of the caller's own. An evaluation that records a first position outside the
+    // for a refused one or for a StartAt of the caller's own, and it ignores what it learns from a read that a resume,
+    // a put-back or a restart after a lost history came after. An evaluation that records a first position outside the
     // settled outcome writes it through the registration, so it is refused once the registration has stopped writing,
     // and once a resume, a put-back or a restart after a lost history stored a position after the evaluation read. One
     // that stores this node's version with the checkpoint it read writes through the registration too, and once the
@@ -1175,7 +1176,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (checkpoint == null) {
                     return startAtIfNoSubscriptionFound;
                 }
-                firstPosition.positionStored(checkpoint);
+                firstPosition.positionStored(checkpoint, repositionsWhenRead);
                 return StartAt.checkpoint(checkpoint);
             });
         } else {
@@ -1734,7 +1735,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // - positionStored runs once a position of the subscription is stored, whether read, recorded or adopted, and
     //   before any evaluation gets that position. It runs at most once. It doesn't run once the subscribe ended
     //   without a settled position, nor while nothing is stored because the override let an unanswerable source
-    //   through.
+    //   through. The registration ignores it when a resume, a put-back or a restart after a lost history came after
+    //   the read, and a later call doesn't run it again.
     private final class FirstPosition {
         private static final Settled ENDED = new Settled(null, null, null);
 
@@ -1754,11 +1756,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             this.registration = registration;
         }
 
-        // Once a position of the subscription is stored. Only the first call runs it, since a later one would find
-        // nothing left to allow
-        void positionStored(Checkpoint stored) {
+        // Once a position of the subscription is stored, with the registration's count of repositions taken before it
+        // was read. Only the first call runs it, since a later one would find nothing left to allow. The registration
+        // ignores a call whose read a resume, a put-back or a restart after a lost history came after
+        void positionStored(Checkpoint stored, long repositionsWhenRead) {
             if (positionStoredRan.compareAndSet(false, true)) {
-                registration.startPositionStored(stored);
+                registration.startPositionStored(stored, repositionsWhenRead);
             }
         }
 
@@ -1817,6 +1820,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             if (outcome != null) {
                 return outcome;
             }
+            // Taken before the read, as an evaluation takes it, so the registration ignores what was read once a
+            // resume came after the read
+            long repositionsWhenRead = registration.repositions();
             Checkpoint read = storage.read(subscriptionId);
             Checkpoint position = read == null ? subscriptionModel.globalCheckpoint() : null;
             if (read == null && position == null && !config.startWhenNoStartPositionCanBeRecorded) {
@@ -1833,7 +1839,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 outcome = settled;
                 if (outcome == null) {
                     try {
-                        outcome = write(read, position);
+                        outcome = write(read, position, repositionsWhenRead);
                     } catch (Throwable failure) {
                         // Whatever it wrote before it failed stays as it is, since no other party writes
                         settled = new Settled(null, null, failure);
@@ -1847,7 +1853,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
 
-        private Settled write(@Nullable Checkpoint read, @Nullable Checkpoint position) {
+        private Settled write(@Nullable Checkpoint read, @Nullable Checkpoint position, long repositionsWhenRead) {
             Checkpoint stored = null;
             if (read != null) {
                 // Before the outcome settles, so the refusal for a newer version stored is the outcome, and subscribe
@@ -1858,7 +1864,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Checkpoint storedNow = outcome.recorded == null ? stored : outcome.recorded;
             if (storedNow != null) {
                 // Before the outcome is published, so no evaluation returns the position before it runs
-                positionStored(storedNow);
+                positionStored(storedNow, repositionsWhenRead);
             }
             return outcome;
         }
