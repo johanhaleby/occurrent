@@ -149,9 +149,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private final @Nullable SagaStateStoreSkippedInputs skippedInputs;
     // True when the store has skip records but cannot write a skip and its record in one atomic write, as
     // SpringMongoSagaStateStore on a standalone server. The runner refuses quarantine on there, yet an instance quarantined
-    // earlier can still be in its data, such as data restored from a replica set. Such an instance skips its inputs
-    // without recording them, since the write the server refuses every time would hold up the subscription for good
-    private final boolean skipsUnrecorded;
+    // earlier can still be in its data, such as data restored from a replica set. Every input addressed to such an
+    // instance is refused, since skipping it unrecorded would acknowledge an input no release replays
+    private final boolean cannotRecordSkips;
     // The last id the previous release poll listed, null when that poll reached the end
     private final AtomicReference<@Nullable String> releasingCursor = new AtomicReference<>();
 
@@ -175,7 +175,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // A flow saga's received events are written through the runner's converter. Any other saga has none to write
         this.envelopes = SagaEnvelopes.of(stateStore, initialState instanceof FlowState<?> ? converter : null);
         this.skippedInputs = stateStore instanceof SagaStateStoreSkippedInputs records ? records : null;
-        this.skipsUnrecorded = skippedInputs != null && !writesAtomically(skippedInputs);
+        this.cannotRecordSkips = skippedInputs != null && !writesAtomically(skippedInputs);
         this.dispatcher = dispatcher;
         this.converter = converter;
         this.config = config;
@@ -1155,7 +1155,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // A quarantined instance skips the input whether or not its state decodes, and records it like the skip in
     // SagaExecutionSupport.process does, through a write that leaves the undecodable state alone. True once the input is
     // recorded or needs no record. False when the write kept losing or the instance stopped being quarantined, so the
-    // load failure propagates rather than the input being skipped unrecorded.
+    // load failure propagates rather than the input being skipped unrecorded. Throws when the store cannot record the
+    // skip, and the caller adds that to the load failure as suppressed.
     private boolean recordedTheSkip(String sagaId, SagaEnvelope<S> quarantined, EventMeta meta, @Nullable CloudEvent cloudEvent) {
         SagaEnvelope<S> current = quarantined;
         for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
@@ -1185,12 +1186,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // The skip of an input by the quarantined instance current, in one write that leaves the state alone. It raises the
     // skip count, which takes toRecord's seq for it alone, and records toRecord under the quarantine id. A key recorded
     // already keeps its first record, so its new seq goes unused. False when the write lost, and the caller decides
-    // again on what it reads. True without a write when the store skips unrecorded
+    // again on what it reads. Throws when the store cannot record the skip, so the input is not acknowledged
     private boolean recordedSkip(SagaEnvelope<S> current, SkippedInput toRecord) {
-        if (skipsUnrecorded) {
-            log.warn("Saga '{}' instance '{}' is quarantined and skipped the input '{}' without recording it, because its state store cannot write a skip and its record in one atomic write. A release does not replay it, so apply it by hand if the instance needs it.",
-                    subscriptionId, current.sagaId(), toRecord.key());
-            return true;
+        if (cannotRecordSkips) {
+            throw new IllegalStateException(("Saga '%s' instance '%s' is quarantined and cannot skip the input '%s', because its state store cannot write a skip and its record in one atomic write, "
+                                             + "and a skip it does not record is never replayed by a release. The input is not acknowledged, so it is delivered again. "
+                                             + "Move the saga's data back to a store that records skips, such as MongoDB on a replica set, and release the instance there, or resolve the instance by hand, such as by deleting it from the database.")
+                    .formatted(subscriptionId, current.sagaId(), toRecord.key()));
         }
         SagaStateStoreSkippedInputs records = skippedInputs(current.sagaId());
         String quarantineId = Objects.requireNonNull(current.quarantineId());

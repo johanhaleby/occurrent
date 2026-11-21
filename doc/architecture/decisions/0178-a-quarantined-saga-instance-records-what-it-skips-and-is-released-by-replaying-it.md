@@ -449,6 +449,12 @@ runs with quarantine off, and
 refusals happen at startup, so a saga fails before it receives its first input rather than when an instance is first
 quarantined.
 
+An instance quarantined while its data was on a store that records skips, and then moved to one that can't, isn't
+refused at startup, since quarantine is off there. It can't record the inputs it skips, so the delivery of every input
+addressed to it fails and the input isn't acknowledged, since skipping it without a record
+would leave an input that no release replays. The instance holds up its inputs until its data is moved back to a store
+that records skips and it is released there, or until it is deleted by hand.
+
 `disableQuarantine()` turns it off. In Spring Boot, `occurrent.saga.quarantine-enabled=false` does. A blank
 `occurrent.saga.quarantine-after` kept quarantine off in 0.34.0, so the starter refuses to start on one, and the
 message names `occurrent.saga.quarantine-enabled=false`. An application that turned quarantine off that way finds out

@@ -146,10 +146,11 @@ atomically, and `SagaRunner.run` calls it at startup when quarantine is on. On a
 `SagaRunnerConfig.disableQuarantine()`, so a saga fails at startup instead of at its first quarantine. With quarantine
 off a saga runs on a standalone server that journals its writes, since the runner then makes none of the three
 transitions. Every saga write asks for `j: true`, which MongoDB answers with an error on a server without journaling.
-An instance quarantined earlier, such as one in data restored from a replica set, skips its inputs there without
-recording them, and the runner logs a warning that names each one. Recording them would hold up the subscription on a
-transaction the server refuses every time, and a release could not replay them there anyway. A `release` or a
-`delete(sagaId)` of such an instance still writes in a transaction, which the server refuses. On a replica set and through a mongos nothing changes.
+An instance quarantined earlier, such as one in data restored from a replica set, can't record the inputs it skips
+there. The delivery of every input addressed to it fails, so the input isn't acknowledged and is delivered again. Skipping it without a record would acknowledge an input that no release replays. The instance
+holds up its inputs until its data is moved back to a replica set and it is released there, or until it is deleted by
+hand in the database. A `release` or a `delete(sagaId)` of it on the standalone server writes in a transaction, which
+the server refuses. On a replica set and through a mongos nothing changes.
 
 `InMemorySagaStateStore` keeps an instance and its records as one value and replaces it in one write, so a read
 sees the instance and its records as one write left them.

@@ -572,6 +572,13 @@ the server refuses the transactions a quarantine writes. A saga with quarantine 
 `occurrent.saga.quarantine-enabled=false` on the annotation path, or call `SagaRunnerConfig.disableQuarantine()` on a
 `SagaRunner`, or run MongoDB as a replica set, which can have a single member.
 
+An instance quarantined while the data was on a replica set, such as data restored from one onto a standalone server,
+can't record the inputs it skips there. The delivery of every input addressed to it fails,
+and the subscription delivers the input again, so the instance holds up its inputs until you do one of two things.
+Move the data back to a replica set and release the instance there in step 5, or delete it by hand with the shell
+commands in step 6. The Java `delete(sagaId)` in step 6 doesn't work on a standalone server, since it writes in a
+transaction that the server refuses.
+
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
 minutes, so an instance is not quarantined for an outage that would have resolved.

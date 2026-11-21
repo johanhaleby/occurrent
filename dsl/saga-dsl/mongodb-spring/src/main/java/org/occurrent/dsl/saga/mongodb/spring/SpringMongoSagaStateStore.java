@@ -145,10 +145,11 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * <p>
  * The constructor asks the server for its deployment once, with {@code hello}. On a standalone server
  * {@link #requireAtomicTransitions()} throws, so a saga with quarantine on refuses to start. With quarantine off a saga
- * runs there, as long as the server journals its writes, since every write asks for {@code j: true}. An instance
- * quarantined earlier, such as one in data restored from a replica set, then skips its inputs without recording them.
- * A release or a {@link #delete(String)} of such an instance still writes in a transaction, which the server refuses
- * with the replica set message.
+ * runs there, as long as the server journals its writes, since every write asks for {@code j: true}. The delivery of
+ * an input addressed to an instance quarantined earlier, such as one in data restored from a replica set, fails
+ * there, so the input is delivered again until the instance is moved back to a replica set
+ * or resolved by hand. A release or a {@link #delete(String)} of such an instance still writes in a transaction, which
+ * the server refuses with the replica set message.
  * <p>
  * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it.
  * Inside such a transaction the store sends each read and write once, and a failure reaches the caller as MongoDB

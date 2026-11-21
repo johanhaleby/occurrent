@@ -1440,11 +1440,15 @@ The store asks the server for its deployment once, with `hello`, when it is cons
 `occurrent.subscription.mode=manual` included. The message says to run MongoDB as a replica set, which can
 have a single member, or as a sharded cluster, or to turn quarantine off with `occurrent.saga.quarantine-enabled=false`
 on Spring Boot or `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner`. With quarantine off a saga runs on a
-standalone server that journals its writes, since the runner then makes none of the three transactional writes. An
-instance 0.35.0 quarantined while the data was on a replica set, such as data restored from one onto the standalone
-server, skips the inputs addressed to it without recording them, and logs a warning that names each one, since a
-release could not replay them there anyway. A release or a `delete` of such an instance still writes in a transaction.
-The server refuses it, and the store throws an `IllegalStateException` that says it needs a replica set.
+standalone server that journals its writes, since the runner then makes none of the three transactional writes.
+
+An instance 0.35.0 quarantined while the data was on a replica set, such as data restored from one onto the standalone
+server, can't record the inputs it skips there. The delivery of every input addressed to it fails, so
+the input isn't acknowledged and is delivered again. The instance holds up its inputs
+until you move the data back to a replica set and release it there, or delete it by hand in the database, as the
+[quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes. A release or a `delete` of
+such an instance on the standalone server writes in a transaction. The server refuses it, and the store throws an
+`IllegalStateException` that says it needs a replica set.
 
 Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
 instead of starting their own. In such a transaction the store sends each read and write once, whatever `RetryStrategy`
@@ -1478,7 +1482,9 @@ bean.
 - On a replica set of a primary, a secondary and an arbiter, replace the arbiter with a data-bearing member, or expect
   saga writes to fail while the secondary is down.
 - On a standalone server, run MongoDB as a replica set, which can have a single member, or turn quarantine off with
-  `SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false`.
+  `SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false`. Before you move data from a
+  replica set onto a standalone server, release or delete every quarantined instance in it, since one left quarantined
+  holds up its inputs there.
 - Pass the `MongoTemplate` bean to `SpringMongoSagaStateStore`. The Spring Boot starter already does.
 - With the starter and a `MongoOperations` decorator, declare the `MongoTemplate` it wraps as a bean.
 - Run the transitions outside a transaction of yours, or commit yours at `majority` with `j: true`.

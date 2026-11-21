@@ -16,10 +16,6 @@
 
 package org.occurrent.dsl.saga.blocking;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -41,7 +37,6 @@ import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
@@ -59,16 +54,15 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * A quarantined instance in a store that cannot write a skip and its record in one atomic write, such as
- * SpringMongoSagaStateStore on a standalone server holding data restored from a replica set. The runner refuses
- * quarantine on there, so with it off the instance skips what is addressed to it without recording it, rather than
- * failing on the refused write for every input and holding up the subscription.
+ * SpringMongoSagaStateStore on a standalone server holding data restored from a replica set. With quarantine off the
+ * delivery of an input addressed to that instance must fail rather than return, since returning acknowledges an input
+ * that was neither applied nor recorded for a release to replay.
  */
 @DisplayName("A quarantined saga instance in a store that cannot write atomically, with quarantine off")
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class SagaSkipsUnrecordedTest {
+class SagaRefusesAnInputItCannotRecordTest {
 
     private static final String ORDER = "o1";
-    private static final String OTHER_ORDER = "o2";
     private static final Duration BUDGET = Duration.ofMinutes(1);
     private static final SagaRunnerConfig QUARANTINE_ON = SagaRunnerConfig.defaults().withQuarantineAfter(BUDGET)
             .withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT);
@@ -159,16 +153,24 @@ class SagaSkipsUnrecordedTest {
     }
 
     @Test
-    void skips_an_input_addressed_to_it_without_recording_it_and_leaves_the_instance_as_it_was() {
+    void refuses_an_input_addressed_to_it_naming_the_instance_the_input_and_the_ways_out_and_changes_nothing() {
         SagaEnvelope<Order> before = quarantinedEarlier();
         SagaExecution<OrderEvent, Order, Object> execution = executionWithQuarantineOff();
         List<SkippedInput> recordsBefore = inMemory.findSkippedInputs(ORDER, before.quarantineId(), Integer.MAX_VALUE);
+        CloudEvent live = append(ORDER, new ItemAdded(nextEventId(), ORDER, "live"));
 
-        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(append(ORDER, new ItemAdded(nextEventId(), ORDER, "live"))));
+        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(live));
 
         SagaEnvelope<Order> after = instance(ORDER);
         assertAll(
-                () -> assertThat(thrown).as("the delivery returns, so the subscription moves past the input").isNull(),
+                () -> assertThat(thrown).as("the delivery fails, so the subscription does not move past the input")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("orders")
+                        .hasMessageContaining("'" + ORDER + "'")
+                        .hasMessageContaining("quarantined")
+                        .hasMessageContaining(inputKey(live))
+                        .hasMessageContaining("replica set")
+                        .hasMessageContaining("by hand"),
                 () -> assertThat(store.skipWrites).as("no skip write is attempted").hasValue(0),
                 () -> assertThat(after.version()).as("the instance's version").isEqualTo(before.version()),
                 () -> assertThat(after.quarantineSkipCount()).as("the instance's skip count").isEqualTo(before.quarantineSkipCount()),
@@ -179,48 +181,48 @@ class SagaSkipsUnrecordedTest {
     }
 
     @Test
-    void processes_the_next_input_to_another_instance_after_skipping_one() {
+    void refuses_a_redelivery_of_the_same_input_again_since_the_first_delivery_was_not_acknowledged() {
         quarantinedEarlier();
         SagaExecution<OrderEvent, Order, Object> execution = executionWithQuarantineOff();
-        Throwable skipped = catchThrowable(() -> execution.onCloudEvent(append(ORDER, new ItemAdded(nextEventId(), ORDER, "live"))));
+        CloudEvent live = append(ORDER, new ItemAdded(nextEventId(), ORDER, "live"));
+        Throwable first = catchThrowable(() -> execution.onCloudEvent(live));
 
-        Throwable placed = catchThrowable(() -> execution.onCloudEvent(append(OTHER_ORDER, new OrderPlaced(nextEventId(), OTHER_ORDER))));
-        Throwable added = catchThrowable(() -> execution.onCloudEvent(append(OTHER_ORDER, new ItemAdded(nextEventId(), OTHER_ORDER, "book"))));
+        Throwable redelivered = catchThrowable(() -> execution.onCloudEvent(live));
 
         assertAll(
-                () -> assertThat(skipped).as("the skipped input does not hold up the subscription").isNull(),
-                () -> assertThat(placed).as("the input that starts the other instance").isNull(),
-                () -> assertThat(added).as("the input that updates the other instance").isNull(),
-                () -> assertThat(instance(OTHER_ORDER).state().items()).as("the other instance applied its input").containsExactly("book"),
-                () -> assertThat(dispatched).as("and issued its command").containsExactly(new Pack(OTHER_ORDER, "book"))
+                () -> assertThat(first).isInstanceOf(IllegalStateException.class),
+                () -> assertThat(redelivered).as("not swallowed as an input already handled")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining(inputKey(live)),
+                () -> assertThat(store.skipWrites).hasValue(0),
+                () -> assertThat(dispatched).isEmpty()
         );
     }
 
     @Test
-    void says_in_a_warning_which_input_it_skipped_without_recording() {
-        quarantinedEarlier();
-        SagaExecution<OrderEvent, Order, Object> execution = executionWithQuarantineOff();
+    void records_the_redelivered_input_under_the_quarantine_id_once_the_data_is_on_a_store_that_records_skips() {
+        SagaEnvelope<Order> before = quarantinedEarlier();
         CloudEvent live = append(ORDER, new ItemAdded(nextEventId(), ORDER, "live"));
-        String key = ORDER + "@" + live.getExtension("streamversion");
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
-        executionLog.addAppender(appender);
-        try {
-            catchThrowable(() -> execution.onCloudEvent(live));
+        Throwable refused = catchThrowable(() -> executionWithQuarantineOff().onCloudEvent(live));
+        SagaExecution<OrderEvent, Order, Object> recording = new SagaExecution<>("orders", saga(), inMemory, dispatched::add, converter, QUARANTINE_ON, now::get);
 
-            List<ILoggingEvent> logged;
-            synchronized (appender) {
-                logged = new ArrayList<>(appender.list);
-            }
-            assertThat(logged)
-                    .filteredOn(event -> event.getLevel() == Level.WARN)
-                    .extracting(ILoggingEvent::getFormattedMessage)
-                    .anySatisfy(message -> assertThat(message).contains("'" + key + "'").contains("without recording it"));
-        } finally {
-            executionLog.detachAppender(appender);
-            appender.stop();
-        }
+        Throwable redelivered = catchThrowable(() -> recording.onCloudEvent(live));
+
+        List<SkippedInput> records = inMemory.findSkippedInputs(ORDER, before.quarantineId(), Integer.MAX_VALUE);
+        assertAll(
+                () -> assertThat(refused).as("control: refused first").isInstanceOf(IllegalStateException.class),
+                () -> assertThat(redelivered).as("the redelivery is accepted").isNull(),
+                () -> assertThat(records).as("recorded as a skipped input a release can replay")
+                        .extracting(SkippedInput::key).contains(inputKey(live)),
+                () -> assertThat(records).filteredOn(record -> record.key().equals(inputKey(live)))
+                        .extracting(record -> record.event().getId()).containsExactly(live.getId()),
+                () -> assertThat(instance(ORDER).status()).as("still quarantined").isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(dispatched).as("not applied").isEmpty()
+        );
+    }
+
+    private static String inputKey(CloudEvent event) {
+        return ORDER + "@" + event.getExtension("streamversion");
     }
 
     // Records skips like the in-memory store, but cannot write atomically, so any skip write it is asked for is a failure

@@ -76,8 +76,9 @@ public interface SagaStateStoreSkippedInputs {
      * Throws when the store cannot write the three {@code compareAndSave} methods below atomically in the database it is
      * connected to. The runner calls it when it starts a saga, before the saga receives its first input. With quarantine
      * on a throw refuses the saga, so a store that cannot write them fails at startup rather than when an instance is
-     * first quarantined. With quarantine off the saga starts anyway, and an instance quarantined earlier skips its inputs
-     * without recording them. A store that can does nothing.
+     * first quarantined. With quarantine off the saga starts anyway, and the delivery of every input addressed to an
+     * instance quarantined earlier fails, so the input is delivered again. A store that
+     * can does nothing.
      *
      * @throws IllegalStateException when the store cannot write a transition atomically, with a message that says how
      *                               to run the saga anyway
