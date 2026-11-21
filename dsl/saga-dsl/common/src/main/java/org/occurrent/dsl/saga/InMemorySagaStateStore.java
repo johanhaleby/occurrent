@@ -56,8 +56,10 @@ import static java.util.Objects.requireNonNull;
  * {@code UUID}, or a BSON value that {@code SpringMongoSagaStateStore} reads back as the same class, such as an
  * {@code ObjectId} or a {@code Decimal128}. The data is a {@code BytesCloudEventData} or a {@code PojoCloudEventData}
  * of exactly that class, and every other value is of exactly the class listed, so a subclass is refused. A {@code Map}
- * and a {@code List} are the exception, and any implementation of them is copied. {@link #compareAndSaveSkipped} throws
- * an {@link IllegalStateException}, and records nothing, for an event with data or an extension it can't copy.
+ * and a {@code List} are the exception, and any implementation of them is copied, as long as a map holds no key equal to
+ * another of its keys. An {@code IdentityHashMap} can hold two equal keys, and a copy would keep only one of them.
+ * {@link #compareAndSaveSkipped} throws an {@link IllegalStateException}, and records nothing, for an event with data or
+ * an extension it can't copy.
  *
  * @param <S> the user state type
  */
@@ -340,6 +342,11 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                     Object key = entry.getKey();
                     if (key == null || !UNCHANGEABLE.contains(key.getClass())) {
                         throw cannotCopy(sagaId, input, "a key in its data, " + (key == null ? "null" : "a " + key.getClass().getName()));
+                    }
+                    // A map that tells keys apart by more than equals, such as an IdentityHashMap, can hold two equal keys,
+                    // and the copy would keep one of them
+                    if (copy.containsKey(key)) {
+                        throw cannotCopy(sagaId, input, "a map in its data that holds the key '" + key + "' twice, as two keys that are equal");
                     }
                     copy.put(key, copyOf(sagaId, input, entry.getValue()));
                 }

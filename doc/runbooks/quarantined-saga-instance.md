@@ -655,9 +655,14 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    this for each saga's collection, with your own connection string:
 
    ```
-   mongoexport --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" \
+   mongoexport --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" --jsonFormat=canonical \
      --sort '{"sagaId": 1, "quarantineId": 1, "seq": 1, "key": 1}' --out saga-order-fulfilment_skipped_inputs.json
    ```
+
+   `--jsonFormat=canonical` writes every value with its BSON type, such as `{"$numberLong": "42"}` for a `Long`.
+   Without it, `mongoexport` writes relaxed Extended JSON, where a `Long` and an `Integer` are both a plain number such
+   as `42`, so the export no longer says which of the two a value in a record was. `mongodump` keeps every type too,
+   but it writes BSON, and the steps below read JSON.
 
    Each exported record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order the instance would
    have applied them in. A record holds its event in up to four fields, and `event` holds only the attributes:
@@ -669,9 +674,11 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    | `dataDocument` | The data, when it was delivered as a map. |
    | `data` | The data as bytes, which `mongoexport` writes as `$binary` in base64. A record with `dataDocument` has `data` only when the delivered bytes differ from the JSON of `dataDocument`. |
 
-   To rebuild an event from its record, start from the attributes in `event` and add each entry of `extensions` as an
-   extension. Take the data from `data` when the record has it, and otherwise from `dataDocument` written as JSON. A
-   record with neither field holds an event without data. The export holds personal data when the events hold any, so
+   To rebuild an event from its record, read the export with a parser of canonical Extended JSON, such as
+   `Document.parse` in the MongoDB Java driver, so that every value keeps its type. Start from the attributes in `event`
+   and add each entry of `extensions` as an extension. Take the data from `data` when the record has it. Otherwise the
+   data is the map in `dataDocument`, and its bytes are that map as the driver's `Document.toJson()` writes it. A record
+   with neither field holds an event without data. The export holds personal data when the events hold any, so
    keep the file where such data may be kept.
 
    Then, from a process that runs no `SagaRunner`, store every instance that is still
@@ -699,8 +706,8 @@ because 0.34.0 skipped inputs without recording them. The records of the inputs 
 `<sagaCollection>_skipped_inputs`. Each one holds a full copy of the event it stands for, personal data included when
 the event holds any, and 0.34.0 never reads or deletes them. Step 6 removed the quarantine ids they are filed under,
 so no release can replay them either, also after a later upgrade to 0.35.0. Delete them once step 6 has run, and only
-when the export in step 6 holds them with all four fields of their event, since the delete removes the last copy of every
-input that was never applied. Rebuild the events you still need from the export first, as step 6 describes:
+when the export in step 6, written with `--jsonFormat=canonical`, holds them with all four fields of their event,
+since the delete removes the last copy of every input that was never applied. Rebuild the events you still need from the export first, as step 6 describes:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})

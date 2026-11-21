@@ -63,10 +63,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -425,6 +427,55 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 () -> assertThat(Arrays.equals(requireNonNull(held.getData()).toBytes(), bytes)).as("the bytes").isTrue(),
                 () -> assertThat(held.getDataContentType()).isEqualTo("application/octet-stream")
         );
+    }
+
+    @Test
+    void map_data_holding_two_equal_keys_is_refused_and_nothing_written() {
+        assertRefusedAsCollapsing(identityMapWithTwoEqualKeys());
+    }
+
+    @Test
+    void map_data_holding_two_equal_keys_in_a_nested_map_is_refused_and_nothing_written() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("inner", identityMapWithTwoEqualKeys());
+        assertRefusedAsCollapsing(data);
+    }
+
+    @Test
+    void map_data_holding_two_equal_keys_in_a_map_inside_a_list_is_refused_and_nothing_written() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("parts", List.of(identityMapWithTwoEqualKeys()));
+        assertRefusedAsCollapsing(data);
+    }
+
+    @Test
+    void map_data_that_is_a_comparator_ordered_map_holding_two_equal_keys_is_refused_and_nothing_written() {
+        Map<Object, Object> data = new TreeMap<>((a, b) -> -1);
+        data.put("item", "first");
+        data.put("item", "second");
+        assertThat(data).hasSize(2);
+        assertRefusedAsCollapsing(data);
+    }
+
+    private void assertRefusedAsCollapsing(Map<?, ?> data) {
+        CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
+        StoredSaga instance = anInstance();
+
+        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
+                        .hasMessageContaining("keys [item] where it was delivered with [item, item]"),
+                () -> assertNothingWritten()
+        );
+    }
+
+    private static Map<Object, Object> identityMapWithTwoEqualKeys() {
+        Map<Object, Object> map = new IdentityHashMap<>();
+        map.put(new String("item"), "first");
+        map.put(new String("item"), "second");
+        assertThat(map).hasSize(2);
+        return map;
     }
 
     private CloudEventBuilder baseEvent() {

@@ -50,9 +50,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
@@ -383,6 +385,67 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
                 .hasMessageContaining("amount")
                 .hasMessageContaining(SubclassedBigDecimal.class.getName());
         assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_map_holding_two_equal_keys_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<Object, Object> delivered = identityMapWithTwoEqualKeys();
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining("holds the key 'item' twice");
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_map_holding_two_equal_keys_nested_in_a_map_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<String, Object> delivered = new LinkedHashMap<>();
+        delivered.put("inner", identityMapWithTwoEqualKeys());
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining("holds the key 'item' twice");
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_map_holding_two_equal_keys_nested_in_a_list_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<String, Object> delivered = new LinkedHashMap<>();
+        delivered.put("parts", List.of(identityMapWithTwoEqualKeys()));
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining("holds the key 'item' twice");
+        assertNothingWasRecorded();
+    }
+
+    @Test
+    void a_comparator_ordered_map_holding_two_equal_keys_is_refused_and_nothing_is_recorded() {
+        quarantinedInstance();
+        Map<Object, Object> delivered = new TreeMap<>((a, b) -> -1);
+        delivered.put("item", "first");
+        delivered.put("item", "second");
+        assertThat(delivered).hasSize(2);
+
+        assertThatThrownBy(() -> skip(event(PojoCloudEventData.wrap(delivered, InMemorySagaStateStoreSkippedEventCopyTest::render))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(KEY)
+                .hasMessageContaining("holds the key 'item' twice");
+        assertNothingWasRecorded();
+    }
+
+    private static Map<Object, Object> identityMapWithTwoEqualKeys() {
+        Map<Object, Object> map = new IdentityHashMap<>();
+        map.put(new String("item"), "first");
+        map.put(new String("item"), "second");
+        assertThat(map).hasSize(2);
+        return map;
     }
 
     private static final class SubclassedBytesData extends BytesCloudEventData {
