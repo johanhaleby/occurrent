@@ -2986,7 +2986,9 @@ the catch-up is not affected.
   `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
   changed." in its message, and a `shutdown()` shuts the wrapped model down without the lock and logs a `WARN`. The
   thread that held the lock then shuts the wrapped model down again before it lets the lock go, so the wrapped model
-  keeps no subscription that the code went on to register.
+  keeps no subscription that the code went on to register. When that second `shutdown()` throws, it is logged at
+  `ERROR` and called again each time a thread lets the lock go, and until it returns normally a `start(..)` doesn't
+  start the wrapped model.
 
 ### What to do
 

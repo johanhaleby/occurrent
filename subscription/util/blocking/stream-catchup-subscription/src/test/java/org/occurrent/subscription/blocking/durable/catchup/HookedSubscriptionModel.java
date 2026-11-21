@@ -54,6 +54,9 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     };
     volatile Runnable beforeResume = () -> {
     };
+    // Runs once the delegate's shutdown() has returned, so a test can hold a shutdown() after it removed the subscriptions
+    volatile Runnable afterShutdown = () -> {
+    };
     volatile Consumer<String> beforeSubscribe = id -> {
     };
     // Off, a shutdown() is counted and hooked but leaves the in-memory delegate running. Its own shutdown() waits for an
@@ -163,5 +166,6 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
         if (shutsTheDelegateDown) {
             delegate.shutdown();
         }
+        afterShutdown.run();
     }
 }

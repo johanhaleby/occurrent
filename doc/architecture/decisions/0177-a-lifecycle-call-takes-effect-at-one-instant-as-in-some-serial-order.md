@@ -219,8 +219,16 @@ The marked code can be inside the wrapped model, which can ask the function agai
 wrapped model then goes on registering the subscription once the function returns. So a `shutdown()` that gives up
 queues a second pass, which forgets the catch-ups again and calls the wrapped model's `shutdown()` again, under the
 lock. The thread that holds the lock runs it before its outermost hold ends, or the shutdown runs it itself when it
-finds the lock free by then. Until the pass has run, the shutdown counts as under way, and a `start(..)` doesn't start
-the wrapped model.
+finds the lock free by then. The shutdown queues the pass before it calls the wrapped model's `shutdown()` without the
+lock. That call can remove the subscriptions and then block, and if the pass were queued only once it returned, the
+thread holding the lock could register a subscription and let the lock go with nothing queued. A pass that throws
+stays queued, is logged at `ERROR`, and runs again each time a thread lets the lock go. Until the call without the
+lock has returned and the pass has returned normally, the shutdown counts as under way, and a `start(..)` doesn't
+start the wrapped model.
+
+The shutdown keeps the call without the lock rather than leave the whole shutdown to the thread holding the lock. With
+only the pass, every subscription in the wrapped model would go on running after `shutdown()` had returned, for as long
+as the marked code ran, and that code may never return.
 
 A call waiting behind the handed calls gives up only while the lifecycle thread hasn't begun it, and then the lifecycle
 thread skips it, so the calls that do run keep their order. The cost is that code the caller supplied that runs longer
