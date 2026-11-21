@@ -169,15 +169,25 @@ position known to be at or after the latest delivery. The run that lost the hist
 since a listener that throws fails the restart, and the next attempt writes a restart position again.
 
 A run of the subscription that a pause stopped can still be in its action for an event, since the MongoDB models stop
-waiting for a running handler after one second. The model drops that run's save once a later run has started saving the
-checkpoint of one of its own events, or once a restart position has been written, whether that write returned or threw.
-The run that lost the history has stopped delivering when it asks where to restart, so any delivery still under way then
-comes from a run a pause stopped. When that delivery ends, the model goes on comparing the stored checkpoint with the
-restart position. Each delivery records which read of the wrapped model it came from and when it started. A run reads
-and delivers one event at a time on one thread. So when a delivery from a later read, or from the same read and started
-later, starts saving while an earlier one hasn't, the earlier one belongs to a run that a resume replaced. Without the
-refusal, a stopped run that returns from its action for e1 after the resumed run stored e2 writes e1 over e2. A restart
-would then only deliver e2 again, but quiet saves would wait for the next event, since e1 is before e2.
+waiting for a running handler after one second. It can also still hold a quiet position the wrapped model handed it
+before the pause, since `QuietPositionReportingSubscriptions` doesn't promise to wait for a replaced run. One rule
+decides every save of an event's checkpoint and of a quiet position, under the lock all checkpoint writes take. The
+model numbers each read of the wrapped model and notes how many times the subscription was repositioned when it was
+made. A delivery belongs to the read its thread made last, and a quiet position to the read it was handed out before.
+The save is dropped when one of these came after that read:
+
+* a resume at a position, a put-back or a restart position, whether its write returned or threw, since each one stores
+  where the subscription reads from next
+* a save from a later read, or from the same read and a delivery started later, since a run reads and delivers one
+  event at a time on one thread, so only a run that a resume replaced saves after a later read has
+
+In the MongoDB models, the run that lost the history asks for the restart position on the thread it reads on, so the
+deliveries of the read it restarts on still save. When a delivery that started before the restart position was written
+ends, the model goes on comparing the stored checkpoint with the restart position. Without the rule, a stopped run that
+returns from its action for e1 after the resumed run stored e2 writes e1 over e2, and a restart would deliver e2 again
+while quiet saves wait for the next event. A quiet position handed out before a restart position was stored would write
+over it, and once the history no longer holds that quiet position, a restart from it skips the events written after the
+restart position.
 
 When nothing was stored before, the new checkpoint stays. Deleting it could remove a checkpoint that another node, or
 the resumed subscription's own events, wrote in the meantime. With nothing stored, a restart subscribes the wrapped
@@ -198,10 +208,11 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
   `false` for it. A catch-up model over a durable model therefore stores the position at each live hand-over
   it repositions, which is the position it already stores for itself when both share one checkpoint storage, as they
   do in the Spring Boot starter.
-* The save of a run that a pause stopped and a resume replaced is dropped once the resumed run has started saving the
-  checkpoint of one of its events, or once a restart position has been written. It used to write the older checkpoint
-  over the newer one. This holds after the plain `resumeSubscription(subscriptionId)` as well as after a resume at a
-  position.
+* The save of an event's checkpoint or of a quiet position from a run that a pause stopped and a resume replaced is
+  dropped once a resume at a position, a put-back or a restart position came after the read it belongs to, or once the
+  resumed run has started saving. It used to write the older checkpoint over the newer one, and a quiet position handed
+  out before a restart position was stored could write over the restart position. This holds after the plain
+  `resumeSubscription(subscriptionId)` as well as after a resume at a position.
 * `capability(..)` for `Subscribable`, `CancellableSubscriptions` or a model type built on them answers empty on a
   wrapper that doesn't implement it, where it used to answer the model beneath.
 * A `SubscriptionModelWrapper` of an application's own that should be found for an acting capability has to implement

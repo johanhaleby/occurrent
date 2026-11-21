@@ -313,7 +313,7 @@ class CheckpointRegistrationTest {
             asked.clear();
 
             // When
-            registration.saveQuietPositionIfStoredCovers(read.repositions(), at("q1"), () -> {
+            registration.saveQuietPositionIfStoredCovers(read, at("q1"), () -> {
                 asked.add("save q1");
                 return true;
             }, () -> {
@@ -336,7 +336,7 @@ class CheckpointRegistrationTest {
             asked.clear();
 
             // When
-            registration.saveQuietPositionIfStoredCovers(read.repositions(), at("q1"), () -> {
+            registration.saveQuietPositionIfStoredCovers(read, at("q1"), () -> {
                 asked.add("save q1");
                 return true;
             }, () -> {
@@ -841,6 +841,131 @@ class CheckpointRegistrationTest {
 
     // As the model does, holding the deliveryLock and then the saveLock of the registration, and deciding the quiet
     // ticks once the write has returned or threw
+    @Nested
+    @DisplayName("quiet saves handed out before a later run, resume, put-back or restart")
+    class QuietSavesHandedOutBeforeAReplacement {
+
+        @Test
+        void a_quiet_save_handed_out_while_what_is_stored_was_unknown_is_refused_once_a_restart_position_was_stored() {
+            // Given
+            deliverStored("e1");
+            quietTick("q1", Write.THROWS_WITHOUT_WRITING);
+            Read handedOut = registration.reading();
+            restartPosition("r1", Write.RETURNS);
+            asked.clear();
+
+            // When
+            quietSaveHandedOutAt(handedOut, "q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).doesNotContain("save q2");
+            assertThat(stored).isEqualTo("r1");
+        }
+
+        @Test
+        void a_quiet_save_handed_out_while_what_is_stored_was_unknown_is_refused_once_a_restart_position_was_written_and_threw() {
+            // Given
+            deliverStored("e1");
+            quietTick("q1", Write.THROWS_WITHOUT_WRITING);
+            Read handedOut = registration.reading();
+            restartPosition("r1", Write.WRITES_THEN_THROWS);
+            asked.clear();
+
+            // When
+            quietSaveHandedOutAt(handedOut, "q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).doesNotContain("save q2");
+            assertThat(stored).isEqualTo("r1");
+        }
+
+        @Test
+        void a_quiet_save_handed_out_after_a_restart_position_was_stored_saves() {
+            // Given
+            deliverStored("e1");
+            quietTick("q1", Write.THROWS_WITHOUT_WRITING);
+            restartPosition("r1", Write.RETURNS);
+            Read handedOut = registration.reading();
+            asked.clear();
+
+            // When
+            quietSaveHandedOutAt(handedOut, "q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).contains("save q2");
+            assertThat(stored).isEqualTo("q2");
+        }
+
+        @Test
+        void a_quiet_save_handed_out_before_a_put_back_is_refused_and_the_checkpoint_put_back_stays_stored() {
+            // Given
+            deliverStored("p");
+            resumeAt("x", "p", Write.RETURNS);
+            Read handedOut = registration.reading();
+            putBack("p", Write.RETURNS);
+            asked.clear();
+
+            // When
+            quietSaveHandedOutAt(handedOut, "q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).doesNotContain("save q1");
+            assertThat(stored).isEqualTo("p");
+        }
+
+        @Test
+        void a_quiet_save_handed_out_before_a_read_whose_delivery_stored_its_checkpoint_is_refused_and_that_checkpoint_stays_stored() {
+            // Given
+            deliverStored("e1");
+            Read handedOut = registration.reading();
+            registration.reading();
+            deliverStored("e2");
+            asked.clear();
+
+            // When
+            quietSaveHandedOutAt(handedOut, "q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).doesNotContain("save q1");
+            assertThat(stored).isEqualTo("e2");
+        }
+
+        @Test
+        void a_quiet_save_handed_out_before_a_read_whose_quiet_position_was_stored_is_refused_and_that_position_stays_stored() {
+            // Given
+            deliverStored("e1");
+            Read handedOut = registration.reading();
+            quietTick("q2", Write.RETURNS);
+            asked.clear();
+
+            // When
+            quietSaveHandedOutAt(handedOut, "q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).doesNotContain("save q1");
+            assertThat(stored).isEqualTo("q2");
+        }
+    }
+
+    // A quiet tick whose read was handed out earlier, as when the wrapped model runs the callback after later reads
+    private void quietSaveHandedOutAt(Read handedOutAt, String quietPosition, Write write) {
+        try {
+            registration.saveQuietPositionIfStoredCovers(handedOutAt, at(quietPosition), () -> {
+                asked.add("save " + quietPosition);
+                try {
+                    write(quietPosition, write);
+                    return true;
+                } catch (CheckpointWriteConditionNotFulfilledException refused) {
+                    throw refused;
+                } catch (IllegalStateException failed) {
+                    return false;
+                }
+            }, this::readStored);
+        } catch (CheckpointWriteConditionNotFulfilledException refused) {
+            asked.add("refused");
+        }
+    }
+
     private void restartPosition(String position, Write write) {
         registration.deliveryLock.lock();
         try {
@@ -892,7 +1017,7 @@ class CheckpointRegistrationTest {
             return;
         }
         try {
-            registration.saveQuietPositionIfStoredCovers(read.repositions(), at(quietPosition), () -> {
+            registration.saveQuietPositionIfStoredCovers(read, at(quietPosition), () -> {
                 asked.add("save " + quietPosition);
                 try {
                     write(quietPosition, write);
