@@ -18,6 +18,7 @@ package org.occurrent.subscription.blocking.durable;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.Read;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.Reposition;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.StoredBefore;
@@ -26,7 +27,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 // One for each subscribe of an id this model stores checkpoints for
@@ -281,9 +281,9 @@ final class CheckpointRegistration {
     // Taken inside deliveryLock, so it writes nothing once this registration has stopped writing, while a delivery is
     // under way, or when a save superseded the read it was handed out at. When a write that threw left what is
     // stored unknown, it reads what is stored before it writes, and saves the quiet position only if what the read
-    // found covers the delivery. The save answers true when it wrote and false when it threw and may have written,
-    // and throws when the storage refused it. The read throws when it can't tell, and what is stored stays unknown
-    void saveQuietPositionIfStoredCovers(Read handedOutAt, Checkpoint quietPosition, BooleanSupplier save, Supplier<@Nullable Checkpoint> read) {
+    // found covers the delivery. The save returns once it wrote. Whatever the read or the save throws is thrown again
+    // once this registration has noted it, and the caller decides whether it goes further
+    void saveQuietPositionIfStoredCovers(Read handedOutAt, Checkpoint quietPosition, Runnable save, Supplier<@Nullable Checkpoint> read) {
         underDeliveryLockAndSaveLock(() -> {
             if (cancelled || superseded(handedOutAt.number(), handedOutAt.repositions(), NO_DELIVERY) || deliveriesUnderWay > 0) {
                 return;
@@ -291,36 +291,34 @@ final class CheckpointRegistration {
             if (!storedKnown) {
                 try {
                     storedRead(read.get());
-                } catch (Throwable unread) {
-                    // Throwable, since a storage written in Kotlin can throw a checked exception. Still unknown, so
-                    // the next tick reads again
+                } finally {
+                    // Still unknown when the read threw, so the next tick reads again
                     decide();
-                    return;
                 }
-                decide();
             }
             if (!storedCovers()) {
                 return;
             }
             String position = quietPosition.asString();
             saving(handedOutAt.number(), NO_DELIVERY);
-            boolean wrote;
             try {
-                wrote = save.getAsBoolean();
-            } catch (Throwable refused) {
+                save.run();
+            } catch (CheckpointWriteConditionNotFulfilledException refused) {
+                // The one failure the storage reports as having written nothing
                 storedUnknown();
                 decide();
                 throw refused;
-            }
-            if (wrote) {
-                storedPosition = position;
-                coveringPosition = position;
-                coveringRepositions = repositions;
-                positionThatThrew = null;
-            } else {
+            } catch (Throwable failure) {
+                // Any other failure, checked ones from a storage written in Kotlin included, may have written
                 storedUnknown();
                 positionThatThrew = position;
+                decide();
+                throw failure;
             }
+            storedPosition = position;
+            coveringPosition = position;
+            coveringRepositions = repositions;
+            positionThatThrew = null;
             decide();
         });
     }

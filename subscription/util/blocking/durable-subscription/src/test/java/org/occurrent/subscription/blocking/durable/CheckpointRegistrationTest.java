@@ -29,6 +29,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.blocking.durable.CheckpointRegistration.Delivery;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.Read;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
@@ -44,7 +45,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CheckpointRegistrationTest {
 
     private enum Write {
-        RETURNS, WRITES_THEN_THROWS, THROWS_WITHOUT_WRITING, REFUSED
+        RETURNS, WRITES_THEN_THROWS, THROWS_WITHOUT_WRITING, REFUSED,
+        // A storage written in Kotlin throws a checked exception it never declares
+        WRITES_THEN_THROWS_CHECKED, THROWS_CHECKED_WITHOUT_WRITING, WRITES_THEN_ERROR
+    }
+
+    private static final class StorageError extends Error {
+        StorageError(String message) {
+            super(message);
+        }
     }
 
     private final CheckpointRegistration registration = new CheckpointRegistration();
@@ -52,6 +61,8 @@ class CheckpointRegistrationTest {
     private final List<String> asked = new ArrayList<>();
     private @Nullable String stored;
     private boolean readFails;
+    // What a read throws instead of the exception readFails stands for, when set
+    private @Nullable Throwable readThrows;
 
     @Nested
     @DisplayName("deliveries")
@@ -305,6 +316,109 @@ class CheckpointRegistrationTest {
         }
 
         @Test
+        void a_quiet_save_that_wrote_and_threw_a_checked_exception_is_found_stored_by_a_read_and_the_next_quiet_position_is_saved() {
+            // Given
+            deliverStored("e1");
+            asked.clear();
+
+            // When
+            quietTick("q1", Write.WRITES_THEN_THROWS_CHECKED);
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q1", "read", "save q2");
+            assertThat(stored).isEqualTo("q2");
+        }
+
+        @Test
+        void a_quiet_save_that_threw_a_checked_exception_without_writing_is_followed_by_a_read_that_finds_the_delivery_and_the_next_quiet_position_is_saved() {
+            // Given
+            deliverStored("e1");
+            asked.clear();
+
+            // When
+            quietTick("q1", Write.THROWS_CHECKED_WITHOUT_WRITING);
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q1", "read", "save q2");
+            assertThat(stored).isEqualTo("q2");
+        }
+
+        @Test
+        void a_quiet_save_that_wrote_and_threw_an_error_is_thrown_on_and_the_next_quiet_position_is_saved_after_a_read_that_finds_it_stored() {
+            // Given
+            deliverStored("e1");
+            asked.clear();
+
+            // When
+            assertThatThrownBy(() -> quietTick("q1", Write.WRITES_THEN_ERROR)).isInstanceOf(StorageError.class);
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q1", "read", "save q2");
+            assertThat(stored).isEqualTo("q2");
+        }
+
+        @Test
+        void a_quiet_save_the_storage_refused_does_not_remember_its_position_so_a_read_that_finds_it_stored_does_not_have_it_taken_for_the_registrations_own() {
+            // Given
+            deliverStored("e1");
+            asked.clear();
+
+            // When the position is stored by someone else after the refusal
+            quietTick("q1", Write.REFUSED);
+            int rememberedAfterTheRefusal = registration.positionsRemembered();
+            stored = "q1";
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(rememberedAfterTheRefusal).as("only the position of the delivery").isEqualTo(1);
+            assertThat(asked).containsExactly("save q1", "refused", "read");
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_read_that_throws_an_error_after_a_throwing_write_is_thrown_on_and_the_next_tick_reads_again() {
+            // Given a quiet save that wrote and threw
+            deliverStored("e1");
+            asked.clear();
+            quietTick("q1", Write.WRITES_THEN_THROWS);
+
+            // When the read that follows throws an error, and then succeeds
+            readThrows = new StorageError("The read failed with an error");
+            assertThatThrownBy(() -> quietTick("q2", Write.RETURNS)).isInstanceOf(StorageError.class);
+            boolean allowedAfterTheFailedRead = registration.quietTickAllowed();
+            readThrows = null;
+            quietTick("q3", Write.RETURNS);
+
+            // Then
+            assertThat(allowedAfterTheFailedRead).as("allowed, so the next tick reads again").isTrue();
+            assertThat(asked).containsExactly("save q1", "read", "read", "save q3");
+            assertThat(stored).isEqualTo("q3");
+        }
+
+        @Test
+        void a_read_that_throws_a_checked_exception_after_a_throwing_write_keeps_the_quiet_position_unsaved_and_the_next_tick_reads_again() {
+            // Given a quiet save that wrote and threw
+            deliverStored("e1");
+            asked.clear();
+            quietTick("q1", Write.WRITES_THEN_THROWS);
+
+            // When the read that follows throws a checked exception, and then succeeds
+            readThrows = new IOException("The read failed");
+            quietTick("q2", Write.RETURNS);
+            boolean allowedAfterTheFailedRead = registration.quietTickAllowed();
+            readThrows = null;
+            quietTick("q3", Write.RETURNS);
+
+            // Then
+            assertThat(allowedAfterTheFailedRead).as("allowed, so the next tick reads again").isTrue();
+            assertThat(asked).containsExactly("save q1", "read", "read", "save q3");
+            assertThat(stored).isEqualTo("q3");
+        }
+
+        @Test
         void a_quiet_save_is_not_asked_for_while_a_delivery_is_under_way() {
             // Given
             deliverStored("e1");
@@ -313,10 +427,7 @@ class CheckpointRegistrationTest {
             asked.clear();
 
             // When
-            registration.saveQuietPositionIfStoredCovers(read, at("q1"), () -> {
-                asked.add("save q1");
-                return true;
-            }, () -> {
+            registration.saveQuietPositionIfStoredCovers(read, at("q1"), () -> asked.add("save q1"), () -> {
                 asked.add("read");
                 return null;
             });
@@ -336,10 +447,7 @@ class CheckpointRegistrationTest {
             asked.clear();
 
             // When
-            registration.saveQuietPositionIfStoredCovers(read, at("q1"), () -> {
-                asked.add("save q1");
-                return true;
-            }, () -> {
+            registration.saveQuietPositionIfStoredCovers(read, at("q1"), () -> asked.add("save q1"), () -> {
                 asked.add("read");
                 return null;
             });
@@ -1008,17 +1116,12 @@ class CheckpointRegistrationTest {
         try {
             registration.saveQuietPositionIfStoredCovers(handedOutAt, at(quietPosition), () -> {
                 asked.add("save " + quietPosition);
-                try {
-                    write(quietPosition, write);
-                    return true;
-                } catch (CheckpointWriteConditionNotFulfilledException refused) {
-                    throw refused;
-                } catch (IllegalStateException failed) {
-                    return false;
-                }
+                write(quietPosition, write);
             }, this::readStored);
         } catch (CheckpointWriteConditionNotFulfilledException refused) {
             asked.add("refused");
+        } catch (Exception failed) {
+            // Logged and tried again after the interval by the model
         }
     }
 
@@ -1083,17 +1186,12 @@ class CheckpointRegistrationTest {
         try {
             registration.saveQuietPositionIfStoredCovers(read, at(quietPosition), () -> {
                 asked.add("save " + quietPosition);
-                try {
-                    write(quietPosition, write);
-                    return true;
-                } catch (CheckpointWriteConditionNotFulfilledException refused) {
-                    throw refused;
-                } catch (IllegalStateException failed) {
-                    return false;
-                }
+                write(quietPosition, write);
             }, this::readStored);
         } catch (CheckpointWriteConditionNotFulfilledException refused) {
             asked.add("refused");
+        } catch (Exception failed) {
+            // Logged and tried again after the interval by the model
         }
     }
 
@@ -1154,11 +1252,29 @@ class CheckpointRegistrationTest {
             }
             case THROWS_WITHOUT_WRITING -> throw new IllegalStateException("The save of " + position + " failed");
             case REFUSED -> throw new CheckpointWriteConditionNotFulfilledException("id", OptionalLong.empty(), CheckpointWriteCondition.any());
+            case WRITES_THEN_THROWS_CHECKED -> {
+                stored = position;
+                throw sneaky(new IOException("The reply of the save of " + position + " was lost"));
+            }
+            case THROWS_CHECKED_WITHOUT_WRITING -> throw sneaky(new IOException("The save of " + position + " failed"));
+            case WRITES_THEN_ERROR -> {
+                stored = position;
+                throw new StorageError("The save of " + position + " failed with an error");
+            }
         }
+    }
+
+    // Throws a checked exception from code that declares none
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> RuntimeException sneaky(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private @Nullable Checkpoint readStored() {
         asked.add("read");
+        if (readThrows != null) {
+            throw CheckpointRegistrationTest.<RuntimeException>sneaky(readThrows);
+        }
         if (readFails) {
             throw new IllegalStateException("The read failed");
         }

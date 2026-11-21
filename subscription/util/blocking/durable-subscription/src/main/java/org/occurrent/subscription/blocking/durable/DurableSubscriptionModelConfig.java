@@ -148,8 +148,9 @@ public class DurableSubscriptionModelConfig {
      * After a checkpoint write throws, the next quiet save reads the stored checkpoint first, since the write may have
      * gone through. Once the subscription has delivered an event, it saves the position only when the read returns the
      * checkpoint of the last event delivered, a position stored after it, or the last quiet position or restart position
-     * whose write threw, and otherwise no position is saved until the checkpoint of an event or a restart position is
-     * stored. When the read throws, the save after the next interval reads again.
+     * whose write threw anything but {@code CheckpointWriteConditionNotFulfilledException}, and otherwise no position is
+     * saved until the checkpoint of an event or a restart position is stored. When the read throws, the save after the
+     * next interval reads again.
      * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
      * is the oplog window.

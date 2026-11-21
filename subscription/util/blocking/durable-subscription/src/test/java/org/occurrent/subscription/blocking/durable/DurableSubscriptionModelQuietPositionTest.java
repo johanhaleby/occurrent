@@ -30,6 +30,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,6 +48,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
@@ -812,6 +814,111 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_quiet_save_that_wrote_and_threw_a_checked_exception_is_recovered_through_a_read_with_no_new_event() throws InterruptedException {
+        // Given an event that stored its checkpoint, and a quiet save that commits and then throws an IOException
+        FlakyStorage flaky = new FlakyStorage();
+        DurableSubscriptionModel model = subscribedAndStoredE1(flaky);
+        flaky.writesThenThrowsChecked.add("quiet-1");
+
+        // When
+        boolean first = quietTickWhenWantedThatThrowsNothing("quiet-1");
+        boolean second = quietTickWhenWanted("quiet-2");
+
+        // Then
+        assertThat(List.of(first, second)).containsExactly(true, true);
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "save quiet-2");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-2"));
+        assertThat(model.positionsRememberedForQuietSaves("id")).isLessThanOrEqualTo(2);
+    }
+
+    @Test
+    void a_quiet_save_that_threw_a_checked_exception_without_writing_is_recovered_through_a_read_with_no_new_event() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.throwsCheckedWithoutWriting.add("quiet-1");
+
+        // When
+        boolean first = quietTickWhenWantedThatThrowsNothing("quiet-1");
+        boolean second = quietTickWhenWanted("quiet-2");
+
+        // Then
+        assertThat(List.of(first, second)).containsExactly(true, true);
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "save quiet-2");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-2"));
+    }
+
+    @Test
+    void a_checked_exception_from_the_save_of_the_quiet_position_is_not_thrown_to_the_wrapped_model() {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.throwsCheckedWithoutWriting.add("quiet-1");
+
+        // When
+        assertThatCode(() -> quietTickWhenWanted("quiet-1")).as("the quiet position listener").doesNotThrowAnyException();
+
+        // Then
+        assertThat(flaky.operations).containsExactly("save quiet-1");
+    }
+
+    @Test
+    void a_quiet_save_that_wrote_and_threw_an_error_is_thrown_to_the_wrapped_model_and_is_recovered_through_a_read_with_no_new_event() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.writesThenThrowsAnError.add("quiet-1");
+
+        // When
+        assertThatThrownBy(() -> quietTickWhenWanted("quiet-1")).isExactlyInstanceOf(StorageError.class);
+        boolean second = quietTickWhenWanted("quiet-2");
+
+        // Then
+        assertThat(second).as("quiet save wanted").isTrue();
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "save quiet-2");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-2"));
+    }
+
+    @Test
+    void a_read_that_throws_a_checked_exception_after_a_quiet_save_that_wrote_and_threw_is_not_thrown_to_the_wrapped_model_and_the_next_tick_reads_again() throws InterruptedException {
+        // Given a quiet save that wrote and threw, and a read that throws an IOException while that position is stored
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.writesThenThrows.add("quiet-1");
+        flaky.readsThrowCheckedWhileStored.add("quiet-1");
+        quietTickWhenWanted("quiet-1");
+
+        // When two ticks read and throw, and the read then works
+        assertThatCode(() -> quietTickWhenWanted("quiet-2")).as("the first tick that reads").doesNotThrowAnyException();
+        assertThatCode(() -> quietTickWhenWanted("quiet-3")).as("the second tick that reads").doesNotThrowAnyException();
+        flaky.readsThrowCheckedWhileStored.clear();
+        quietTickWhenWanted("quiet-4");
+
+        // Then
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "read", "read", "save quiet-4");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-4"));
+    }
+
+    @Test
+    void a_read_that_throws_an_error_after_a_quiet_save_that_wrote_and_threw_is_thrown_to_the_wrapped_model_and_the_next_tick_reads_again() throws InterruptedException {
+        // Given a quiet save that wrote and threw, and a read that throws an error while that position is stored
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.writesThenThrows.add("quiet-1");
+        flaky.readsThrowAnErrorWhileStored.add("quiet-1");
+        quietTickWhenWanted("quiet-1");
+
+        // When the tick that reads throws the error, and the read then works
+        assertThatThrownBy(() -> quietTickWhenWanted("quiet-2")).isExactlyInstanceOf(StorageError.class);
+        flaky.readsThrowAnErrorWhileStored.clear();
+        quietTickWhenWanted("quiet-3");
+
+        // Then
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "read", "save quiet-3");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-3"));
+    }
+
+    @Test
     void a_delivery_save_that_wrote_and_threw_has_the_next_quiet_tick_read_and_save_the_quiet_position_with_no_new_event() throws InterruptedException {
         // Given
         FlakyStorage flaky = new FlakyStorage();
@@ -891,12 +998,31 @@ class DurableSubscriptionModelQuietPositionTest {
         return false;
     }
 
+    private static final class StorageError extends Error {
+        StorageError(String message) {
+            super(message);
+        }
+    }
+
+    // Fails on the assertion that nothing was thrown, not on the exception itself
+    private boolean quietTickWhenWantedThatThrowsNothing(String quietPosition) {
+        boolean[] wanted = new boolean[1];
+        assertThatCode(() -> wanted[0] = quietTickWhenWanted(quietPosition)).as("the quiet position listener").doesNotThrowAnyException();
+        return wanted[0];
+    }
+
     // Fails by the content it is asked to save or read, never by how many calls came before
     private static final class FlakyStorage extends InMemoryCheckpointStorage {
         final List<String> operations = new CopyOnWriteArrayList<>();
         final Set<String> writesThenThrows = ConcurrentHashMap.newKeySet();
         final Set<String> throwsWithoutWriting = ConcurrentHashMap.newKeySet();
         final Set<String> readsThrowWhileStored = ConcurrentHashMap.newKeySet();
+        // A storage written in Kotlin throws a checked exception it never declares
+        final Set<String> writesThenThrowsChecked = ConcurrentHashMap.newKeySet();
+        final Set<String> throwsCheckedWithoutWriting = ConcurrentHashMap.newKeySet();
+        final Set<String> writesThenThrowsAnError = ConcurrentHashMap.newKeySet();
+        final Set<String> readsThrowCheckedWhileStored = ConcurrentHashMap.newKeySet();
+        final Set<String> readsThrowAnErrorWhileStored = ConcurrentHashMap.newKeySet();
 
         @Override
         public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
@@ -905,9 +1031,18 @@ class DurableSubscriptionModelQuietPositionTest {
             if (throwsWithoutWriting.contains(position)) {
                 throw new IllegalStateException("The save of " + position + " failed");
             }
+            if (throwsCheckedWithoutWriting.contains(position)) {
+                throw FlakyStorage.<RuntimeException>sneaky(new IOException("The save of " + position + " failed"));
+            }
             Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
             if (writesThenThrows.contains(position)) {
                 throw new IllegalStateException("The reply of the save of " + position + " was lost");
+            }
+            if (writesThenThrowsChecked.contains(position)) {
+                throw FlakyStorage.<RuntimeException>sneaky(new IOException("The reply of the save of " + position + " was lost"));
+            }
+            if (writesThenThrowsAnError.contains(position)) {
+                throw new StorageError("The save of " + position + " failed with an error");
             }
             return saved;
         }
@@ -919,7 +1054,19 @@ class DurableSubscriptionModelQuietPositionTest {
             if (current != null && readsThrowWhileStored.contains(current.asString())) {
                 throw new IllegalStateException("The read failed while " + current.asString() + " is stored");
             }
+            if (current != null && readsThrowCheckedWhileStored.contains(current.asString())) {
+                throw FlakyStorage.<RuntimeException>sneaky(new IOException("The read failed while " + current.asString() + " is stored"));
+            }
+            if (current != null && readsThrowAnErrorWhileStored.contains(current.asString())) {
+                throw new StorageError("The read failed with an error while " + current.asString() + " is stored");
+            }
             return current;
+        }
+
+        // Throws a checked exception from code that declares none
+        @SuppressWarnings("unchecked")
+        private static <T extends Throwable> RuntimeException sneaky(Throwable throwable) throws T {
+            throw (T) throwable;
         }
 
         Checkpoint stored(String subscriptionId) {

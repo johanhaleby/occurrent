@@ -475,37 +475,42 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // A refused write is thrown, so the wrapped model ends delivery on a node whose lease moved, as it does for an
-    // event. Any other failure is logged and tried again after the interval, since the subscription has lost nothing.
-    // So is a failed read of what is stored
+    // event. Any other exception, checked ones from a storage written in Kotlin included, is logged and tried again
+    // after the interval, since the subscription has lost nothing. So is a failed read of what is stored. An Error is
+    // thrown. The registration notes each failure before this method sees it
     private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, CheckpointRegistration registration,
                                    Read handedOutAt) {
         runUnderLockFor(subscriptionId, () -> {
             if (registrations.get(subscriptionId) != registration) {
                 return;
             }
-            registration.saveQuietPositionIfStoredCovers(handedOutAt, quietPosition, () -> {
-                registration.lastWrite.set(System.nanoTime());
-                try {
-                    storage.save(subscriptionId, quietPosition, writeCondition);
-                    registration.storedACheckpoint();
-                    return true;
-                } catch (CheckpointWriteConditionNotFulfilledException e) {
-                    throw e;
-                } catch (RuntimeException e) {
-                    log.warn("Failed to save the quiet position of subscription {}. Trying again in {}.", subscriptionId, config.quietPositionSaveInterval, e);
-                    return false;
-                }
-            }, () -> {
-                try {
-                    return storage.read(subscriptionId);
-                } catch (Throwable e) {
-                    // Throwable, since a storage written in Kotlin can throw a checked exception
+            try {
+                registration.saveQuietPositionIfStoredCovers(handedOutAt, quietPosition, () -> {
                     registration.lastWrite.set(System.nanoTime());
-                    log.warn("Failed to read the checkpoint of subscription {} after a checkpoint write failed, so its quiet position is not saved this time. Trying again in {}.",
-                            subscriptionId, config.quietPositionSaveInterval, e);
-                    throw e;
-                }
-            });
+                    try {
+                        storage.save(subscriptionId, quietPosition, writeCondition);
+                    } catch (CheckpointWriteConditionNotFulfilledException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        log.warn("Failed to save the quiet position of subscription {}. Trying again in {}.", subscriptionId, config.quietPositionSaveInterval, e);
+                        throw e;
+                    }
+                    registration.storedACheckpoint();
+                }, () -> {
+                    try {
+                        return storage.read(subscriptionId);
+                    } catch (Exception e) {
+                        registration.lastWrite.set(System.nanoTime());
+                        log.warn("Failed to read the checkpoint of subscription {} after a checkpoint write failed, so its quiet position is not saved this time. Trying again in {}.",
+                                subscriptionId, config.quietPositionSaveInterval, e);
+                        throw e;
+                    }
+                });
+            } catch (CheckpointWriteConditionNotFulfilledException e) {
+                throw e;
+            } catch (Exception loggedAbove) {
+                // Tried again after the interval
+            }
         });
     }
 
