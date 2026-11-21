@@ -83,6 +83,8 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
     private static final Checkpoint EVENT_OF_THE_RUN_THE_FAILED_RESUME_STARTED = new StringBasedCheckpoint("event-of-the-run-the-failed-resume-started");
     private static final Checkpoint EVENT_STORED_BEFORE_THE_RESUME = new StringBasedCheckpoint("event-stored-before-the-resume");
     private static final Checkpoint QUIET = new StringBasedCheckpoint("quiet");
+    private static final Checkpoint FIRST_QUIET = new StringBasedCheckpoint("first-quiet");
+    private static final Checkpoint SECOND_QUIET = new StringBasedCheckpoint("second-quiet");
 
     private final PausableModel wrapped = new PausableModel();
     private final InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
@@ -810,6 +812,116 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
                 }
                 assertThat(readingAfterTheHandlerReturned.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
             });
+        }
+
+        @Test
+        void a_quiet_position_is_saved_after_a_failed_resume_put_back_the_one_a_quiet_save_wrote_before_throwing_when_a_later_quiet_save_threw_without_writing() {
+            // Given
+            QuietSavesThatThrow quietSaves = new QuietSavesThatThrow();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, quietSaves, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, quietSaves);
+            wrapped.deliver(SUBSCRIPTION_ID, EVENT_STORED_BEFORE_THE_RESUME);
+            quietSaves.writesThenThrows.add(FIRST_QUIET);
+            quietSaves.throwsWithoutWriting.add(SECOND_QUIET);
+            aSaverOnceTheIntervalHasPassed().accept(FIRST_QUIET);
+            aSaverOnceTheIntervalHasPassed().accept(SECOND_QUIET);
+            assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(FIRST_QUIET);
+            quietSaves.writesThenThrows.clear();
+            quietSaves.throwsWithoutWriting.clear();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // Then
+            assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(FIRST_QUIET);
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
+
+        @Test
+        void a_quiet_position_is_saved_after_a_failed_resume_put_back_the_one_a_later_quiet_save_wrote_before_throwing_when_an_earlier_quiet_save_threw_without_writing() {
+            // Given
+            QuietSavesThatThrow quietSaves = new QuietSavesThatThrow();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, quietSaves, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, quietSaves);
+            wrapped.deliver(SUBSCRIPTION_ID, EVENT_STORED_BEFORE_THE_RESUME);
+            quietSaves.throwsWithoutWriting.add(FIRST_QUIET);
+            quietSaves.writesThenThrows.add(SECOND_QUIET);
+            aSaverOnceTheIntervalHasPassed().accept(FIRST_QUIET);
+            aSaverOnceTheIntervalHasPassed().accept(SECOND_QUIET);
+            assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(SECOND_QUIET);
+            quietSaves.writesThenThrows.clear();
+            quietSaves.throwsWithoutWriting.clear();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // Then
+            assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(SECOND_QUIET);
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
+
+        @Test
+        void a_quiet_position_is_saved_after_a_failed_resume_put_back_the_one_the_only_quiet_save_that_threw_had_written() {
+            // Given
+            QuietSavesThatThrow quietSaves = new QuietSavesThatThrow();
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, quietSaves, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, quietSaves);
+            wrapped.deliver(SUBSCRIPTION_ID, EVENT_STORED_BEFORE_THE_RESUME);
+            quietSaves.writesThenThrows.add(FIRST_QUIET);
+            aSaverOnceTheIntervalHasPassed().accept(FIRST_QUIET);
+            assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(FIRST_QUIET);
+            quietSaves.writesThenThrows.clear();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // Then
+            assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(FIRST_QUIET);
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(quietSaves.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
+
+        private class QuietSavesThatThrow extends InMemoryCheckpointStorage {
+            private final Set<Checkpoint> writesThenThrows = ConcurrentHashMap.newKeySet();
+            private final Set<Checkpoint> throwsWithoutWriting = ConcurrentHashMap.newKeySet();
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (throwsWithoutWriting.contains(checkpoint)) {
+                    throw new IllegalStateException("The save of " + checkpoint.asString() + " failed");
+                }
+                Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
+                if (writesThenThrows.contains(checkpoint)) {
+                    throw new IllegalStateException("The reply of the save of " + checkpoint.asString() + " was lost");
+                }
+                return saved;
+            }
         }
     }
 
