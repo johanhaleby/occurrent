@@ -1573,6 +1573,11 @@ class SagaQuarantineTest {
         }
 
         @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegate.fits(candidate);
+        }
+
+        @Override
         public SagaStateCodec<OrderState> stateCodec() {
             return delegate.stateCodec();
         }
@@ -1687,6 +1692,11 @@ class SagaQuarantineTest {
 
         @Nullable OrderState theStoredStateOf(String sagaId) {
             return delegate.find(sagaId).map(codec::decode).map(SagaEnvelope::state).orElse(null);
+        }
+
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegate.fits(candidate);
         }
 
         @Override

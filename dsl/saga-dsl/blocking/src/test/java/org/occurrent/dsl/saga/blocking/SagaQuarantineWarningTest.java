@@ -194,6 +194,11 @@ class SagaQuarantineWarningTest {
     // runner refuses it at start
     private static final class StoreWithoutAtomicTransitions<S> extends StoreWithoutSkippedInputs<S> implements SagaStateStoreSkippedInputs {
         @Override
+        public boolean fits(StoredSaga candidate) {
+            return true;
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             throw new IllegalStateException("no atomic transitions here");
         }

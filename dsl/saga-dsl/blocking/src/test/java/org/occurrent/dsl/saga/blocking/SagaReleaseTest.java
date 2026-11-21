@@ -2876,6 +2876,11 @@ class SagaReleaseTest {
         }
 
         @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegate.fits(candidate);
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             delegate.requireAtomicTransitions();
         }

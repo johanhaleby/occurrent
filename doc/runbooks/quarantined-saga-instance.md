@@ -372,8 +372,8 @@ the release starts with the marks trimmed to the reorder window instead, since a
 the store and can leave more marks than a release may write. When the store can't take that either, `release` throws
 an `IllegalStateException` that names the instance and says the same.
 
-A store of your own that keeps the default of `SagaStateStoreSkippedInputs.fits` refuses nothing, so a release on it
-dispatches the commands of an input whose write the store then fails.
+A store of your own whose `SagaStateStoreSkippedInputs.fits` answers `true` to every instance refuses nothing, so a
+release on it dispatches the commands of an input whose write the store then fails.
 
 **When `release` throws.** It throws an `IllegalStateException` before it writes anything when:
 
@@ -449,6 +449,24 @@ doesn't erase its copy here. Release or delete the quarantined instances before 
 store, or a later release applies the event you erased. The same goes for an event you redact in place with
 `EventStoreOperations.updateEvent`. The record keeps the event as it was when the instance skipped it, and a release
 applies that copy, not the redacted one.
+
+To find the records that hold the events of a stream, look up their `key` in the saga's `_skipped_inputs` collection.
+An event with a stream id and a stream version is recorded under `<streamId>@<streamVersion>`, and every event the event
+store hands a saga has both. Escape any character of the stream id that a regular expression treats as special, such
+as `.`:
+
+```javascript
+db.getCollection("saga-order-fulfilment_skipped_inputs").find(
+  { key: { $regex: "^order-42@[0-9]+$" } },
+  { sagaId: 1, quarantineId: 1, key: 1 }
+)
+```
+
+The `[0-9]+$` keeps out the records of a stream whose id starts with `order-42@`. For one event, ask for its key
+exactly, such as `{ key: "order-42@7" }`. No index starts with `key`, so both read the whole collection. Each record
+names the `sagaId` of the instance that holds it, the one to release or delete before you erase the event. An event
+that reached the saga without a stream id and a stream version, such as one from a broker, is recorded under
+`cloudevent:<length of the id>:<id>:<source>@cloudevent` instead.
 
 **What a release logs.** All from the same logger as the quarantine `ERROR`:
 
@@ -575,8 +593,9 @@ the server refuses the transactions a quarantine writes. A saga with quarantine 
 An instance quarantined while the data was on a replica set, such as data restored from one onto a standalone server,
 can't record the inputs it skips there. An input it needs no record for, such as a redelivery of one it applied before
 it was quarantined, is skipped and acknowledged as on a replica set. The delivery of an input it has to record as
-skipped fails, and the subscription delivers the input again, so the instance holds up its inputs until you do one of
-two things.
+skipped fails, and the subscription delivers the input again. A subscription that delivers an event again before any
+later one, as a MongoDB subscription does, holds up every later event of that saga subscription meanwhile, for every
+instance of the saga, not only the events of the quarantined instance. That lasts until you do one of two things.
 Move the data back to a replica set and release the instance there in step 5, or delete it by hand with the shell
 commands in step 6. The release in step 5 throws on a standalone server before it reads or writes anything, and the
 timer poller doesn't go on with an instance marked releasing there. The Java `delete(sagaId)` in step 6 doesn't work on
@@ -682,8 +701,10 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    collection in the same directory, or of a collection you have deleted since, would then be written back into the
    database it came from.
 
-   Read the restored collection with a MongoDB driver. Each record holds `sagaId` and `quarantineId`, and `seq` and then
-   `key` give the order the instance would have applied them in. A record holds its event in up to four fields:
+   Read the restored collection with a MongoDB driver that has the UUID representation of the application's client,
+   such as the one `spring.mongodb.representation.uuid` sets. With another one, the Java driver reads a UUID in the data
+   as an `org.bson.types.Binary`. Each record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order
+   the instance would have applied them in. A record holds its event in up to four fields:
 
    | Field | What it holds |
    | --- | --- |

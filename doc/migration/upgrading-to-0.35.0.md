@@ -1044,7 +1044,8 @@ its quarantine id, by `seq` and then by `key`, as one write left them, so a read
 its records doesn't do, since each can miss a different write. A store that keeps both in one table can read them in
 one transaction that sees both as they were at the same moment. An empty result has to hold every write acknowledged before the call started, as for
 `find`. A store that can't read the two from one moment where it is called throws a `SagaReadRefusedException` instead,
-before it reads anything, as `SpringMongoSagaStateStore` does inside a MongoDB transaction of the caller's. `release`
+before it reads anything, as `SpringMongoSagaStateStore` does inside a MongoDB transaction of the caller's and inside a
+Spring transaction of another resource that synchronizes its resources. `release`
 throws that exception as it is. For a plain `IllegalStateException` it reads the instance again first, to tell whether
 its state decodes. It implements `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
 set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
@@ -1052,7 +1053,11 @@ poller asks for them on every poll and goes on with their release, starting each
 one listed and from the first id again once a poll lists fewer than `limit`. It implements `requireAtomicTransitions()`,
 which `SagaRunner.run` calls when quarantine is on, before the saga gets its first input. It throws an
 `IllegalStateException` when the store can't make those writes atomic in the database it's connected to, and does
-nothing otherwise. None of the seven methods has a default.
+nothing otherwise. It implements `fits(candidate)`, which a release calls before every write it makes, and for the
+write that applies a record before it dispatches the record's commands. It returns `false` when the store can't write
+`candidate`, such as an instance whose write would go over a size limit of the store's, and `true` otherwise, without
+reading the database. A store with a limit that returns `true` anyway makes a release dispatch the commands of a record
+whose write then fails, on every attempt. None of the eight methods has a default.
 
 A store that keeps the `StoredSaga` it's given as it is keeps the quarantine id and the skip count with it. A store
 that maps each field to a column of its own has to persist both, or reading an instance it quarantined throws an
@@ -1192,8 +1197,10 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    collection in the same directory, or of a collection you have deleted since, would then be written back into the
    database it came from.
 
-   Read the restored collection with a MongoDB driver. Each record holds `sagaId` and `quarantineId`, and `seq` and then
-   `key` give the order the instance would have applied them in. A record holds its event in up to four fields:
+   Read the restored collection with a MongoDB driver that has the UUID representation of the application's client,
+   such as the one `spring.mongodb.representation.uuid` sets. With another one, the Java driver reads a UUID in the data
+   as an `org.bson.types.Binary`. Each record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order
+   the instance would have applied them in. A record holds its event in up to four fields:
 
    | Field | What it holds |
    | --- | --- |
@@ -1499,8 +1506,10 @@ standalone server that journals its writes, since the runner then makes none of 
 An instance 0.35.0 quarantined while the data was on a replica set, such as data restored from one onto the standalone
 server, can't record the inputs it skips there. The delivery of an input it has to record as skipped fails, so
 the input isn't acknowledged and is delivered again. An input it needs no record for, such as a redelivery of one it
-applied before it was quarantined, is skipped and acknowledged as on a replica set. The instance holds up its inputs
-until you move the data back to a replica set and release it there, or delete it by hand in the database, as the
+applied before it was quarantined, is skipped and acknowledged as on a replica set. A subscription that delivers an
+event again before any later one, as a MongoDB subscription does, holds up every later event of that saga subscription
+meanwhile, for every instance of the saga, not only the events of the quarantined instance. That lasts until you move
+the data back to a replica set and release the instance there, or delete it by hand in the database, as the
 [quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes.
 
 `SagaSubscription.release(sagaId)` throws an `IllegalStateException` on the standalone server before it reads or writes
@@ -1532,8 +1541,11 @@ behind when your transaction commits, and a change stream on the saga collection
 must accept a document that holds only `_id`, so a validator that requires other fields makes such a read of an absent
 instance fail.
 
-Call `SagaSubscription.release(sagaId)` outside such a transaction. Inside one it throws a `SagaReadRefusedException`,
-an `IllegalStateException`, before it reads or writes anything, whatever read concern the transaction has. A release reads the instance and its first
+Call `SagaSubscription.release(sagaId)` outside such a transaction, and outside a Spring transaction of another
+resource that synchronizes its resources, as one does by default. Inside either it throws a `SagaReadRefusedException`,
+an `IllegalStateException`, before it reads or writes anything, whatever read concern the transaction has. In the
+second, a template with `SessionSynchronization.ALWAYS` starts a MongoDB transaction at the release's first write, and
+the store can't tell how the template synchronizes. A release reads the instance and its first
 recorded input in a transaction of the store's at read concern `snapshot`, since a transaction at `local` or `majority`
 on a sharded cluster can read the two from different moments, and the store can't read the concern of your
 transaction.
@@ -1548,8 +1560,9 @@ bean.
   saga writes to fail while the secondary is down.
 - On a standalone server, run MongoDB as a replica set, which can have a single member, or turn quarantine off with
   `SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false`. Before you move data from a
-  replica set onto a standalone server, release or delete every quarantined instance in it, since one left quarantined
-  holds up its inputs there.
+  replica set onto a standalone server, release or delete every quarantined instance in it. On a MongoDB subscription,
+  an input that one left quarantined has to record as skipped holds up every later event of its saga subscription
+  there, for every instance of the saga.
 - Pass the `MongoTemplate` bean to `SpringMongoSagaStateStore`. The Spring Boot starter already does.
 - With the starter and a `MongoOperations` decorator, declare the `MongoTemplate` it wraps as a bean.
 - Run the transitions outside a transaction of yours, or commit yours at `majority` with `j: true`.

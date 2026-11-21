@@ -19,7 +19,9 @@ package org.occurrent.dsl.saga;
 /**
  * Thrown by {@link SagaStateStoreSkippedInputs#findWithFirstSkippedInput(String)} when the store can't read the
  * instance and its first record from one moment where it is called, before it reads anything.
- * {@code SpringMongoSagaStateStore} throws it inside a MongoDB transaction of the caller's.
+ * {@code SpringMongoSagaStateStore} throws it inside a MongoDB transaction of the caller's, and inside a Spring
+ * transaction of another resource that synchronizes its resources, as one does by default, since a template with
+ * {@code SessionSynchronization.ALWAYS} starts a MongoDB transaction in it at the release's first write.
  * <p>
  * {@code SagaSubscription.release(sagaId)} throws it as it is, so a release inside a caller's transaction reads and
  * writes nothing. A store of your own that throws a plain {@link IllegalStateException} instead gets the release's

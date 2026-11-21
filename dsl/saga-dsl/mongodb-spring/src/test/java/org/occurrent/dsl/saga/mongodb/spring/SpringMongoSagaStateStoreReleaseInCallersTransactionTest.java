@@ -45,8 +45,12 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.SessionSynchronization;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -59,6 +63,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -217,5 +222,47 @@ class SpringMongoSagaStateStoreReleaseInCallersTransactionTest {
                 () -> assertThat(sentToTheInstancesOrTheirRecords()).as("commands sent to the instances or their records while the release ran").isEmpty(),
                 () -> assertThat(template.findOne(Query.query(where("_id").is("nobody")), Document.class, COLLECTION)).as("no document left for the absent id").isNull()
         );
+    }
+
+    @Test
+    void a_release_inside_a_spring_transaction_of_another_resource_is_refused_before_any_read_or_write_when_the_template_synchronizes_always() {
+        template.setSessionSynchronization(SessionSynchronization.ALWAYS);
+        SagaSubscription running = run();
+        aQuarantinedInstance();
+        Document before = stored();
+        List<Document> recordsBefore = template.findAll(Document.class, SKIPPED_COLLECTION);
+        assertThat(recordsBefore).as("control: the instance holds a record of what it skipped").isNotEmpty();
+        AtomicReference<Throwable> refusal = new AtomicReference<>();
+        sent.clear();
+
+        new TransactionTemplate(new AnotherResourcesTransactionManager()).executeWithoutResult(status -> refusal.set(catchThrowable(() -> running.release(ORDER))));
+
+        assertAll(
+                () -> assertThat(refusal.get()).isInstanceOf(SagaReadRefusedException.class).hasMessage(SpringMongoSagaStateStore.CALLERS_TRANSACTION_MESSAGE),
+                () -> assertThat(sentToTheInstancesOrTheirRecords()).as("commands sent to the instances or their records while the release ran").isEmpty(),
+                () -> assertThat(stored()).as("the instance is stored as it was, at its version and still quarantined").isEqualTo(before),
+                () -> assertThat(template.findAll(Document.class, SKIPPED_COLLECTION)).as("the records of what it skipped").isEqualTo(recordsBefore),
+                () -> assertThat(dispatched).as("the release replayed nothing").isEmpty()
+        );
+    }
+
+    // A Spring transaction of another resource, in which no MongoDB transaction starts until a template with ALWAYS operates
+    private static final class AnotherResourcesTransactionManager extends AbstractPlatformTransactionManager {
+        @Override
+        protected Object doGetTransaction() {
+            return new Object();
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+        }
     }
 }

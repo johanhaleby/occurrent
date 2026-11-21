@@ -183,6 +183,11 @@ class SagaQuarantiningWriteFailureTest {
         final AtomicInteger quarantiningWrites = new AtomicInteger();
 
         @Override
+        public boolean fits(StoredSaga candidate) {
+            return inMemory.fits(candidate);
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             inMemory.requireAtomicTransitions();
         }

@@ -428,12 +428,17 @@ class SagaReleaseTooLargeTest {
         );
     }
 
-    // Keeps the default fits(..), which says true to every instance
+    // Answers fits(..) as its delegate does, which says true to every instance
     private class DelegatingStore implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
         private final InMemorySagaStateStore<Order> delegate;
 
         DelegatingStore(InMemorySagaStateStore<Order> delegate) {
             this.delegate = delegate;
+        }
+
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegate.fits(candidate);
         }
 
         @Override

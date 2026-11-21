@@ -42,8 +42,8 @@ public enum RedeliveryDetection {
      * the same duplication {@link #REQUIRED} exists to refuse, accepted knowingly rather than quietened. Releasing a
      * quarantined instance can also apply such an input again, when the instance applied the same event before it was
      * quarantined. Two releases of one instance that overlap, two {@code release} calls or a call and the timer poller,
-     * can each replay the same held input of this kind. The stored state takes it once, but the second replay dispatches
-     * commands computed from a state that took the input twice, before its save finds the input's record gone.
+     * can each dispatch the commands of the same held input, as for an input of any kind, and the stored state takes it
+     * once.
      */
     BEST_EFFORT
 }

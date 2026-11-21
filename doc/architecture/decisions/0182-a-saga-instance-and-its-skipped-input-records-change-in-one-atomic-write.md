@@ -184,9 +184,10 @@ An instance quarantined earlier, such as one in data restored from a replica set
 there. The delivery of an input it has to record as skipped fails, so the input isn't acknowledged and is delivered
 again. Skipping it without a record would acknowledge an input that no release replays. An input it needs no record
 for, such as a redelivery of one it applied before it was quarantined, is skipped and acknowledged as on a replica set.
-The instance
-holds up its inputs until its data is moved back to a replica set and it is released there, or until it is deleted by
-hand in the database. `SagaSubscription.release(sagaId)` throws on the standalone server before it reads or writes
+A subscription that delivers an event again before any later one, as a MongoDB subscription does, holds up every later
+event of that saga subscription meanwhile, for every instance of the saga, not only the events of the quarantined
+instance. That lasts until the instance's data is moved back to a replica set and it is released there, or until it is
+deleted by hand in the database. `SagaSubscription.release(sagaId)` throws on the standalone server before it reads or writes
 anything. The write that starts a release asks for no transaction, so without that refusal a release there would mark
 the instance releasing and dispatch the commands of the input it stopped on, and the server would then refuse the
 transaction that records that input as applied. Every timer poll would dispatch those commands again. The timer poller
@@ -269,7 +270,11 @@ refusal would break every saga run inside a caller's transaction, and a warning 
 the concern is. The SPI and the store's javadoc say that the caller's commit decides.
 
 `findWithFirstSkippedInput` throws a `SagaReadRefusedException`, an `IllegalStateException`, inside a caller's
-MongoDB transaction, in all three cases above and under `SYNCHRONIZATION_NEVER`, before it reads anything. A transaction at read concern `local` or `majority`
+MongoDB transaction, in all three cases above and under `SYNCHRONIZATION_NEVER`, before it reads anything. It also
+throws in a Spring transaction of another resource that synchronizes its resources before any MongoDB transaction has
+started in it, since a template with `SessionSynchronization.ALWAYS` starts one at the release's first write. The
+store can't read how the template synchronizes, so it refuses every such transaction, and a release reads and writes
+nothing in one. A transaction at read concern `local` or `majority`
 on a sharded cluster reads each shard at its own moment, so it could return an instance that applied a replay together
 with the record that replay deleted, the pair the read exists to rule out. Only `snapshot` reads the shards at one
 moment. The store can't tell the read concern of the transaction for the same reason it can't tell the write concern,

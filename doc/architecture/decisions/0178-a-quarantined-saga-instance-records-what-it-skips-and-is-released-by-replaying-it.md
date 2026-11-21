@@ -157,8 +157,9 @@ that retries the event stops on it.
 
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
-parameter, since its methods take and return an instance as a `StoredSaga`, with the state encoded already, and only
-`fits` has a default. The in-memory store and
+parameter, since its methods take and return an instance as a `StoredSaga`, with the state encoded already, and none
+of its methods has a default, `fits` included, so a store with a size limit doesn't answer `true` by leaving it out.
+The in-memory store and
 `SpringMongoSagaStateStore` implement it. Point 7 says what the runner does with a store that doesn't.
 
 The write that quarantines an `ACTIVE` instance gives its failure record a new quarantine id, records K with the
@@ -205,8 +206,8 @@ quarantined, and nothing reads their records after that.
 `SpringMongoSagaStateStore` reads the instance and its records from the primary, whatever read preference the
 `MongoOperations` it is given has. A release reads the instance and its first record with `findWithFirstSkippedInput`,
 in one transaction at read concern `snapshot`, as ADR 182 point 3 says, and every other read is at read concern
-`majority`. It refuses to run inside a MongoDB transaction of the caller's, as ADR 182 point 4 says, so a release
-runs outside one. A read from a secondary that lags can find no record while one is written, and a release turns the instance
+`majority`. It refuses to run inside a MongoDB transaction of the caller's, or inside a Spring transaction of another
+resource that synchronizes its resources, as ADR 182 point 4 says, so a release runs outside both. A read from a secondary that lags can find no record while one is written, and a release turns the instance
 `ACTIVE` once its read finds no record. The write that does that
 also checks inside its transaction that no record is under the quarantine id, as ADR 182 point 3 says, so a release
 whose read missed a record writes nothing and replays the record on its next attempt.
@@ -469,8 +470,10 @@ An instance quarantined while its data was on a store that records skips, and th
 refused at startup, since quarantine is off there. It can't record the inputs it skips, so the delivery of an input it
 has to record as skipped fails and the input isn't acknowledged, since skipping it without a record would leave an
 input that no release replays. An input it needs no record for, such as a redelivery of one it applied before it was
-quarantined, is skipped and acknowledged as on a store that records skips. The instance holds up its inputs until its data is moved back to a store
-that records skips and it is released there, or until it is deleted by hand.
+quarantined, is skipped and acknowledged as on a store that records skips. A subscription that delivers an event again
+before any later one, as a MongoDB subscription does, holds up every later event of that saga subscription meanwhile,
+for every instance of the saga, not only the events of the quarantined instance. That lasts until the instance's data
+is moved back to a store that records skips and it is released there, or until it is deleted by hand.
 
 `disableQuarantine()` turns it off. In Spring Boot, `occurrent.saga.quarantine-enabled=false` does. A blank
 `occurrent.saga.quarantine-after` kept quarantine off in 0.34.0, so the starter refuses to start on one, and the
@@ -639,8 +642,8 @@ The upgrade guide has the procedure for operators, in
   says a further release stops on the record too. When the store can't take the write that quarantines the instance
   again, even with no pending entry for the record and no failure message, the release writes nothing, returns
   `STILL_RELEASING`, and an ERROR names the instance and says to delete it, and the timer poller logs that again on
-  every poll. `SpringMongoSagaStateStore` refuses an instance of more than 16 MiB, and a write of more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store that keeps the default of `fits` refuses nothing, and a
-  release on it dispatches the commands of a record whose write the store then fails. A backlog long enough takes more
+  every poll. `SpringMongoSagaStateStore` refuses an instance of more than 16 MiB, and a write of more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store whose `fits` answers `true` to every instance refuses
+  nothing, and a release on it dispatches the commands of a record whose write the store then fails. A backlog long enough takes more
   than one release. Keeping the versions a release applies outside the instance's document would remove the limit, and
   is left for later.
 - A quarantined instance keeps a record of the inputs it skips, with no limit on how many, and each record holds a whole event.

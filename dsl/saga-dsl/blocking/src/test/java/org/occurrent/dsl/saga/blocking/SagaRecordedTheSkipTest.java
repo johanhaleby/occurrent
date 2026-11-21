@@ -225,6 +225,11 @@ class SagaRecordedTheSkipTest {
         }
 
         @Override
+        public boolean fits(StoredSaga candidate) {
+            return inMemory.fits(candidate);
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             inMemory.requireAtomicTransitions();
         }

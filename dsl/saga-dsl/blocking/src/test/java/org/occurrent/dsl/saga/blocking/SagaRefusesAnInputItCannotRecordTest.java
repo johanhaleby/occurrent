@@ -202,7 +202,8 @@ class SagaRefusesAnInputItCannotRecordTest {
                         .hasMessageContaining("quarantined")
                         .hasMessageContaining(inputKey(live))
                         .hasMessageContaining("replica set")
-                        .hasMessageContaining("by hand"),
+                        .hasMessageContaining("by hand")
+                        .hasMessageContaining("A subscription that delivers an event again before any later one, as a MongoDB subscription does, holds up every later event meanwhile, for every instance of the saga."),
                 () -> assertThat(store.skipWrites).as("no skip write is attempted").hasValue(0),
                 () -> assertThat(after.version()).as("the instance's version").isEqualTo(before.version()),
                 () -> assertThat(after.quarantineSkipCount()).as("the instance's skip count").isEqualTo(before.quarantineSkipCount()),
@@ -313,7 +314,8 @@ class SagaRefusesAnInputItCannotRecordTest {
                 () -> assertThat(inMemory.find(ORDER)).as("the stored instance is unchanged").contains(storedBefore),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantined.quarantineId(), Integer.MAX_VALUE)).as("the records are unchanged").isEqualTo(recordsBefore),
                 () -> assertThat(errors()).as("one ERROR across the polls, naming the instance").singleElement().asString()
-                        .contains("does not go on with the release of instances").contains(ORDER),
+                        .contains("does not go on with the release of instances").contains(ORDER)
+                        .contains("A subscription that delivers an event again before any later one, as a MongoDB subscription does, holds up every later event meanwhile, for every instance of the saga."),
                 () -> assertThat(store.releasingListings).as("the poller stops listing once it has said so").hasValue(1)
         );
     }
@@ -345,6 +347,11 @@ class SagaRefusesAnInputItCannotRecordTest {
         final AtomicInteger reads = new AtomicInteger();
         final AtomicInteger writes = new AtomicInteger();
         final AtomicInteger releasingListings = new AtomicInteger();
+
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return inMemory.fits(candidate);
+        }
 
         @Override
         public void requireAtomicTransitions() {

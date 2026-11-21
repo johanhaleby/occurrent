@@ -827,7 +827,9 @@ class SagaPendingStreamVersionTest {
             deliverFailing(execution, itemAddedAt(2, "two"));
 
             // Then
-            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("could not list it as pending", STREAM + "@2"));
+            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("could not list it as pending", STREAM + "@2")
+                    .contains("because the state store threw " + storeFailure)
+                    .contains("A store that refuses to hold the event says so in that message, and refuses it again on every delivery."));
         }
 
         @Test
@@ -974,6 +976,11 @@ class SagaPendingStreamVersionTest {
                 return false;
             }
             return write.getAsBoolean();
+        }
+
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegateRecords.fits(candidate);
         }
 
         @Override

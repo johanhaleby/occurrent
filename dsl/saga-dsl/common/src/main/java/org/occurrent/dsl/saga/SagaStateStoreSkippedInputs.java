@@ -209,12 +209,11 @@ public interface SagaStateStoreSkippedInputs {
      * to the reorder window, or writes nothing when the store cannot take that either, see
      * {@code SagaSubscription.release(sagaId)}.
      * <p>
-     * The default says {@code true} to every instance, so a release on a store that keeps it checks nothing, and
-     * dispatches the commands of a record whose write the store then refuses. A store whose writes have a size limit
-     * answers {@code false} for an instance whose write would go over it. The release calls this outside a transaction, and the answer must
-     * not depend on a read of the database.
+     * A store whose writes have a size limit answers {@code false} for an instance whose write would go over it. A store
+     * with no limit answers {@code true} to every instance, as {@link InMemorySagaStateStore} does. A store with a limit
+     * that answers {@code true} anyway makes the release dispatch the commands of a record whose write the store then
+     * refuses, on every attempt. The release calls this outside a transaction, and the answer must not depend on a read
+     * of the database.
      */
-    default boolean fits(StoredSaga candidate) {
-        return true;
-    }
+    boolean fits(StoredSaga candidate);
 }

@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.mongodb.spring;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -27,6 +28,7 @@ import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonBinarySubType;
 import org.bson.Document;
+import org.bson.UuidRepresentation;
 import org.bson.types.Binary;
 import org.bson.types.Decimal128;
 import org.junit.jupiter.api.BeforeEach;
@@ -94,6 +96,7 @@ class SkippedInputExportTest {
     private static final Date DATE = new Date(1772601377456L);
     private static final Binary RAW = new Binary(new byte[]{0, 1, 2, (byte) 0xff, (byte) 0x80, 'a'});
 
+    private ConnectionString connectionString;
     private String databaseName;
     private SpringMongoSagaStateStore<String> stateStore;
     private MongoTemplate template;
@@ -101,7 +104,7 @@ class SkippedInputExportTest {
 
     @BeforeEach
     void createInstances() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-export-" + UUID.randomUUID()));
+        connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-export-" + UUID.randomUUID()));
         databaseName = requireNonNull(connectionString.getDatabase());
         template = new MongoTemplate(MongoClients.create(connectionString), databaseName);
         stateStore = new SpringMongoSagaStateStore<>(template, COLLECTION, String.class);
@@ -234,6 +237,33 @@ class SkippedInputExportTest {
         assertThat(template.getCollection(OTHER_SAGAS_SKIPPED_INPUTS).countDocuments()).as("records written back into the other saga's collection in the source database").isZero();
         assertThat(collectionNames(restoredDatabase)).as("collections in the restored database").containsExactly(SKIPPED_INPUTS);
         assertThat(readRestored(restoredDatabase)).as("records restored").hasSize(1);
+    }
+
+    @Test
+    void a_uuid_in_the_data_is_read_as_a_UUID_by_a_driver_with_the_application_clients_representation_and_as_Binary_by_one_with_the_default() {
+        UUID uuid = UUID.fromString("123e4567-e89b-42d3-a456-426614174000");
+        MongoClientSettings standard = MongoClientSettings.builder().applyConnectionString(connectionString).uuidRepresentation(UuidRepresentation.STANDARD).build();
+        try (MongoClient applicationClient = MongoClients.create(standard)) {
+            SpringMongoSagaStateStore<String> store = new SpringMongoSagaStateStore<>(new MongoTemplate(applicationClient, databaseName), COLLECTION, String.class);
+            SagaEnvelope<String> envelope = new SagaEnvelope<>(ORDER, "placed", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW.minusSeconds(600), NOW, null, null, true, null, Map.of(), null);
+            assertThat(SagaEnvelopes.of(store, null).compareAndSave(ORDER, envelope, 0)).isTrue();
+            StoredSaga instance = store.find(ORDER).orElseThrow();
+            CloudEvent event = mapEvent("held-1", Map.of("id", uuid), ("{\"id\":\"" + uuid + "\"}").getBytes(UTF_8));
+            assertThat(store.compareAndSaveSkipped(instance, instance.version(), QUARANTINE_ID, new SkippedInput(0, "key-0", event))).as("the record with a UUID in its data is written").isTrue();
+        }
+
+        Object readWithTheSameRepresentation = firstRecordsDataValue(MongoClientSettings.builder().applyConnectionString(connectionString).uuidRepresentation(UuidRepresentation.STANDARD).build(), "id");
+        Object readWithTheDefaultRepresentation = firstRecordsDataValue(MongoClientSettings.builder().applyConnectionString(connectionString).build(), "id");
+
+        assertThat(readWithTheSameRepresentation).as("read with the application client's representation").isEqualTo(uuid);
+        assertThat(readWithTheDefaultRepresentation).as("read with the default representation").isInstanceOf(Binary.class);
+    }
+
+    private Object firstRecordsDataValue(MongoClientSettings settings, String key) {
+        try (MongoClient client = MongoClients.create(settings)) {
+            Document record = requireNonNull(client.getDatabase(databaseName).getCollection(SKIPPED_INPUTS, Document.class).find().first());
+            return record.get("dataDocument", Document.class).get(key);
+        }
     }
 
     private CloudEventBuilder builder(String id) {

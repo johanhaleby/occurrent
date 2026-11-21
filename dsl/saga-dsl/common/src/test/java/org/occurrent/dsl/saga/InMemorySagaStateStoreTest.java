@@ -1149,6 +1149,32 @@ class InMemorySagaStateStoreTest {
         return new StoredSaga(saga.sagaId(), saga.version(), new EncodedSaga(fields), saga.index());
     }
 
+    @Nested
+    class Fits {
+
+        @Test
+        void says_true_to_an_instance_of_any_size() {
+            // Given
+            SagaEnvelope<String> small = activeEnvelopeUpdatedAt("small", NOW);
+            SagaEnvelope<String> large = new SagaEnvelope<>("large", "x".repeat(10_000_000), SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null);
+
+            // When
+            boolean smallFits = store.fits(codec.encode(small));
+            boolean largeFits = store.fits(codec.encode(large));
+
+            // Then
+            assertAll(
+                    () -> assertThat(smallFits).as("a small instance").isTrue(),
+                    () -> assertThat(largeFits).as("a ten million character state").isTrue()
+            );
+        }
+
+        @Test
+        void rejects_a_null_instance() {
+            assertThatThrownBy(() -> store.fits(null)).isInstanceOf(NullPointerException.class).hasMessageContaining("candidate");
+        }
+    }
+
     private static io.cloudevents.CloudEvent heldEvent(String key) {
         return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }

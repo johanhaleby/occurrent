@@ -149,6 +149,15 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 Map::isEmpty, records -> Map.of());
     }
 
+    /**
+     * {@code true} for every instance, since a map in memory holds an instance of any size.
+     */
+    @Override
+    public boolean fits(StoredSaga candidate) {
+        requireNonNull(candidate, "candidate cannot be null");
+        return true;
+    }
+
     // The write that quarantines an instance whose first input failed inserts it, and an insert has no stored state to leave alone
     private static UnaryOperator<@Nullable StoredSaga> withoutStateUnlessInsert(StoredSaga saga, long expectedVersion) {
         return expectedVersion == 0 ? existing -> indexed(saga.encoded(), saga) : withoutState(saga, expectedVersion);

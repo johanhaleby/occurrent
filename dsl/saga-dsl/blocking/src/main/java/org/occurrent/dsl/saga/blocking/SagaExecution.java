@@ -452,10 +452,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // read or write its own instance cannot make progress on it either way.
             rethrowIfNotTheInstances(storeFailure);
             // Only an attributable failure with a redelivery key gets here, and the version could not be listed as pending
-            // either, which is what a replay long after depends on.
-            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the state store failed. "
+            // either, which is what a replay long after depends on. The store's own message goes in the line, since a store
+            // that refuses to hold the event, rather than failing, names the part it refuses there
+            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because the state store threw {}. "
+                            + "A store that refuses to hold the event says so in that message, and refuses it again on every delivery. "
                             + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window.",
-                    subscriptionId, sagaId, meta.redeliveryKey(), config.reorderWindow(), storeFailure);
+                    subscriptionId, sagaId, meta.redeliveryKey(), storeFailure, config.reorderWindow(), storeFailure);
             if (storeFailure != failure) {
                 // Java refuses to suppress an exception under itself, and a store that rethrows the very object that
                 // reached us here would otherwise replace the real failure with IllegalArgumentException.
@@ -612,7 +614,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
         if (!releasing.isEmpty() && releasingStaySaid.compareAndSet(false, true)) {
             log.error("Saga '{}' does not go on with the release of instances {}, because its state store {} cannot write a replayed input and the removal of its record in one atomic write. "
-                      + "They stay releasing, and the delivery of an input they would record as skipped fails, so the input is delivered again. "
+                      + "They stay releasing, and the delivery of an input they would record as skipped fails, so the input is delivered again. A subscription that delivers an event again before any later one, as a MongoDB subscription does, holds up every later event meanwhile, for every instance of the saga. "
                       + "Move the saga's data back to a store that records skips, such as MongoDB on a replica set, where the timer poller goes on with them, or resolve them by hand, such as by deleting them from the database.",
                     subscriptionId, releasing, stateStore.getClass().getName());
         }
@@ -1235,7 +1237,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private boolean recordedSkip(SagaEnvelope<S> current, SkippedInput toRecord) {
         if (cannotRecordSkips) {
             throw new IllegalStateException(("Saga '%s' instance '%s' is quarantined and cannot skip the input '%s', because its state store cannot write a skip and its record in one atomic write, "
-                                             + "and a skip it does not record is never replayed by a release. The input is not acknowledged, so it is delivered again. "
+                                             + "and a skip it does not record is never replayed by a release. The input is not acknowledged, so it is delivered again. A subscription that delivers an event again before any later one, as a MongoDB subscription does, holds up every later event meanwhile, for every instance of the saga. "
                                              + "Move the saga's data back to a store that records skips, such as MongoDB on a replica set, and release the instance there, or resolve the instance by hand, such as by deleting it from the database.")
                     .formatted(subscriptionId, current.sagaId(), toRecord.key()));
         }

@@ -144,9 +144,9 @@ public final class SagaSubscription implements AutoCloseable {
      * than a release may write. When the store can't take that either, this throws an {@link IllegalStateException} that
      * names the instance and the way out, and logs it as an ERROR.
      * {@code SpringMongoSagaStateStore} refuses an instance that takes more than 16 MiB of BSON, and a write that takes
-     * more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store that keeps the
-     * default of {@code fits} refuses none, so a release on it dispatches the commands of an input whose write the store
-     * then fails.
+     * more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store whose {@code fits}
+     * answers {@code true} to every instance refuses none, so a release on it dispatches the commands of an input whose
+     * write the store then fails.
      * <p>
      * It takes no lease and pauses nothing, so it can be called on any node. Calling it again on an instance that is
      * releasing goes on where the release stands. The timer poller also goes on with a release, on the node that holds
@@ -185,8 +185,9 @@ public final class SagaSubscription implements AutoCloseable {
      *                               store would refuse the write that applies a replayed input after the release
      *                               dispatched its commands. {@code SpringMongoSagaStateStore} throws a
      *                               {@link org.occurrent.dsl.saga.SagaReadRefusedException} inside a MongoDB
-     *                               transaction of the caller's, and the release throws it as it is, before it reads or
-     *                               writes anything
+     *                               transaction of the caller's, and inside a Spring transaction of another resource
+     *                               that synchronizes its resources, as one does by default, and the release throws it
+     *                               as it is, before it reads or writes anything
      * @throws SagaConcurrencyException when the release loses its compare-and-set {@code maxCasAttempts} times in a row,
      *                                  to start the release or to write a replayed input
      */

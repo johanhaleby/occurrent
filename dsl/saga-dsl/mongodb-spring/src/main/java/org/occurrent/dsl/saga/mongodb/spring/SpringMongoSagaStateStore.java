@@ -150,7 +150,10 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * store reads the instance and then its first skipped input at read concern {@code majority}.
  * <p>
  * {@link #findWithFirstSkippedInput} throws a {@link SagaReadRefusedException} inside a MongoDB transaction of the
- * caller's, before it reads anything, so a release can't run in one. A transaction at read concern {@code local} or
+ * caller's, and inside a Spring transaction of another resource that synchronizes its resources, before it reads
+ * anything, so a release can't run in either. In the second a template with {@code SessionSynchronization.ALWAYS} starts
+ * a MongoDB transaction at the release's first write, and the store can't tell how the template synchronizes. A
+ * transaction at read concern {@code local} or
  * {@code majority} on a sharded cluster reads each shard as it is at its own moment, and could return an instance with a
  * record that a later version of it already deleted. The store can't tell the read concern of a transaction it joins,
  * so it refuses one at read concern {@code snapshot} too.
@@ -200,7 +203,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * leave no document behind when the transaction commits, and a change stream on the collection may see them. The
  * collection must accept a document that holds only {@code _id}, so a validator that requires other fields makes such a
  * read of an absent instance fail. In a Spring transaction of another resource where no MongoDB transaction has started,
- * the two methods read as they do outside a transaction, and so does {@link #findWithFirstSkippedInput}.
+ * the two methods read as they do outside a transaction, while {@link #findWithFirstSkippedInput} refuses to read.
  * <p>
  * {@link #findReleasingSagaIds(String, int)} finds the instances that have {@code failureReleasedAt} set. The inputs a
  * quarantined instance skips are stored one document each, in a collection next to the instances named after it with
@@ -249,7 +252,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // A transaction at read concern local or majority on a sharded cluster reads each shard at its own moment, so the
     // instance and its records could come from two. Only snapshot reads every shard at one moment, and the store can't
     // see the read concern of a transaction it joins
-    static final String CALLERS_TRANSACTION_MESSAGE = "SpringMongoSagaStateStore releases a quarantined saga instance outside a MongoDB transaction of the caller's, and was called inside one. "
+    static final String CALLERS_TRANSACTION_MESSAGE = "SpringMongoSagaStateStore releases a quarantined saga instance outside a transaction of the caller's, and was called inside one, a MongoDB transaction or a Spring transaction of another resource, in which a template with SessionSynchronization.ALWAYS starts a MongoDB transaction at the first write. "
                                                       + "A release reads the instance and its first skipped input in a transaction of its own at read concern snapshot, since a transaction at another read concern can read the two from different moments on a sharded cluster. "
                                                       + "Call SagaSubscription.release outside the transaction.";
     private static final String ID = "_id";
@@ -711,7 +714,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        if (MongoDatabaseUtils.isTransactionActive(databaseFactory)) {
+        // A Spring transaction of another resource is refused too, since a template with SessionSynchronization.ALWAYS
+        // starts a MongoDB transaction in it at the release's first write, and the template doesn't say how it
+        // synchronizes. This is the first call of a release, so the refusal comes before it reads or writes anything
+        if (MongoDatabaseUtils.isTransactionActive(databaseFactory) || TransactionSynchronizationManager.isSynchronizationActive()) {
             throw new SagaReadRefusedException(CALLERS_TRANSACTION_MESSAGE);
         }
         Query byId = Query.query(where(ID).is(sagaId));

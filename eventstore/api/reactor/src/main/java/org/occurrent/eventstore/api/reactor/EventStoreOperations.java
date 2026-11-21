@@ -31,6 +31,11 @@ public interface EventStoreOperations {
 
     /**
      * Delete all events and metadata associated with a event stream
+     * <p>
+     * A quarantined saga instance keeps a copy of every event its release replays, outside the event store.
+     * Deleting the stream here leaves those copies in place, so a later release applies the events anyway.
+     * Release or delete the quarantined instances that hold them first. Step 5 of
+     * {@code doc/runbooks/quarantined-saga-instance.md} in the Occurrent repository says how to find them.
      *
      * @param streamId The id of the stream to delete
      */
@@ -38,6 +43,11 @@ public interface EventStoreOperations {
 
     /**
      * Delete a specific cloud event from an event stream
+     * <p>
+     * A quarantined saga instance keeps a copy of every event its release replays, outside the event store.
+     * Deleting the event here leaves that copy in place, so a later release applies the event anyway. Release or
+     * delete the quarantined instances that hold it first. Step 5 of {@code doc/runbooks/quarantined-saga-instance.md}
+     * in the Occurrent repository says how to find them.
      *
      * @param cloudEventId     The id of the cloud event (see {@link CloudEvent#getId()})
      * @param cloudEventSource The source of the cloud event (see {@link CloudEvent#getSource()})
@@ -53,12 +63,22 @@ public interface EventStoreOperations {
      * </pre>
      * <p>
      * This will delete all events in stream "myStream" that has a version less than or equal to 19.
+     * <p>
+     * A quarantined saga instance keeps a copy of every event its release replays, outside the event store.
+     * Deleting events here leaves those copies in place, so a later release applies the events anyway.
+     * Release or delete the quarantined instances that hold them first. Step 5 of
+     * {@code doc/runbooks/quarantined-saga-instance.md} in the Occurrent repository says how to find them.
      */
     Mono<Void> delete(Filter filter);
 
     /**
      * Update a unique cloud event. This is mainly useful as a strategy for complying with e.g. GDPR if you need to
      * remove some attributes that are sensitive.
+     * <p>
+     * A quarantined saga instance keeps a copy of every event its release replays, outside the event store,
+     * and an update here leaves that copy as it was, so a later release applies the event as it was before the update.
+     * Release or delete the quarantined instances that hold it first. Step 5 of
+     * {@code doc/runbooks/quarantined-saga-instance.md} in the Occurrent repository says how to find them.
      *
      * @param cloudEventId     The id of the cloud event (see {@link CloudEvent#getId()})
      * @param cloudEventSource The source of the cloud event (see {@link CloudEvent#getSource()})
