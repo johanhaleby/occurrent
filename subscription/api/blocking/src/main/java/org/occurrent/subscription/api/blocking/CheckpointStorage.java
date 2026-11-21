@@ -208,26 +208,31 @@ public interface CheckpointStorage {
     }
 
     /**
-     * Does what {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion} with the
-     * checkpoint that governs in the same atomic write. A first position stored earlier than {@code candidate} stays
-     * stored, now with {@code writeVersion}, so this never moves the stored position later.
+     * Settles a subscription's first position and stores {@code writeVersion} with it, in one atomic write, so a caller
+     * can ask this before it writes anything. The checkpoint that governs is {@code candidate} when nothing is stored
+     * or the stored first position is later, and the stored checkpoint otherwise, so this never moves a stored
+     * position later. A stored checkpoint this storage can't compare {@code candidate} against, such as one written
+     * for a delivered event, governs as it is and is never overwritten.
      * <p>
      * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
-     * allow it. When the storage holds a newer version, nothing is written and
+     * allow it. When the storage holds a newer version, whatever checkpoint is stored, nothing is written and
      * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
      * <p>
      * The default answers {@link Optional#empty()} and writes nothing, like the default of
      * {@link #resolveFirstCheckpointRace(String, Checkpoint)}. A storage that overrides that method should also
-     * override this three-argument method. A caller that gets an empty answer can only store the version with
-     * {@link #save(String, Checkpoint, CheckpointWriteCondition) save(id, candidate, notOlderThan(writeVersion))},
-     * which writes {@code candidate} over an earlier first position another node stored in between.
+     * override this three-argument method. A caller that gets an empty answer can only write the first position with
+     * {@link CheckpointWriteCondition#ifAbsent()} and then store the version with
+     * {@link #save(String, Checkpoint, CheckpointWriteCondition) save(id, candidate, notOlderThan(writeVersion))}.
+     * When the storage resolves a lost race through {@link #resolveFirstCheckpointRace(String, Checkpoint)}, another
+     * node can store an earlier first position between those two writes, and the second write moves it later again.
      * {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} override both.
      *
-     * @param subscriptionId The id of the subscription whose first position is being contested
+     * @param subscriptionId The id of the subscription whose first position is being settled
      * @param candidate      The position competing to be the subscription's first
      * @param writeVersion   The version to store with the checkpoint that governs
      * @return The checkpoint that governs {@code subscriptionId}'s first position once this call returns, stored with
-     * {@code writeVersion}, or empty when this storage cannot compare the two, and then nothing is written
+     * {@code writeVersion}, or empty when this storage cannot compare {@code candidate} with what it stores, and then
+     * nothing is written
      * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
      *                                                       {@code writeVersion}
      */
