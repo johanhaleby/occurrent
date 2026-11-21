@@ -18,6 +18,7 @@ package org.occurrent.subscription.api.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpointSource;
@@ -28,6 +29,17 @@ import java.util.function.BooleanSupplier;
  * A {@link SubscriptionModel} that produces {@link CheckpointAwareCloudEvent} compatible {@link CloudEvent}'s.
  * This is useful for subscribers that want to persist the checkpoint for a given subscription if the event store doesn't
  * maintain the position for subscriptions.
+ * <p>
+ * A catch-up model that wraps this model can make a subscription's action wait on its delivery thread. The wait lasts
+ * until the action of a replay that a cancel or a stop ended for the same subscription id has returned. An
+ * implementation that calls the actions of several subscriptions on one thread therefore lets one subscription hold
+ * back the others.
+ * <p>
+ * The action a catch-up model gives this model throws {@link AttemptNotMade} without handling the event once a cancel
+ * of the subscription has forgotten it. While the catch-up model shuts down, an action that waits as above throws it a
+ * second after the shutdown began. An implementation should not restart a run whose action threw once its shutdown has
+ * begun. The throw can reach a run it still has open when its shutdown begins more than a second after the catch-up
+ * model's. An implementation must not store its position past an event whose action threw it.
  */
 public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, GlobalCheckpointSource<@Nullable Checkpoint> {
 

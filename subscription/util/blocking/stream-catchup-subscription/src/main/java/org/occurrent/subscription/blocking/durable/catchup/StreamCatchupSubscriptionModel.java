@@ -74,8 +74,23 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * {@code subscribePaused}, {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription},
  * {@code start} or {@code stop}. Its {@code isPaused}, {@code isRunning} and {@code canResumeFrom}, and the
  * {@code subscriptionIds} of its {@link org.occurrent.subscription.api.blocking.IntrospectableSubscriptions} when it
- * has one, must answer truthfully at every moment. What this model does over a wrapped model that breaks either rule
- * is unspecified.
+ * has one, must answer truthfully at every moment. Its {@code cancelSubscription} must not wait for a call to the
+ * subscriber's action that is under way. That call can be waiting for a replay a cancel or a stop ended to return from
+ * the action, and the cancel would then not return before that replay does, or never when that replay's action
+ * cancels the same subscription. Its {@code pauseSubscription} must not wait for such a call without a time limit
+ * either. This model holds a lock that replay needs to return while it calls that method, so such a pause would never
+ * return. Its {@code resumeSubscription} and {@code start} must not call the action from another thread while a call
+ * from before the pause can still be under way. That call can be waiting for such a replay, and both calls would then
+ * reach the action together once the replay returns. The MongoDB subscription models wait for that call with no time
+ * limit on the resumed run's own thread, in {@code ChangeStreamSubscriptions.waitForThePreviousRuns}, and
+ * {@code InMemorySubscriptionModel} calls the action of one subscription from one thread. A later subscribe of the
+ * same id after a cancel is a new subscription there, whose calls can run beside a call of the cancelled one. Since a
+ * cancel doesn't wait, such a call can still be in the action when the cancel returns. This model lets a call reach
+ * the action only while the subscription is still the one subscribed, or while this model shuts down, also when a
+ * replay handed the subscription to the wrapped model once it had caught up. A later subscribe of the same id calls the
+ * action only once every call from before the cancel has returned. A call it doesn't let through throws
+ * {@code AttemptNotMade}, and the wrapped model must not store its position past an event whose action threw. What
+ * this model does over a wrapped model that breaks any of these rules is unspecified.
  */
 @NullMarked
 public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
@@ -173,6 +188,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
     @Override
     protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+        @Nullable Subscribed made = recordOfThisSubscribe(subscriptionId);
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         // Position/time catch-up converts the filter into an Occurrent Filter for the historical query, so only the
         // filter types that wrap a plain Filter are supported here: StreamSubscriptionFilter (stream) and
@@ -188,7 +204,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
                 // Not allowed to start this subscription model, defer to parent
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused, made);
             }
             requestedStartAt = startAtGeneratedByDynamic;
         }
@@ -200,7 +216,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, requestedStartAt), action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, requestedStartAt), action, holdPaused, made);
             }
             // A time position stored by a replay that did not finish resumes that replay, also on a store that
             // writes position, where it runs through the time-ordered catch-up
@@ -210,7 +226,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
         refuseGlobalPositionWithoutPositions(subscriptionId, firstStartAt);
         Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
-                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, liveStart), action, true));
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, liveStart), action, true, made));
         if (heldPaused != null) {
             return heldPaused;
         }
@@ -218,9 +234,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
         if (replay == null) {
             return subscribeLiveUnlessItsStartIsLost(subscriptionId, firstStartAt, holdPaused,
-                    paused -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, paused));
+                    paused -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), goingLiveFrom(startAt, firstStartAt), action, paused, made));
         }
-        return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused));
+        return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused, made));
     }
 
     // A store that writes no position has no global position above 0 to replay after, and the wrapped model refuses to
@@ -275,8 +291,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      * before this while a catch-up for the id is in progress, under the same per-id lock as that catch-up's handover,
      * and a cancelled catch-up doesn't hand over.
      */
-    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused);
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, @Nullable Subscribed made) {
+        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused, made);
     }
 
     // Resolved start kinds for a stream subscription. Classifying once keeps the routing above an exhaustive switch,
@@ -593,39 +609,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     // attempt's events only and still fires when n is larger than a window
     private Predicate<CloudEvent> persistDuringCatchupForOneAttempt() {
         return returnIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false);
-    }
-
-    /**
-     * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the
-     * subscription position for events matching the catch-up persist predicate. The checkpoint is derived once per
-     * event by {@code checkpointAfter}, which differs between the time-based path (time based) and the position path
-     * (global position). The event is delivered with it as a {@link CheckpointAwareCloudEvent}, and it is the one
-     * persisted for the event. {@code persistDuringCatchup} is the attempt's own, so its count runs on across windows.
-     */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup, Function<CloudEvent, Checkpoint> checkpointAfter) {
-        // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
-        // resource-backed read (the Spring Mongo bulk replay wraps a server cursor) does not leak its cursor.
-        try (cloudEvents) {
-            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId));
-            if (cache != null) {
-                // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
-                // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the
-                // handover seam. Without the filter the overlapping re-reads would deliver duplicates.
-                takeWhile = takeWhile.filter(e -> !cache.contains(CatchupEventKey.of(e))).peek(e -> cache.add(CatchupEventKey.of(e)));
-            }
-            takeWhile
-                    .map(e -> new CheckpointAwareCloudEvent(e, checkpointAfter.apply(e)))
-                    .peek(action)
-                    // Rechecked here, not just by takeWhile before action ran: action is caller code and can take
-                    // long enough for this attempt to be superseded while it runs, and persisting a stale attempt's
-                    // position after that would regress a newer attempt's already-more-advanced one, since the
-                    // default write condition is any(). Not shouldKeepReplaying, since the action has completed and a stop or
-                    // a shutdown, also one this same event's action triggered, does not keep its position from being
-                    // stored, and a replay that runs again after a stop starts from there.
-                    .filter(e -> isSafeToPersistFor(subscriptionId))
-                    .filter(e -> persistDuringCatchup.test(e.getOriginalCloudEvent()))
-                    .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> saveCatchupCheckpoint(subscriptionId, cfg, e.getCheckpoint())));
-        }
     }
 
     @Override

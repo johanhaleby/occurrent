@@ -26,6 +26,8 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.functional.CheckedFunction;
+import org.occurrent.retry.AttemptNotMade;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -40,6 +42,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -140,6 +144,88 @@ public class InMemorySubscriptionModelTest {
 
         // Then
         assertThat(handled).describedAs("events delivered to the cancelled subscription").hasSize(1);
+    }
+
+    @Test
+    void a_subscription_goes_on_delivering_after_the_action_withdrew_an_event() throws InterruptedException {
+        // Given
+        CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+        CountDownLatch laterEventsHandled = new CountDownLatch(2);
+        String subscriptionId = UUID.randomUUID().toString();
+        inMemorySubscriptionModel.subscribe(subscriptionId, cloudEvent -> {
+            if (cloudEvent.getId().equals("withdrawn")) {
+                throw new AttemptNotMade("withdrawn");
+            }
+            handled.add(cloudEvent.getId());
+            laterEventsHandled.countDown();
+        }).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        LocalDateTime now = LocalDateTime.now();
+
+        // When
+        inMemoryEventStore.write("1", serialize(new NameDefined("withdrawn", now, "name", "name1")));
+        inMemoryEventStore.write("2", serialize(new NameDefined("later1", now, "name", "name2")));
+        inMemoryEventStore.write("3", serialize(new NameDefined("later2", now, "name", "name3")));
+        laterEventsHandled.await(5, SECONDS);
+
+        // Then
+        assertThat(handled).as("the events the action handled after the one it withdrew").containsExactly("later1", "later2");
+    }
+
+    @Test
+    void a_subscription_that_is_cancelled_while_the_action_withdraws_an_event_ends_its_task_without_an_exception() throws InterruptedException {
+        // Given
+        ObservableDispatcher dispatcher = new ObservableDispatcher();
+        InMemorySubscriptionModel model = new InMemorySubscriptionModel(dispatcher, RetryStrategy.fixed(200));
+        InMemoryEventStore eventStore = new InMemoryEventStore(model);
+        CountDownLatch handlingEvent = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        String subscriptionId = UUID.randomUUID().toString();
+
+        try {
+            model.subscribe(subscriptionId, cloudEvent -> {
+                handlingEvent.countDown();
+                try {
+                    cancelled.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new AttemptNotMade("withdrawn");
+            }).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            eventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            assertThat(handlingEvent.await(5, SECONDS)).as("the event is in the action").isTrue();
+
+            // When
+            model.cancelSubscription(subscriptionId);
+            cancelled.countDown();
+            boolean taskEnded = dispatcher.taskEnded.await(5, SECONDS);
+
+            // Then
+            assertAll(
+                    () -> assertThat(taskEnded).as("the subscription's task ended").isTrue(),
+                    () -> assertThat(dispatcher.thrownByATask).as("what left the subscription's task").isEmpty()
+            );
+        } finally {
+            cancelled.countDown();
+            model.shutdown();
+        }
+    }
+
+    // Records what leaves each task it runs and when one ends
+    private static final class ObservableDispatcher extends ThreadPoolExecutor {
+        final CopyOnWriteArrayList<Throwable> thrownByATask = new CopyOnWriteArrayList<>();
+        final CountDownLatch taskEnded = new CountDownLatch(1);
+
+        ObservableDispatcher() {
+            super(0, Integer.MAX_VALUE, 60, SECONDS, new SynchronousQueue<>());
+        }
+
+        @Override
+        protected void afterExecute(Runnable task, Throwable thrown) {
+            if (thrown != null) {
+                thrownByATask.add(thrown);
+            }
+            taskEnded.countDown();
+        }
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

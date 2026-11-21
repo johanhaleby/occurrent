@@ -19,10 +19,13 @@ package org.occurrent.subscription.inmemory;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -38,9 +41,15 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * An in-memory subscription
+ * <p>
+ * An event whose action throws {@link AttemptNotMade} is dropped, logged at debug, and the subscription goes on to the
+ * next one, since this model keeps no position and delivers no event again. A catch-up model wrapping this one withdraws
+ * an event only once a cancel, a failed subscribe or a shutdown has forgotten the subscription it belongs to.
  */
 @NullMarked
 public class InMemorySubscription implements Subscription, Runnable {
+    private static final Logger log = LoggerFactory.getLogger(InMemorySubscription.class);
+
     private final String id;
     private final BlockingQueue<CloudEvent> queue;
     private final Consumer<CloudEvent> consumer;
@@ -142,6 +151,11 @@ public class InMemorySubscription implements Subscription, Runnable {
             if (cloudEvent != null) {
                 try {
                     executeWithRetry(consumer, __ -> !shutdown, retryStrategy).accept(cloudEvent);
+                } catch (AttemptNotMade withdrawn) {
+                    // A wrapping model withdrew the event, as a catch-up model does once a cancel or shutdown has
+                    // forgotten the subscription. Nothing here stores a position or delivers it again, so the loop
+                    // goes on, and a cancel or shutdown ends it at the next round.
+                    log.debug("Event {} of subscription {} was withdrawn before its action was called: {}", cloudEvent.getId(), id, withdrawn.getMessage());
                 } finally {
                     // In a finally so a handler that exhausts its retries and throws cannot leave the count stuck,
                     // which would hang waitUntilAllEventsProcessed forever.

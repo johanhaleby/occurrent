@@ -172,6 +172,8 @@ other sections compile fine and behave differently, so read them first.
 - [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
   `cancelSubscription(id)` on the blocking `CatchupThenPushSubscriptionModel` still deletes the catch-up marker, but a
   rebuild takes a new subscription id. Compiles unchanged.
+- [A blocking catch-up's cancel and stop wait for a replayed event in the action](#a-blocking-catch-ups-cancel-and-stop-wait-for-a-replayed-event-in-the-action).
+  The call waits up to a second for an action the replay already started, and logs a `WARN` past that. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
   `waitUntilStarted()` fails where 0.34.0 started the subscription from wherever the feed had reached. Over
   `ReactorMongoSubscriptionModel` it fails only when MongoDB's reply to `hello` has no `localTime`, where 0.34.0 didn't
@@ -3877,6 +3879,84 @@ while the function runs.
   returns, and the subscribe still goes ahead.
 
 The code compiles unchanged, and there is no OpenRewrite recipe, because no signature changes. Nothing stored changes.
+
+## A blocking catch-up's cancel and stop wait for a replayed event in the action
+
+In 0.34.0 `cancelSubscription(id)` and `stop()` on the blocking `StreamCatchupSubscriptionModel`,
+`DcbCatchupSubscriptionModel` and `CatchupSubscriptionModel` returned without waiting for a replay that was in the
+subscriber's action, and the replay could hand the action one more event after the call returned. Now the replay lets
+no event through to the action once the call has taken effect, and the call waits up to a second for the action to
+return. See
+[ADR 177](../architecture/decisions/0177-a-lifecycle-call-takes-effect-at-one-instant-as-in-some-serial-order.md).
+
+### Who is affected
+
+Code that cancels or stops a blocking catch-up while it replays history, and whose action waits for something that
+only happens once that cancel or stop has returned. An example is an action that waits on a latch, a lock or a future
+that the thread calling `cancelSubscription(id)` or `stop()` releases afterwards. An action that returns on its own
+only makes the call wait until it has returned.
+
+Also a live subscription model of your own that a catch-up wraps, when its `cancelSubscription` waits for a call to
+the subscriber's action that is under way.
+
+### What changes
+
+* `cancelSubscription(id)` waits up to a second for a call to the action that the replay of `id` already started,
+  before it cancels the subscription in the live delegate and deletes the stored position. When a `stop()` has
+  already parked that replay, the cancel doesn't wait again.
+* With `PersistCheckpointDuringCatchupPhase` configured, `cancelSubscription(id)` also waits for a position store the
+  replay began before the cancel took effect, so that store has returned before the cancel deletes the stored
+  position. That wait has no time limit, and interrupting the thread that cancels doesn't end it. The store goes to
+  the same checkpoint storage as the delete that follows, which had no time limit in 0.34.0 either, so a storage that
+  doesn't answer holds the cancel back until it answers, as it would hold the delete back. With their default
+  `RetryStrategy` the MongoDB and Redis checkpoint storages retry both the store and the delete until the storage
+  answers or is shut down. The wait comes before the cancel in the live delegate, and the delete after it, so when
+  the live delegate's cancel throws, nothing is deleted but the wait has already run. The cancel holds the subscription's claim all that time, so a `subscribe`,
+  `pauseSubscription(id)`, `resumeSubscription(..)` or `cancelSubscription(id)` of the same id on another thread waits
+  up to 10 seconds for it and then throws `IllegalStateException`. A `stop()` waits the same way and throws once it
+  has stopped the model. A pause or a stop doesn't wait for the store. A `resumeSubscription(id, startAt)` that comes after the stop waits up to 10 seconds for that
+  store before it stores the position it was given, and throws `IllegalStateException` when the store takes longer.
+* `stop()` waits up to a second in all for the replays it parks, before the live delegate stops.
+* The public `cancelRunningCatchup(id)` and `stopReplay()` of `StreamCatchupSubscriptionModel` wait the same way.
+* Past the second, the call returns all the same and logs a `WARN` naming the subscription. After a cancel the replay
+  hands the action no further event. After a stop it hands it none until `start(true)` or `resumeSubscription(id)`
+  runs the replay again.
+* A cancel holds the subscription's claim while it waits. A `pauseSubscription(id)`, `cancelSubscription(id)`,
+  `resumeSubscription(id)` or `stop()` that the action of `id` makes on the replay thread while another thread holds
+  that claim throws `IllegalStateException` at once, as in 0.34.0. That can now happen for up to a second longer per
+  cancel.
+* A cancel or a stop made from inside a replay's action doesn't wait for that action. `shutdown()` doesn't wait.
+* A subscribe of an id right after a cancel of it returns at once, as in 0.34.0. Its replay waits on its own thread
+  until the cancelled replay's call to the action has returned, also when a `stop()` came between the cancel and the
+  subscribe.
+* A subscribe that goes straight to the live delegate, such as one with `StartAt.now()`, also returns at once. Each
+  event the live delegate then delivers for it waits on the live delegate's thread, with no time limit, until the
+  cancelled replay's call to the action has returned. An interrupt doesn't end that wait. When the thread's interrupt
+  status was set, the event reaches the action with it clear, and it is set again once the action has returned.
+* A call the live delegate makes for a subscription once its cancel has forgotten it doesn't reach the action, and
+  the action the catch-up gave the live delegate throws `AttemptNotMade` instead. That holds whether the call waited
+  or not, also for a subscription that went live from its replay, and also once the catch-up has begun to shut down.
+  A call for a subscription the catch-up still had when its shutdown began reaches the action. When it waits as above,
+  it does so once the cancelled replay's call has returned, and
+  throws `AttemptNotMade` when that call still runs a second after the shutdown began. A live delegate whose own
+  shutdown hasn't begun by then may still have the run open, and may restart it. An interrupt doesn't end that wait
+  either.
+* The live subscription model a catch-up wraps must not wait, in its `cancelSubscription`, for a call to the action
+  that is under way. That call can be the wait above, so such a cancel returns only once the cancelled replay's
+  action has, and never when that action cancels the same subscription. Its `pauseSubscription` must not wait for such
+  a call without a time limit either. The catch-up holds a lock the cancelled replay needs to return while the live
+  model pauses, so the pause takes as long as the live model's own wait for the action, and the event reaches the
+  action after the pause has returned. It also must not store its position past an event whose action threw
+  `AttemptNotMade`. `InMemorySubscriptionModel` drops such an event and logs it at `DEBUG`.
+
+### What to do
+
+Nothing, unless the action waits for the cancel or the stop to return. Then the call takes a second longer and logs
+the `WARN`. Release what the action waits for before you cancel or stop, or don't make the action wait for the call.
+With `PersistCheckpointDuringCatchupPhase` configured, a cancel also waits for as long as a position store under way
+runs, so give a checkpoint storage that can block a timeout of its own. A live subscription model of your own that a
+catch-up wraps must return from `cancelSubscription` without waiting for a call to the action under way, and must
+not store its position past an event whose action threw `AttemptNotMade`.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 
