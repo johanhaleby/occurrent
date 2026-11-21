@@ -30,6 +30,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.PojoCloudEventData;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -2181,6 +2182,100 @@ class SagaReleaseTest {
                     () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(items()).containsExactly("poison", "a", "b"),
                     () -> assertThat(packed()).extracting(Pack::item).containsExactly("poison", "a", "b")
+            );
+        }
+    }
+
+    @Nested
+    class AReplayedEventThatHoldsAByteArray {
+
+        private CloudEvent withByteArrayExtension(CloudEvent event) {
+            return CloudEventBuilder.v1(event).withExtension("blob", new byte[]{1, 2}).build();
+        }
+
+        private CloudEvent withByteArrayInMapData(ItemAdded item) {
+            Map<String, Object> data = Map.of("eventId", item.eventId(), "orderId", item.orderId(), "item", item.item(), "blob", new byte[]{1, 2});
+            return CloudEventBuilder.v1(added(item.item())).withData(PojoCloudEventData.wrap(data, ignored -> new byte[0])).build();
+        }
+
+        private CloudEventConverter<OrderEvent> readingMapData() {
+            return new CloudEventConverter<>() {
+                @Override
+                public CloudEvent toCloudEvent(OrderEvent domainEvent) {
+                    return converter.toCloudEvent(domainEvent);
+                }
+
+                @Override
+                public OrderEvent toDomainEvent(CloudEvent cloudEvent) {
+                    if (cloudEvent.getData() instanceof PojoCloudEventData<?> pojo && pojo.getValue() instanceof Map<?, ?> map) {
+                        return new ItemAdded((String) map.get("eventId"), (String) map.get("orderId"), (String) map.get("item"));
+                    }
+                    return converter.toDomainEvent(cloudEvent);
+                }
+
+                @Override
+                public String getCloudEventType(Class<? extends OrderEvent> type) {
+                    return converter.getCloudEventType(type);
+                }
+            };
+        }
+
+        private void assertThatARepeatedlyFailingReleaseRunsOutOfItsBudget(SagaExecution<OrderEvent, Order, OrderCommand> releasing) {
+            Instant releasedAt = start.plus(Duration.ofHours(1));
+            now.set(releasedAt);
+            ReleaseResult first = releasing.release(ORDER);
+            SagaFailure afterTheFirst = instance().failure();
+            now.set(releasedAt.plus(BUDGET));
+
+            ReleaseResult second = releasing.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(first).isEqualTo(ReleaseResult.STILL_RELEASING),
+                    () -> assertThat(afterTheFirst.releasedAt()).as("the failure recorded by the first release").isEqualTo(releasedAt),
+                    () -> assertThat(second).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(instance().failure().releasedAt()).isNull()
+            );
+        }
+
+        @Test
+        void a_release_that_fails_every_time_on_an_event_with_a_byte_array_extension_runs_out_of_its_budget_and_is_quarantined_again() {
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(withByteArrayExtension(added("poison")));
+
+            assertThatARepeatedlyFailingReleaseRunsOutOfItsBudget(execution);
+        }
+
+        @Test
+        void a_release_that_fails_every_time_on_an_event_with_a_byte_array_in_its_map_data_runs_out_of_its_budget_and_is_quarantined_again() {
+            deliver(placed());
+            failing.add("poison");
+            SagaExecution<OrderEvent, Order, OrderCommand> readingMaps = new SagaExecution<>("orders", saga(), store, dispatched::add, readingMapData(), CONFIG, now::get);
+            CloudEvent poison = withByteArrayInMapData(new ItemAdded(nextEventId(), ORDER, "poison"));
+            assertThatThrownBy(() -> readingMaps.onCloudEvent(poison)).isInstanceOf(IllegalStateException.class);
+            now.set(now.get().plus(BUDGET));
+            catchThrowable(() -> readingMaps.onCloudEvent(poison));
+            assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED);
+
+            assertThatARepeatedlyFailingReleaseRunsOutOfItsBudget(readingMaps);
+        }
+
+        @Test
+        void a_write_lost_only_to_a_skip_is_written_again_and_the_reaction_dispatched_once_when_the_replayed_event_has_a_byte_array_extension() {
+            deliver(placed());
+            failing.add("poison");
+            quarantineOn(withByteArrayExtension(added("poison")));
+            failing.clear();
+            CloudEvent live = added("live");
+            store.beforeNextStateWrite(() -> deliver(live));
+
+            ReleaseResult result = execution.release(ORDER);
+
+            assertAll(
+                    () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
+                    () -> assertThat(dispatched).containsOnlyOnce(new Pack(ORDER, "poison")),
+                    () -> assertThat(items()).containsExactly("poison", "live")
             );
         }
     }

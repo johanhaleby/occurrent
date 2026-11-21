@@ -814,7 +814,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 }
             } catch (Throwable failure) {
                 rethrowIfNotTheInstances(failure);
-                return recordReleaseFailure(records, sagaId, record, meta, failure, now);
+                return recordReleaseFailure(records, sagaId, quarantineId, record, meta, failure, now);
             }
             if (deleteTooLarge) {
                 // The instance applied the record's input already, so quarantining it again on that input is not an option
@@ -923,7 +923,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             SagaEnvelope<S> after = envelopes.find(sagaId).orElse(null);
             if (after == null || !SagaExecutionSupport.differsOnlyByRecordedSkips(basis, after)
-                || !records.findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
+                || !isFirstRecord(records, sagaId, quarantineId, record)) {
                 return false;
             }
             envelope = SagaExecutionSupport.rebased(envelope, after);
@@ -954,7 +954,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Record that the record a release was applying failed, the way any failure is recorded, and say what that left. The
     // instance stays releasing until the input's budget runs out, and is quarantined on it again then. With quarantine
     // off there is no budget, so the release stays on the input until it succeeds.
-    private SagaSubscription.ReleaseResult recordReleaseFailure(SagaStateStoreSkippedInputs records, String sagaId, SkippedInput record, EventMeta meta, Throwable failure, Instant now) {
+    private SagaSubscription.ReleaseResult recordReleaseFailure(SagaStateStoreSkippedInputs records, String sagaId, String quarantineId, SkippedInput record,
+                                                                EventMeta meta, Throwable failure, Instant now) {
         Duration quarantineAfter = config.quarantineAfter().orElse(ChronoUnit.FOREVER.getDuration());
         try {
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
@@ -962,8 +963,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 if (current == null) {
                     return SagaSubscription.ReleaseResult.NOT_FOUND;
                 }
-                String quarantineId = current.quarantineId();
-                if (quarantineId == null || !records.findSkippedInputs(sagaId, quarantineId, 1).equals(List.of(record))) {
+                if (!quarantineId.equals(current.quarantineId()) || !isFirstRecord(records, sagaId, quarantineId, record)) {
                     SagaSubscription.ReleaseResult moved = resultUnlessReleasing(envelopes.findWithoutState(sagaId).orElse(null));
                     if (moved != null) {
                         logMovedOn(sagaId, record, moved, failure);
@@ -1008,6 +1008,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         log.warn("Saga '{}' instance '{}' failed on the event '{}' while it was releasing. It stays releasing, and the timer poller tries the event again.",
                 subscriptionId, sagaId, record.key(), failure);
         return SagaSubscription.ReleaseResult.STILL_RELEASING;
+    }
+
+    // Whether record is still the first record under quarantineId. Matched by seq and key, not by the event, since a store
+    // reads a record back as a new event and a byte array in it never equals the one read before
+    private static boolean isFirstRecord(SagaStateStoreSkippedInputs records, String sagaId, String quarantineId, SkippedInput record) {
+        List<SkippedInput> first = records.findSkippedInputs(sagaId, quarantineId, 1);
+        return !first.isEmpty() && first.getFirst().seq() == record.seq() && first.getFirst().key().equals(record.key());
     }
 
     private void logMovedOn(String sagaId, SkippedInput record, SagaSubscription.ReleaseResult result, Throwable failure) {

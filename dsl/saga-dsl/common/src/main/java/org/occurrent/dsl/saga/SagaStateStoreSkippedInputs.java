@@ -110,6 +110,10 @@ public interface SagaStateStoreSkippedInputs {
      * {@link SagaEnvelope#quarantineSkipCount()} in the write that records the input, with the count it read as the
      * record's {@code seq}. A skip of a key that has a record already leaves that record as it is, so its count goes
      * unused and leaves a gap in the numbers. The order by {@code key} keeps the order the same on every read.
+     * <p>
+     * A release tells one record from another by its quarantine id, {@code seq} and {@code key}, and never compares
+     * events. So a read can return a new event every time, decoded or copied, even though a byte array in it never
+     * equals the byte array of an earlier read.
      *
      * @param limit how many records to return at most, at least 1
      */

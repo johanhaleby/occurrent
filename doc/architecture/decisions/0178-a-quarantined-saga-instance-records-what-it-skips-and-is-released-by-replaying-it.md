@@ -261,6 +261,12 @@ Release counts a held event's failure under the key the event was recorded under
 input, and on the stream marks when the event has a stream id and version. A failure while releasing replaces the
 failure record differently from a live one, see point 5.
 
+Before release writes that failure, it checks that the record it replayed is still the first record of the quarantine.
+It compares the quarantine id, the `seq` and the key, and never the event. `InMemorySagaStateStore` and
+`SpringMongoSagaStateStore` both read a record back as a new event, and a byte array in an extension or in the data
+equals no byte array of an earlier read. Comparing events would find the record changed on every attempt, so release
+would never write the failure, the input's budget would never run out, and the instance would stay releasing for good.
+
 An input that arrives live while the instance is releasing reaches the quarantined skip and is recorded. The skip's
 write changes the instance's version together with the record, so a release that read the records before the record
 existed loses its `ACTIVE` write, reads again, and finds the new record. When the skip's write loses instead, because

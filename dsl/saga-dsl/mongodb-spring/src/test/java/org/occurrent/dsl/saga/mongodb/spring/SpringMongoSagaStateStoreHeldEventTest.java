@@ -245,6 +245,33 @@ class SpringMongoSagaStateStoreHeldEventTest {
     }
 
     @Test
+    void a_release_that_fails_every_time_on_a_held_event_with_a_byte_array_extension_runs_out_of_its_budget_and_quarantines_the_instance_again() {
+        subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, converter)
+                .run("orders", saga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
+        write(new OrderPlaced(ORDER));
+        failing.add("book");
+        eventStore.write(STREAM, List.of(CloudEventBuilder.v1(converter.toCloudEvent(new ItemAdded(ORDER, "book", 2))).withExtension("blob", new byte[]{1, 2}).build()));
+        await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED));
+        write(new ItemAdded(ORDER, "pen", 5));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(held()).hasSize(2));
+        assertThat(held().getFirst().event().getExtension("blob")).as("the held event keeps its byte array extension").isEqualTo(new byte[]{1, 2});
+
+        AtomicReference<ReleaseResult> whileFailing = new AtomicReference<>();
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            whileFailing.set(subscription.release(ORDER));
+            assertThat(whileFailing.get()).as("the held event kept failing past its budget").isEqualTo(ReleaseResult.QUARANTINED_AGAIN);
+        });
+        failing.clear();
+        ReleaseResult afterItWasFixed = subscription.release(ORDER);
+
+        assertAll(
+                () -> assertThat(afterItWasFixed).isEqualTo(ReleaseResult.RELEASED),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(dispatched).containsExactly(new Pack("book", 2), new Pack("pen", 5))
+        );
+    }
+
+    @Test
     void a_13_MiB_binary_event_quarantines_the_instance_it_fails_on_and_stalls_neither_the_subscription_nor_the_release() {
         byte[] data = new byte[13 * 1024 * 1024];
         new Random(7).nextBytes(data);
