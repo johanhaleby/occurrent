@@ -978,9 +978,8 @@ instances, each poll logs a `WARN` and tries again. The runbook covers what is l
 `SagaCodec` stores a release in three fields, `failureReleasedAt`, `failureQuarantineId` and `quarantineSkipCount`,
 which `SpringMongoSagaStateStore` writes as top-level fields of the instance's document. The skipped inputs are documents in a collection
 of their own, named after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the
-input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key`, `event` and `data`. `event` holds the
-event's attributes and extensions as a CloudEvents JSON string, and `data` the bytes its data was delivered
-with, in BSON binary, so a release reads back the same bytes. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id, the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it. A document 0.34.0 wrote has none of these fields, and reads as an instance
+input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`, `dataDocument` and
+`data` when the event has them. `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions with their types. BSON keeps a string, an `Integer`, a `Long`, a `Double`, a `Boolean` and bytes as they are, and a URI, a timestamp and any other number are stored with a tag that names the type. Data delivered as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON. Other data, and a map with a value BSON reads back as another value, such as a `BigDecimal`, is held in `data` as its bytes in BSON binary. A release hands the converter the data the way the delivery did, a map as a map and bytes as bytes, and the extensions with the values and types they had. MongoDB stores at most 16 MiB in a record, and the record holds the attributes, the saga id, the quarantine id and the key beside the data, so an event whose data comes that close to 16 MiB doesn't fit. A map from another feed, such as one a Jackson converter built, is held both as a document and as its bytes, so it fits only up to about half that. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it. A document 0.34.0 wrote has none of these fields, and reads as an instance
 that is not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga
 collection whose name ends in `_skipped_inputs`, because a store on the name without that suffix would keep its skipped
 inputs in the same collection. Rename such a collection before you upgrade.
@@ -1002,9 +1001,9 @@ quarantine on whose `SagaStateStore` bean doesn't implement it fails at startup 
 interface and `occurrent.saga.quarantine-enabled=false`.
 
 A store that implements it keeps the skipped inputs, each with its event, and returns the event from
-`findSkippedInputs`. An extension can come back with another type than it was given, and `SpringMongoSagaStateStore`,
-which stores the event's extensions as CloudEvents JSON, returns a number that isn't an `Integer`, such as a `Long`, and a URI, a timestamp or a binary
-extension as a `String`. Apart from `delete(sagaId)`, it changes the records only in three
+`findSkippedInputs`. A release converts the event again, so a store returns its extensions with the values and types
+they were delivered with, and data a converter read as a map as a map. `SpringMongoSagaStateStore` returns a number
+extension that isn't an `Integer`, a `Long` or a `Double` as a `BigDecimal`. Apart from `delete(sagaId)`, it changes the records only in three
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
 conflict returns `false` and writes neither. `compareAndSaveReplayed` also returns `false` and writes neither when

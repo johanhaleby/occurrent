@@ -35,12 +35,16 @@ import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.BSONException;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.RawBsonDocument;
+import org.bson.codecs.Codec;
+import org.bson.codecs.configuration.CodecConfigurationException;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.conversions.Bson;
 import org.bson.types.Binary;
@@ -77,9 +81,12 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -236,6 +243,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String SKIPPED_KEY = "key";
     private static final String SKIPPED_EVENT = "event";
     private static final String SKIPPED_DATA = "data";
+    private static final String SKIPPED_DATA_DOCUMENT = "dataDocument";
+    private static final String SKIPPED_EXTENSIONS = "extensions";
+    private static final String EXTENSION_TYPE = "type";
+    private static final String EXTENSION_VALUE = "value";
+    private static final String EXTENSION_URI = "uri";
+    private static final String EXTENSION_TIMESTAMP = "timestamp";
+    private static final String EXTENSION_NUMBER = "number";
 
     /**
      * How many times a read or a write calls MongoDB before it gives up, 10, the same number
@@ -655,33 +669,138 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private static SkippedInput toSkippedInput(Document document) {
-        CloudEvent event = CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8));
-        Object data = document.get(SKIPPED_DATA);
-        if (data != null) {
-            event = CloudEventBuilder.from(event).withData(data instanceof Binary binary ? binary.getData() : (byte[]) data).build();
+        CloudEventBuilder event = CloudEventBuilder.from(CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8)));
+        Document extensions = document.get(SKIPPED_EXTENSIONS, Document.class);
+        if (extensions != null) {
+            extensions.forEach((name, value) -> withHeldExtension(event, name, value));
         }
-        return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY), event);
+        Object data = document.get(SKIPPED_DATA);
+        byte[] bytes = data == null ? null : data instanceof Binary binary ? binary.getData() : (byte[]) data;
+        Document dataDocument = document.get(SKIPPED_DATA_DOCUMENT, Document.class);
+        if (dataDocument != null) {
+            byte[] delivered = bytes == null ? dataDocument.toJson().getBytes(StandardCharsets.UTF_8) : bytes;
+            event.withData(PojoCloudEventData.wrap(dataDocument, value -> delivered));
+        } else if (bytes != null) {
+            event.withData(bytes);
+        }
+        return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY), event.build());
     }
 
-    // The event's attributes and extensions as CloudEvents JSON, so they read back with the types the event had, and its
-    // data as the bytes it was delivered with, in BSON binary. Base64 inside the JSON would grow binary data by a third,
-    // and parsing JSON data into a document would read a field such as $numberLong as MongoDB Extended JSON and change it
-    private static Document heldEvent(CloudEvent event) {
-        Document held = new Document(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(CloudEventBuilder.from(event).withoutData().build()), StandardCharsets.UTF_8));
+    // The event's attributes as CloudEvents JSON, its extensions with their types, and its data the way a converter read
+    // it when it was delivered. Data delivered as a map, which is how the MongoDB event store delivers a JSON object, is
+    // held as a document, so a release hands the converter a map with the same values. Its bytes are held beside it unless
+    // they are the document's own JSON. Other data is held as its bytes, in BSON binary, which keeps binary data at its
+    // own size
+    private static Document heldEvent(CloudEvent event, CodecRegistry codecs) {
+        CloudEventBuilder attributes = CloudEventBuilder.from(event).withoutData();
+        Document extensions = new Document();
+        for (String name : event.getExtensionNames()) {
+            extensions.append(name, heldExtension(Objects.requireNonNull(event.getExtension(name))));
+            attributes.withoutExtension(name);
+        }
+        Document held = new Document(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(attributes.build()), StandardCharsets.UTF_8));
+        if (!extensions.isEmpty()) {
+            held.append(SKIPPED_EXTENSIONS, extensions);
+        }
         CloudEventData data = event.getData();
-        if (data != null) {
-            held.append(SKIPPED_DATA, data.toBytes());
+        if (data == null) {
+            return held;
+        }
+        byte[] bytes = data.toBytes();
+        Document document = data instanceof PojoCloudEventData<?> pojo && pojo.getValue() instanceof Map<?, ?> map ? throughBson(map, codecs) : null;
+        if (document == null) {
+            return held.append(SKIPPED_DATA, bytes);
+        }
+        held.append(SKIPPED_DATA_DOCUMENT, document);
+        if (!Arrays.equals(bytes, document.toJson().getBytes(StandardCharsets.UTF_8))) {
+            held.append(SKIPPED_DATA, bytes);
         }
         return held;
+    }
+
+    // The map as BSON reads it back, or null when a key isn't a string, BSON cannot encode a value, or a value reads back
+    // as another one, such as a BigDecimal, which reads back as a Decimal128
+    private static @Nullable Document throughBson(Map<?, ?> map, CodecRegistry codecs) {
+        Document original = new Document();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) {
+                return null;
+            }
+            original.put(key, entry.getValue());
+        }
+        Codec<Document> codec = codecs.get(Document.class);
+        try {
+            Document decoded = new RawBsonDocument(original, codec).decode(codec);
+            return original.equals(decoded) ? decoded : null;
+        } catch (CodecConfigurationException | BSONException e) {
+            return null;
+        }
+    }
+
+    // BSON keeps a string, an Integer, a Long, a Double, a Boolean and bytes as they are. A URI, a timestamp and any
+    // other number are tagged with their type, since BSON would read them back as other types
+    private static Object heldExtension(Object value) {
+        return switch (value) {
+            case String string -> string;
+            case Integer integer -> integer;
+            case Long number -> number;
+            case Double number -> number;
+            case Boolean bool -> bool;
+            case byte[] bytes -> bytes;
+            case URI uri -> taggedExtension(EXTENSION_URI, uri.toString());
+            case OffsetDateTime time -> taggedExtension(EXTENSION_TIMESTAMP, time.toString());
+            case Number number -> isDecimal(number.toString()) ? taggedExtension(EXTENSION_NUMBER, number.toString()) : number.doubleValue();
+            default -> value.toString();
+        };
+    }
+
+    private static Document taggedExtension(String type, String value) {
+        return new Document(EXTENSION_TYPE, type).append(EXTENSION_VALUE, value);
+    }
+
+    private static boolean isDecimal(String number) {
+        try {
+            new BigDecimal(number);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private static void withHeldExtension(CloudEventBuilder event, String name, Object value) {
+        switch (value) {
+            case String string -> event.withExtension(name, string);
+            case Number number -> event.withExtension(name, number);
+            case Boolean bool -> event.withExtension(name, bool);
+            case Binary binary -> event.withExtension(name, binary.getData());
+            case byte[] bytes -> event.withExtension(name, bytes);
+            case Document tagged -> {
+                String tag = tagged.getString(EXTENSION_VALUE);
+                switch (tagged.getString(EXTENSION_TYPE)) {
+                    case EXTENSION_URI -> event.withExtension(name, URI.create(tag));
+                    case EXTENSION_TIMESTAMP -> event.withExtension(name, OffsetDateTime.parse(tag));
+                    case EXTENSION_NUMBER -> event.withExtension(name, new BigDecimal(tag));
+                    default -> throw new IllegalStateException("Extension '" + name + "' of a skipped input has the unknown type '" + tagged.getString(EXTENSION_TYPE) + "'");
+                }
+            }
+            default -> throw new IllegalStateException("Extension '" + name + "' of a skipped input has a value of the unknown type " + value.getClass().getName());
+        }
     }
 
     /**
      * {@inheritDoc}
      * <p>
-     * The record holds the event's attributes and extensions as a CloudEvents JSON string and its data as the bytes it
-     * was delivered with, in BSON binary, so a release reads back the same data bytes. MongoDB stores at most 16 MiB in
-     * the record, and the record holds the saga id, the quarantine id, the key and the attributes beside the data, so an
-     * event whose data comes that close to 16 MiB doesn't fit. This then throws an {@link IllegalStateException} that
+     * The record holds the event's attributes as a CloudEvents JSON string and its extensions with their types. A
+     * number extension that isn't an {@code Integer}, a {@code Long} or a {@code Double} reads back as a
+     * {@code BigDecimal}. Data delivered as a map, which is how the MongoDB event store delivers a JSON object, is held as
+     * a document, with its bytes beside it unless they are the document's own JSON, and a release hands the converter a
+     * map with the same values and the same bytes. Other data, and a map with a value BSON reads back as another value,
+     * such as a {@code BigDecimal}, is held as its bytes in BSON binary.
+     * <p>
+     * MongoDB stores at most 16 MiB in the record, and the record holds the saga id, the quarantine id, the key and the
+     * attributes beside the data, so an event whose data comes that close to 16 MiB doesn't fit. A map from another feed
+     * than the MongoDB event store is held both as a document and as its bytes, so it fits only up to about half that.
+     * This then throws an {@link IllegalStateException} that
      * names the instance and the input, before it writes anything. A subscription that retries the event stops on it.
      */
     @Override
@@ -697,7 +816,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     : database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), withoutState(saga)).getMatchedCount() > 0;
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
             Document held = new Document(SKIPPED_SEQ, input.seq());
-            held.putAll(heldEvent(input.event()));
+            held.putAll(heldEvent(input.event(), skippedInputs(databaseFactory.getMongoDatabase()).getCodecRegistry()));
             // Set on insert, so a record of the key keeps its first seq and event
             Document record = new Document("$setOnInsert", held);
             refuseTooLargeRecord(saga.sagaId(), input.key(), filter, record);
@@ -775,8 +894,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (storedSize > MAX_DOCUMENT_SIZE || statementSize > MAX_STATEMENT_SIZE) {
             throw new IllegalStateException("Saga instance '" + sagaId + "' cannot record the input '" + key + "' it skips. Its record takes "
                     + storedSize + " bytes of BSON, where MongoDB stores at most " + MAX_DOCUMENT_SIZE + ", and the write that sends it takes "
-                    + statementSize + " bytes, where the driver sends at most " + MAX_STATEMENT_SIZE + ". The record holds the event's data as "
-                    + "its bytes, together with its attributes, the saga id, the quarantine id and the key, so data that close to "
+                    + statementSize + " bytes, where the driver sends at most " + MAX_STATEMENT_SIZE + ". The record holds the event's data "
+                    + "together with its attributes, the saga id, the quarantine id and the key, so data that close to "
                     + "MongoDB's limit leaves no room for them. Nothing is written for the input.");
         }
     }

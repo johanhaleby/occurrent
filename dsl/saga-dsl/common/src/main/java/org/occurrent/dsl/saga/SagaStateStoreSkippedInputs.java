@@ -29,10 +29,9 @@ import java.util.List;
  * Call {@code SagaRunnerConfig.disableQuarantine()} to run a saga on such a store.
  * <p>
  * A store persists the {@link SkippedInput#event() event} of a record with it and returns it from
- * {@link #findSkippedInputs(String, String, int)}, for a release to replay. An extension can come back with another
- * type than it was given. {@code SpringMongoSagaStateStore} stores the event as CloudEvents JSON, which reads a number that
- * is not an {@code Integer}, such as a {@code Long}, and a URI, a timestamp or a binary extension back as a
- * {@code String}. The saga keeps no other copy of a skipped event.
+ * {@link #findSkippedInputs(String, String, int)}, for a release to replay. A release converts the event again, so a
+ * store returns its extensions with the values and types they were delivered with, and data a converter read as a map
+ * as a map with the same values. The saga keeps no other copy of a skipped event.
  * <p>
  * Every write of a record is one of the three {@code compareAndSave} methods here, and each writes the instance and its
  * records together, in one atomic write. The instance is saved only when its stored version is the expected one, and
