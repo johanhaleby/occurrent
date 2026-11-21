@@ -4816,8 +4816,39 @@ class ReactiveHandoverTest {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(captured.errors()).singleElement()
                     .satisfies(error -> assertThat(error.getFormattedMessage())
                             .startsWith("A catch-up of this test payload failed, since the checkpoint stored under its id is not a catch-up marker.")
-                            .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+                            .endsWith(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                            .doesNotContain(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
         }
+    }
+
+    @Test
+    void a_live_event_offered_after_a_catch_up_failed_on_a_checkpoint_that_is_not_a_catch_up_marker_is_refused_asking_for_a_cancel_only_when_nothing_else_uses_the_checkpoint() {
+        Throwable notAMarker = catchThrowable(() -> CatchupMarkers.positionOf("proj", new StringBasedCheckpoint("resume-token-xyz")));
+        ReactiveHandover<String, String> handover = handoverFolding(CatchupThenLiveOptions.defaults(), (self, payload) -> Mono.error(notAMarker));
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectError().verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.accept("L1"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.catchUpFailedOnANonMarker("test payload"))
+                        .hasMessageNotContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasCause(notAMarker))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void a_live_event_offered_after_a_catch_up_failed_on_anything_else_is_refused_asking_for_a_cancel() {
+        IllegalStateException unrelated = new IllegalStateException("not a marker, but not that refusal either");
+        ReactiveHandover<String, String> handover = handoverFolding(CatchupThenLiveOptions.defaults(), (self, payload) -> Mono.error(unrelated));
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectError().verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.accept("L1"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.catchUpFailed("test payload"))
+                        .hasMessageNotContaining(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasCause(unrelated))
+                .verify(Duration.ofSeconds(5));
     }
 
     @Test

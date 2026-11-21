@@ -249,7 +249,8 @@ class CatchupProjectionFeedResumePositionTest {
 
         Throwable failure = catchThrowable(() -> feed(new RecordingReplayAwareView()).catchUp().block(TIMEOUT));
 
-        assertThat(failure).hasMessageContaining("\"counter\"").hasMessageContaining("subscribe under a new id").hasMessageContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(failure).hasMessageContaining("\"counter\"").hasMessageContaining("Subscribe under a new id").hasMessageContaining(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     @Test
@@ -313,8 +314,8 @@ class CatchupProjectionFeedResumePositionTest {
         ordered.save("counter", new StringBasedCheckpoint("resume-token-xyz")).block(TIMEOUT);
         releaseThirdRead.complete(null);
         assertThat(catchThrowable(() -> reading.get(5, TimeUnit.SECONDS))).as("the catch-up that read the foreign checkpoint")
-                .hasStackTraceContaining("subscribe under a new id")
-                .hasStackTraceContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasStackTraceContaining("Subscribe under a new id")
+                .hasStackTraceContaining(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
         // A catch-up marker is stored by the time the catch-up that delivers live forgets.
         ordered.save("counter", GlobalCheckpoint.of(2)).block(TIMEOUT);
         releaseFirstDelete.complete(null);
@@ -338,8 +339,8 @@ class CatchupProjectionFeedResumePositionTest {
 
         // Reads the foreign checkpoint and refuses it. The handover then forgets for it and for the catch-up that delivers live.
         assertThat(catchThrowable(() -> feed.catchUp().block(TIMEOUT))).as("the catch-up that read the foreign checkpoint")
-                .hasStackTraceContaining("subscribe under a new id")
-                .hasStackTraceContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasStackTraceContaining("Subscribe under a new id")
+                .hasStackTraceContaining(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
 
         assertThat(marker.read("counter").blockOptional(TIMEOUT))
                 .as("checkpoint under the id once the catch-up that delivers live forgot, which read a marker itself")

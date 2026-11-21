@@ -71,6 +71,32 @@ class HistoryLossMessagesTest {
     }
 
     @Test
+    void the_refusal_to_resume_an_unnamed_subscription_does_not_mention_a_checkpoint_several_instances_share() {
+        assertThat(HistoryLossMessages.historyLost(null, CHECKPOINT)).hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
+    void the_refusal_to_resume_an_unnamed_subscription_whose_live_start_was_lost_does_not_mention_a_checkpoint_several_instances_share() {
+        assertThat(HistoryLossMessages.liveStartLostOnResume(null, CHECKPOINT)).hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
+    void the_refusal_to_start_a_named_subscription_from_a_checkpoint_says_to_delete_a_stored_checkpoint_first_and_how_to_change_it_when_several_instances_run_it() {
+        assertThat(HistoryLossMessages.cannotStartFrom("id", CHECKPOINT))
+                .hasMessageContaining(" If the checkpoint is the one stored for the subscription, delete it first. Start the subscription from the beginning,")
+                .hasMessageEndingWith(" " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
+    void the_refusal_to_start_an_unnamed_subscription_from_a_checkpoint_has_no_stored_checkpoint_to_delete_and_no_shared_checkpoint_step() {
+        assertThat(HistoryLossMessages.cannotStartFrom(null, CHECKPOINT))
+                .hasMessageContaining("Cannot start catch-up subscription (unnamed) from checkpoint")
+                .hasMessageNotContaining("delete it first")
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageEndingWith("that the subscription model still has the history back to.");
+    }
+
+    @Test
     void the_refusal_to_resume_a_subscription_whose_live_start_was_lost_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
         assertThat(HistoryLossMessages.liveStartLostOnResume("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }

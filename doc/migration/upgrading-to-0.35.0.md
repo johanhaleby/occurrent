@@ -3090,7 +3090,9 @@ The instance that starts first runs the subscription from that start, and what i
 every instance. An instance that starts once the first one has stored its checkpoint or marker finds it, and resumes
 after it or skips its replay. The store already has those events from the first instance. On the reactive starter and
 for `source = PUSH`, an instance that starts before that runs from the same start too, so the store gets those events
-from more than one instance, as on any start that finds nothing stored.
+from more than one instance, as on any start that finds nothing stored. Deleting the checkpoint of a subscription that
+starts at the present loses the events since that checkpoint, even with every instance stopped, because the first
+instance finds nothing stored and starts at the present.
 
 When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
 instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its
@@ -4407,9 +4409,9 @@ What you see:
 - A catch-up that reads a checkpoint stored under the subscription id takes it as its marker. When something other
   than a catch-up stored it, such as a durable subscription that used the id before it moved to `source = PUSH`, and
   it is not a position, that catch-up fails with an `IllegalStateException` that names the id. 0.34.0 took any stored
-  checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint with every instance stopped and
-  start them all again with the same start, or subscribe under a new id. Under a new id the subscription starts from
-  the beginning of the history and repeats everything its handler does, the records it writes, the commands it
+  checkpoint as a finished catch-up and skipped the replay. Subscribe under a new id, or, when nothing else uses that
+  checkpoint, delete it with every instance stopped and start them all again with the same start. Under a new id the
+  subscription starts from the beginning of the history and repeats everything its handler does, the records it writes, the commands it
   dispatches and the messages it sends. Stop every instance on the old id before the first one on the new id starts.
   Stopping them doesn't prevent the repeats. With more than one instance, what else a new id needs depends on where
   each instance keeps what it builds and which broker queue or consumer group it consumes.

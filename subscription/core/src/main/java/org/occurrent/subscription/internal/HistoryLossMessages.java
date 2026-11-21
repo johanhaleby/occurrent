@@ -73,12 +73,16 @@ public final class HistoryLossMessages {
 
     /**
      * Refuses to go live from {@code checkpoint}, a position the subscription model no longer has the history back to,
-     * before anything is read. {@code subscriptionId} only names the subscription, and may be null.
+     * before anything is read. {@code subscriptionId} only names the subscription, and may be null. For a named
+     * subscription the refused checkpoint can be the one stored for it, which a start that defers to the subscription
+     * model default reads again, so the message says to delete it first.
      */
     public static CatchupCannotResumeException cannotStartFrom(@Nullable String subscriptionId, Checkpoint checkpoint) {
         return new HistoryLost(checkpoint, true, "Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
                 + "\", because the subscription model no longer has the history back to it, and starting from anywhere later would skip the events in between."
-                + " Start the subscription from the beginning, or from another checkpoint the application kept that the subscription model still has the history back to.");
+                + (subscriptionId == null ? "" : " If the checkpoint is the one stored for the subscription, delete it first.")
+                + " Start the subscription from the beginning, or from another checkpoint the application kept that the subscription model still has the history back to."
+                + whenSeveralInstancesRunIt(subscriptionId));
     }
 
     /**
@@ -88,7 +92,7 @@ public final class HistoryLossMessages {
     public static CatchupCannotResumeException historyLost(@Nullable String subscriptionId, Checkpoint lostFrom) {
         return new HistoryLost(lostFrom, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
                 + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
-                + " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                + whenSeveralInstancesRunIt(subscriptionId));
     }
 
     /**
@@ -101,7 +105,7 @@ public final class HistoryLossMessages {
         return new HistoryLost(liveStart, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + liveStart.asString()
                 + "\", the live start its replay would go live from, and resuming from anywhere later would skip the events its replay hadn't delivered, which can start before that live start."
                 + " Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
-                + " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                + whenSeveralInstancesRunIt(subscriptionId));
     }
 
     /**
@@ -152,5 +156,10 @@ public final class HistoryLossMessages {
 
     private static String name(@Nullable String subscriptionId) {
         return subscriptionId == null ? "(unnamed)" : subscriptionId;
+    }
+
+    // An unnamed Flux stores no checkpoint, so only a named subscription has one that several instances share
+    private static String whenSeveralInstancesRunIt(@Nullable String subscriptionId) {
+        return subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 }

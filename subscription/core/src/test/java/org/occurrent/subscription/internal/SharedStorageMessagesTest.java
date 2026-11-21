@@ -47,6 +47,15 @@ class SharedStorageMessagesTest {
     }
 
     @Test
+    void the_step_for_a_checkpoint_that_is_not_a_marker_keeps_the_condition_that_nothing_else_uses_it_and_never_asks_for_an_unconditional_delete() {
+        assertThat(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .isEqualTo("When nothing else uses that checkpoint and more than one instance runs the subscription, stop every instance, delete the checkpoint,"
+                        + " and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.")
+                .startsWith("When nothing else uses that checkpoint and more than one instance runs the subscription, stop every instance,")
+                .isNotEqualTo(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
     void the_step_for_a_new_id_says_it_repeats_what_the_handler_does_from_the_start_of_the_history_and_that_stopping_the_old_instances_does_not_prevent_it_and_names_no_safe_case() {
         assertThat(SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .startsWith("Under a new id the subscription starts from the beginning of the history and repeats everything its handler does, the records it writes, the commands it dispatches and the messages it sends.")

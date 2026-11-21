@@ -59,6 +59,17 @@ class CatchupMarkersTest {
     void the_refusal_of_a_checkpoint_that_is_not_a_position_says_how_to_change_what_is_stored_and_when_a_new_id_is_enough_when_several_instances_run_it() {
         Throwable refused = catchThrowable(() -> CatchupMarkers.positionOf("proj", new StringBasedCheckpoint("resume-token-xyz")));
 
-        assertThat(refused).hasMessageEndingWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(refused).hasMessageEndingWith(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
+    void the_refusal_of_a_checkpoint_that_is_not_a_position_asks_for_a_delete_only_when_nothing_else_uses_the_checkpoint() {
+        Throwable refused = catchThrowable(() -> CatchupMarkers.positionOf("proj", new StringBasedCheckpoint("resume-token-xyz")));
+
+        assertThat(refused).hasMessageContaining(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageContaining(SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageContaining("Subscribe under a new id, or, when nothing else uses the checkpoint stored for this id, delete it.")
+                .hasMessageNotContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining("Delete the checkpoint stored for this id,");
     }
 }

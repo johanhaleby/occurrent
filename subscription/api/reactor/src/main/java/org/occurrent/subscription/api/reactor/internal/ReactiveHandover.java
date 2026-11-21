@@ -2177,7 +2177,7 @@ public final class ReactiveHandover<T, K> {
                     + "marker. The {} refuses every event that does not come from its own handler from now on, "
                     + "delivers the events its handler fed it, and then fails for good. Replace it with one under a new "
                     + "id. Cancelling a subscription deletes the checkpoint stored under its id, so cancel it only when "
-                    + "nothing else uses that checkpoint. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " "
+                    + "nothing else uses that checkpoint. " + SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " "
                     + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT, noun, noun, error);
         } else {
             log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
@@ -2458,8 +2458,11 @@ public final class ReactiveHandover<T, K> {
     // The blocking engine wraps its terminal failure in this message and this one used to propagate the raw cause, so
     // the same refusal read as a transient handler error on one stack and as a terminal one on the other. The recovery
     // differs (retry versus release and set up again), which is exactly what the message says, so both stacks say it.
+    // A catch-up that refused a checkpoint that is not a marker gets a message that asks for a cancel only when nothing
+    // else uses that checkpoint, since a cancel deletes it
     private PreDispatchRefusalException catchUpFailed(Throwable cause) {
-        return new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), cause);
+        String message = CatchupMarkers.refusedANonMarker(cause) ? HandoverMessages.catchUpFailedOnANonMarker(noun) : HandoverMessages.catchUpFailed(noun);
+        return new PreDispatchRefusalException(this, message, cause);
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.

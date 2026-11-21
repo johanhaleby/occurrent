@@ -26,6 +26,8 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.event.Level;
 import reactor.core.publisher.Flux;
@@ -61,6 +63,25 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
                         assertThat(logged.message())
                                 .startsWith("Catch-up failed for subscription sub. Its registration on the live feed is kept")
                                 .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+    }
+
+    @Test
+    void a_catch_up_that_refused_a_checkpoint_that_is_not_a_catch_up_marker_logs_to_cancel_only_when_nothing_else_uses_it_and_not_to_cancel_unconditionally() {
+        InMemoryReactivePositionOrderedReader store = new InMemoryReactivePositionOrderedReader();
+        InMemoryCheckpointStorage checkpoints = new InMemoryCheckpointStorage();
+        checkpoints.save("sub", new StringBasedCheckpoint("resume-token-xyz")).block(Duration.ofSeconds(5));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), checkpoints);
+
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty());
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(CapturingLoggerProvider.logged(CatchupThenPushSubscriptionModel.class, Level.ERROR)).singleElement().satisfies(logged ->
+                        assertThat(logged.message())
+                                .startsWith("Catch-up failed for subscription sub, because the checkpoint stored under its id is not a catch-up marker.")
+                                .contains("cancel it only when nothing else uses that checkpoint.")
+                                .endsWith(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                                .doesNotContain(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                                .doesNotContain("Cancel the subscription and subscribe again once the cause is fixed")));
     }
 
     private static PositionOrderedReader failingReader() {

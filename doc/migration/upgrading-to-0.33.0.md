@@ -207,9 +207,9 @@ cycling, `CheckpointStorage.delete(subscriptionId)` clears the checkpoint and it
 subscription starts as a fresh one, from its own start. Stop every node before the delete and start them all again
 with the same start, as
 [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
-describes. A node that takes the lease while the others still run finds no checkpoint, starts from its own start and
-stores its position, so with a start at the present the events since the deleted checkpoint are never delivered. A
-start at the beginning delivers them again, which is within the at-least-once contract.
+describes. The first node to take the lease then finds no checkpoint and starts from its own start, so with a start
+at the present the events since the deleted checkpoint are never delivered, even with every node stopped. A start at
+the beginning delivers them again, which is within the at-least-once contract.
 
 ## 4. Redis Cluster
 

@@ -224,7 +224,8 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
                 .subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty())
                 .waitUntilStarted().block(Duration.ofSeconds(5)));
 
-        assertThat(failure).hasMessageContaining("\"proj\"").hasMessageContaining("subscribe under a new id").hasMessageContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(failure).hasMessageContaining("\"proj\"").hasMessageContaining("Subscribe under a new id").hasMessageContaining(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     @Test

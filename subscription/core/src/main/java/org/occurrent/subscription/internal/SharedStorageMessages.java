@@ -52,6 +52,15 @@ public final class SharedStorageMessages {
             + " delete what is stored under its id, and start every instance again with the same start, as " + GUIDE + " describes.";
 
     /**
+     * For a message about a checkpoint stored under the id that is not a catch-up marker, which something else, such as
+     * a durable subscription, may still use. The sentence before it names that checkpoint and says to delete or cancel
+     * only when nothing else uses it, and this keeps the same condition, so it never asks for an unconditional delete of
+     * another component's checkpoint.
+     */
+    public static final String NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT = "When nothing else uses that checkpoint and more than one instance"
+            + " runs the subscription, stop every instance, delete the checkpoint, and start every instance again with the same start, as " + GUIDE + " describes.";
+
+    /**
      * For a message that tells someone to subscribe under a new id, or to replace a catch-up-then-live subscription
      * with one under a new id. A new id keeps the new subscription apart from what is stored under the old id, but not
      * from the broker queue or consumer group the old one consumes, nor from a store the old one still writes to.

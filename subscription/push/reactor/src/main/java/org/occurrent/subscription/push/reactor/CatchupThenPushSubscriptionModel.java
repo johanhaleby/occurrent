@@ -475,10 +475,22 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                     // the broker keeps holding them (ADR 104). Recovery is cancelSubscription(id) plus a fresh
                     // subscribe. Dropped before the replay entry, so a start(true) racing this never sees a launcher
                     // with no replay running and relaunches a catch-up that failed.
-                    log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
-                            + "refuses every event, so the source redelivers rather than losing them. Cancel the "
-                            + "subscription and subscribe again once the cause is fixed. "
-                            + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, error);
+                    // A cancel deletes a checkpoint that is not a marker, and another component may still use it, so
+                    // this log asks for a cancel only when nothing else does
+                    if (CatchupMarkers.refusedANonMarker(error)) {
+                        log.error("Catch-up failed for subscription {}, because the checkpoint stored under its id is not "
+                                + "a catch-up marker. Its registration on the live feed is kept and now refuses every "
+                                + "event, so the source redelivers rather than losing them. Replace the subscription with "
+                                + "one under a new id. Cancelling it deletes the checkpoint stored under its id, so cancel "
+                                + "it only when nothing else uses that checkpoint. "
+                                + SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " "
+                                + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, error);
+                    } else {
+                        log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
+                                + "refuses every event, so the source redelivers rather than losing them. Cancel the "
+                                + "subscription and subscribe again once the cause is fixed. "
+                                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, error);
+                    }
                     interruptibleReplays.remove(subscriptionId, ownLaunch.get());
                     forget(subscriptionId, replayDone);
                     catchupOwners.remove(subscriptionId, replayDone);

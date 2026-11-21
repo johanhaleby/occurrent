@@ -119,7 +119,8 @@ and the overlap between the replay and the live feed is still de-duplicated by e
 
 A checkpoint stored under the id that is not a global position, such as a resume token a durable subscription stored
 when it used the id before, fails a reactor catch-up that reads it with an `IllegalStateException` that names the id
-and says to delete the checkpoint or subscribe under a new id. Reading it as no marker would replay from the beginning
+and says to subscribe under a new id, or to delete the checkpoint when nothing else uses it. Reading it as no marker
+would replay from the beginning
 and then write H over a checkpoint that something else owns, so that catch-up fails instead, and the checkpoint stays
 stored. On the blocking stack any stored checkpoint still reads as a finished catch-up, as in 0.34.0.
 

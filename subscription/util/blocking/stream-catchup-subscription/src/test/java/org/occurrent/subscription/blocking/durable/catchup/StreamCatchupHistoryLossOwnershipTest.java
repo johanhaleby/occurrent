@@ -61,6 +61,7 @@ import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.LoggerFactory;
 import org.slf4j.helpers.MessageFormatter;
@@ -156,7 +157,9 @@ class StreamCatchupHistoryLossOwnershipTest {
         Throwable thrown = catchThrowable(() -> catchup.subscribe(ID, StartAt.checkpoint(TOKEN), action()));
 
         // Then
-        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString());
+        assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString())
+                .hasMessageContaining(" If the checkpoint is the one stored for the subscription, delete it first. Start the subscription from the beginning,")
+                .hasMessageEndingWith(" " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertAll(
                 () -> assertThat(liveModel.subscribeCalls).as("subscribes on the live model").isEmpty(),
                 () -> assertThat(saved).as("positions stored").isEmpty(),
