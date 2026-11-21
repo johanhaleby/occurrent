@@ -239,6 +239,64 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
             // Then
             assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(LATER_THAN_THE_EVENT);
         }
+
+        @Test
+        void a_run_of_that_subscribe_that_read_before_the_resume_does_not_store_the_checkpoint_of_its_event_over_the_position_of_the_resume() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            wrapped.failsAfterAccepting = true;
+            storage.save(SUBSCRIPTION_ID, START);
+            assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            })).isInstanceOf(IllegalStateException.class);
+            assertThat(model.idsWithUntrackedRegistrations()).isEqualTo(1);
+            CountDownLatch hasRead = new CountDownLatch(1);
+            CompletableFuture<Void> run = CompletableFuture.runAsync(() -> {
+                wrapped.beforeReading(SUBSCRIPTION_ID);
+                hasRead.countDown();
+                awaitQuietly(handlerMayReturn);
+                wrapped.deliver(SUBSCRIPTION_ID, EVENT_READ_BEFORE_THE_PAUSE);
+            }, handlerThreads);
+            assertThat(awaitLatch(hasRead)).as("read before the pause").isTrue();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT));
+
+            // When
+            handlerReturns(run);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
+        }
+    }
+
+    @Nested
+    @DisplayName("when the wrapped model starts a run during the subscribe")
+    class When_the_wrapped_model_starts_a_run_during_the_subscribe {
+
+        @Test
+        void the_checkpoint_of_the_event_that_run_read_is_not_stored_over_the_position_of_a_resume_after_the_subscribe_returned() {
+            // Given
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage);
+            CountDownLatch hasRead = new CountDownLatch(1);
+            AtomicReference<CompletableFuture<Void>> run = new AtomicReference<>();
+            wrapped.duringSubscribe = () -> {
+                run.set(CompletableFuture.runAsync(() -> {
+                    wrapped.beforeReading(SUBSCRIPTION_ID);
+                    hasRead.countDown();
+                    awaitQuietly(handlerMayReturn);
+                    wrapped.deliver(SUBSCRIPTION_ID, EVENT_READ_BEFORE_THE_PAUSE);
+                }, handlerThreads));
+                assertThat(awaitLatch(hasRead)).as("read during the subscribe").isTrue();
+            };
+            subscribeFromTheStoredStart(model);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT));
+
+            // When
+            handlerReturns(run.get());
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
+        }
     }
 
     @Nested
@@ -606,6 +664,8 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         final Set<Checkpoint> cannotRestartAt = ConcurrentHashMap.newKeySet();
         volatile boolean failsAfterAccepting;
         volatile boolean failsResume;
+        volatile Runnable duringSubscribe = () -> {
+        };
         volatile Runnable whenResuming = () -> {
         };
         private final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
@@ -624,6 +684,7 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             actions.put(subscriptionId, action);
+            duringSubscribe.run();
             if (failsAfterAccepting) {
                 throw new IllegalStateException("failed after accepting " + subscriptionId);
             }
