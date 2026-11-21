@@ -21,7 +21,6 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.Read;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.Reposition;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.StoredBefore;
-import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.StoredCheckpoint;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -41,13 +40,12 @@ final class CheckpointRegistration {
     final AtomicLong lastWrite = new AtomicLong(System.nanoTime());
     // Held while a delivery starts or finishes, while a quiet position is saved, and while a resume at a position that
     // failed puts back what was stored before it, so no quiet position is saved while a delivery of any run of this
-    // subscribe is under way. A resume takes the deliveryLocks of the tracked and the untracked registration of an
-    // id in that order, under the lock for the id, and before their saveLocks
+    // subscribe is under way. Taken before saveLock. A resume takes the deliveryLocks of the tracked and the
+    // untracked registration of an id in that order, under the lock for the id, and before their saveLocks
     final ReentrantLock deliveryLock = new ReentrantLock();
-    // True only while no delivery is under way and the current delivery that started last stored the checkpoint
-    // of its event. Before the first event, true once a position of the subscription is stored, see
-    // startPositionStored
-    private volatile boolean quietSaveAllowed;
+    // True only while no delivery is under way and the checkpoint stored covers the current delivery that ended
+    // last, or isn't known, in which case a quiet save reads it first. Written holding deliveryLock
+    private volatile boolean quietTickAllowed;
     private int deliveriesUnderWay;
     // Counts the deliveries of every run of this subscribe
     private long deliveries;
@@ -61,25 +59,33 @@ final class CheckpointRegistration {
     // comes from a run a pause closed after it read, and the run that resumed has read and delivered past it
     private long readOfLatestCurrentDelivery;
     private long latestCurrentDelivery;
-    // Whether the current delivery that started last stored its checkpoint, once it has finished. An action a
-    // pause stopped waiting for can still return, or still be called, after a resume has delivered later events,
-    // and what it stored says nothing about them
-    private boolean latestStored;
-    // Compared with what is stored once a put-back after a failed resume at a position has written or thrown, to
-    // learn whether that covers the current delivery that started last. The checkpoint that delivery stored, as
-    // Checkpoint.asString, or the quiet position saved after it, null when it stored none. The count of resumes at
-    // a position when that delivery read its event or the quiet position was saved, since a resume after that
-    // stored a position that covers it
-    private @Nullable String latestPosition;
-    private long latestRepositions;
-    // The quiet positions whose save threw since the current delivery that started last ended or a quiet position
-    // was last saved, as Checkpoint.asString. Each may be stored, so a put-back that finds one of them stored finds
-    // a position saved after that delivery. A set, since a later save that threw may not have written, and the
-    // put-back can find any of them stored. Read and written holding deliveryLock
-    private final Set<String> quietPositionsThatMayBeStored = new HashSet<>();
-    // Whether a position of the subscription was stored before the first delivery, until a current delivery ends.
-    // Any stored checkpoint covers a subscribe that has delivered nothing
+    // What the checkpoint stored is compared with. The checkpoint of the current delivery that ended last, or the
+    // quiet position saved after it, as Checkpoint.asString. Null when that delivery stored none. An action a pause
+    // stopped waiting for can still return after a resume has delivered later events, and its checkpoint says
+    // nothing about them. Written holding deliveryLock and saveLock
+    private @Nullable String coveringPosition;
+    // The count of resumes at a position when that delivery read its event or that quiet position was saved. A
+    // resume after it stored a position that covers it
+    private long coveringRepositions;
+    // The latest quiet position whose save threw since that delivery ended. It may have written, so it covers that
+    // delivery once it is found stored. Kept when a resume writes over it, since a failed resume puts it back.
+    // Only one, since a quiet save reads what is stored before it writes again. Written holding deliveryLock and
+    // saveLock
+    private @Nullable String quietPositionThatThrew;
+    // Whether a position of the subscription was stored before the first delivery, until a current delivery ends or
+    // a read finds nothing stored. Any stored checkpoint covers a subscribe that has delivered nothing. Written
+    // holding deliveryLock and saveLock
     private boolean storedBeforeAnyDelivery;
+    // What the last write or read of this registration left stored, as Checkpoint.asString. A write that threw,
+    // refused or not, makes it unknown. Null and known until this registration writes or reads one. Written
+    // holding saveLock
+    private @Nullable String storedPosition;
+    private boolean storedKnown = true;
+    // The read and the number of the latest delivery whose save wrote or threw. A delivery of an earlier read, or of
+    // the same read and started before it, comes from a run a resume superseded, and its save would move the
+    // checkpoint back. Written holding saveLock
+    private long readOfLatestSave;
+    private long latestSave;
     // Held while the checkpoint for an event, a quiet position or a first position an evaluation records outside the
     // settled outcome is written, by a cancel while it marks this registration cancelled and, unless the checkpoint is
     // kept, deletes it, and by a replacement or a shutdown while it marks this registration cancelled. No other lock of
@@ -91,15 +97,11 @@ final class CheckpointRegistration {
     // so a count taken before a resume never comes round again. Written while holding saveLock, so a save that
     // started before a resume and checks it under saveLock is refused, and a save already under way finishes first
     private volatile long repositions;
-    // The latest resume at a position whose position is still stored, unless a put-back failed too, and the one
-    // before it. Written while holding saveLock
-    private volatile Reposition storedReposition = Reposition.NONE;
-    private Reposition storedRepositionBeforeTheLatest = Reposition.NONE;
-    // The resume the latest put-back wrote over, put back as the stored one when what is stored is its position
-    private Reposition putBackOver = Reposition.NONE;
-    // Counts the put-backs after a failed resume at a position. Written holding deliveryLock and saveLock, so a delivery
-    // that stored its checkpoint before a put-back wrote over it learns that when it finishes
-    private long putBacks;
+    // The latest resume at a position, and the one whose position that resume read as stored before it, which a
+    // put-back writes again. Either covers a delivery read before it only while its position is the one stored.
+    // Written holding saveLock
+    private Reposition latestReposition = Reposition.NONE;
+    private Reposition repositionOfPrevious = Reposition.NONE;
     // Set before the registration is tracked, for a subscribe that threw and failed to cancel the subscription
     private boolean keepCheckpointWhenCancelled;
 
@@ -126,76 +128,58 @@ final class CheckpointRegistration {
     // A position of the subscription is stored, so before the first event a quiet save moves that position on and
     // never stores the first one for a subscription that stores no position of its own
     void startPositionStored() {
-        deliveryLock.lock();
-        try {
+        underDeliveryLockAndSaveLock(() -> {
             if (deliveries == 0) {
                 storedBeforeAnyDelivery = true;
-                latestStored = true;
-                quietSaveAllowed = true;
+                decide();
             }
-        } finally {
-            deliveryLock.unlock();
-        }
+        });
     }
 
-    // The position a resume at a position stored is the latest one stored, also when a delivery a failed resume
-    // refused was the latest before it. A delivery still under way decides again when it finishes
-    void latestIsStored() {
-        deliveryLock.lock();
-        try {
-            latestStored = true;
-            quietSaveAllowed = deliveriesUnderWay == 0;
-        } finally {
-            deliveryLock.unlock();
-        }
+    // A delivery by its number, the read its event came from, 0 when the wrapped model numbers no reads, and the count
+    // of resumes at a position when that read was made
+    record Delivery(long number, long read, long repositions) {
     }
 
-    long delivering() {
+    // Called before anything the delivery waits on, so no quiet position is saved until it has finished
+    Delivery delivering() {
         Read lastRead = lastReadOnThisThread.get();
         long read = lastRead == null ? 0 : lastRead.number();
+        long repositionsWhenRead = lastRead == null ? repositions : lastRead.repositions();
         deliveryLock.lock();
         try {
-            quietSaveAllowed = false;
+            quietTickAllowed = false;
             deliveriesUnderWay++;
             long delivery = ++deliveries;
             if (read >= readOfLatestCurrentDelivery) {
                 readOfLatestCurrentDelivery = read;
                 latestCurrentDelivery = delivery;
             }
-            return delivery;
+            return new Delivery(delivery, read, repositionsWhenRead);
         } finally {
             deliveryLock.unlock();
         }
     }
 
-    // A delivery that started before a resume at a position whose position is still stored counts as stored, since
-    // the position stored is the resume's and not one this delivery could have moved past. One whose checkpoint a
-    // put-back may have written over since it was stored doesn't, until a later put-back finds that checkpoint stored
-    void delivered(long delivery, @Nullable StoredCheckpoint stored, long repositionsWhenDelivered) {
-        deliveryLock.lock();
-        try {
+    // checkpoint is the one the delivery tried to store, null when the persist predicate declined it or the action
+    // threw. Decided from what is stored when the delivery ends, since a put-back may have written over what its
+    // save stored
+    void delivered(Delivery delivery, @Nullable Checkpoint checkpoint) {
+        underDeliveryLockAndSaveLock(() -> {
             deliveriesUnderWay--;
-            if (delivery == latestCurrentDelivery) {
-                latestStored = (stored != null && stored.putBacks() == putBacks) || storedReposition.count() > repositionsWhenDelivered;
-                latestPosition = stored == null ? null : stored.checkpoint().asString();
-                latestRepositions = repositionsWhenDelivered;
-                quietPositionsThatMayBeStored.clear();
+            if (delivery.number() == latestCurrentDelivery) {
+                coveringPosition = checkpoint == null ? null : checkpoint.asString();
+                coveringRepositions = delivery.repositions();
+                quietPositionThatThrew = null;
                 storedBeforeAnyDelivery = false;
             }
-            quietSaveAllowed = deliveriesUnderWay == 0 && latestStored;
-        } finally {
-            deliveryLock.unlock();
-        }
+            decide();
+        });
     }
 
-    // Read without the lock only to skip reading the write condition for a save that would be refused
-    boolean quietSaveAllowed() {
-        return quietSaveAllowed;
-    }
-
-    long repositionsForDelivery() {
-        Read lastRead = lastReadOnThisThread.get();
-        return lastRead == null ? repositions : lastRead.repositions();
+    // Read without the lock only to skip reading the write condition for a quiet save that would do nothing
+    boolean quietTickAllowed() {
+        return quietTickAllowed;
     }
 
     // Called holding saveLock, before a resume at a position writes it
@@ -203,64 +187,149 @@ final class CheckpointRegistration {
         repositions++;
     }
 
-    // Called holding saveLock, once a resume at a position has written it
-    void repositionStored(Checkpoint position) {
-        storedRepositionBeforeTheLatest = storedReposition;
-        storedReposition = new Reposition(repositions, position.asString());
+    // Called holding saveLock, once the write of a resume at a position has returned. previous is what the resume
+    // read as stored before it
+    void repositionStored(Checkpoint position, @Nullable Checkpoint previous) {
+        repositionMayBeStored(position, previous);
+        stored(position);
+    }
+
+    // Called holding saveLock, once the write of a resume at a position threw. The position counts as the resume's
+    // if a read finds it stored
+    void repositionMayBeStored(Checkpoint position, @Nullable Checkpoint previous) {
+        repositionOfPrevious = previous == null ? Reposition.NONE : repositionAt(previous.asString());
+        latestReposition = new Reposition(repositions, position.asString());
+        storedUnknown();
+    }
+
+    private Reposition repositionAt(String position) {
+        if (position.equals(latestReposition.position())) {
+            return latestReposition;
+        }
+        return position.equals(repositionOfPrevious.position()) ? repositionOfPrevious : Reposition.NONE;
     }
 
     // Called holding deliveryLock and saveLock, before a resume at a position that failed puts back what was stored
     // before it
     void puttingBack() {
         repositions++;
-        putBacks++;
-        putBackOver = storedReposition;
-        storedReposition = storedRepositionBeforeTheLatest;
     }
 
-    // Called holding deliveryLock and saveLock, with what is stored once the put-back after a failed resume at a
-    // position wrote or threw, null when that is unknown. The current delivery that started last counts as stored
-    // only when what is stored is its own checkpoint, a quiet position saved after it, also one whose save threw,
-    // the position of a resume after it, or any checkpoint when nothing has been delivered. A delivery under way
-    // decides again when it finishes
-    void putBackLeft(@Nullable Checkpoint stored) {
-        String position = stored == null ? null : stored.asString();
-        if (position != null && position.equals(putBackOver.position())) {
-            // The put-back didn't write, or wrote the resume's position, so what the resume stored is stored
-            storedReposition = putBackOver;
+    // Called holding saveLock once a write of this registration's own has returned
+    void stored(Checkpoint checkpoint) {
+        storedPosition = checkpoint.asString();
+        storedKnown = true;
+    }
+
+    // Called holding saveLock once a write threw, since it may have written or not
+    void storedUnknown() {
+        storedKnown = false;
+    }
+
+    // Called holding deliveryLock and saveLock with what a read found stored
+    void storedRead(@Nullable Checkpoint checkpoint) {
+        storedPosition = checkpoint == null ? null : checkpoint.asString();
+        storedKnown = true;
+        if (checkpoint == null) {
+            storedBeforeAnyDelivery = false;
         }
-        if (position != null && quietPositionsThatMayBeStored.contains(position)) {
-            // A quiet position saved after the current delivery that started last ended is stored. A resume after
-            // that delivery still covers it, so latestRepositions stays
-            latestPosition = position;
-            quietPositionsThatMayBeStored.clear();
+    }
+
+    // Called once what is stored or the delivery it is compared with may have changed. Takes deliveryLock and then
+    // saveLock, which a put-back already holds
+    void decideQuietTicks() {
+        underDeliveryLockAndSaveLock(this::decide);
+    }
+
+    // Called holding deliveryLock and saveLock
+    private void decide() {
+        if (storedKnown && storedPosition != null && storedPosition.equals(quietPositionThatThrew)) {
+            // The quiet save that threw had written. A resume after the delivery still covers it, so
+            // coveringRepositions stays
+            coveringPosition = quietPositionThatThrew;
+            quietPositionThatThrew = null;
         }
-        latestStored = position != null && (storedBeforeAnyDelivery || position.equals(latestPosition)
-                || (position.equals(storedReposition.position()) && storedReposition.count() > latestRepositions));
-        quietSaveAllowed = deliveriesUnderWay == 0 && latestStored;
+        quietTickAllowed = deliveriesUnderWay == 0 && (!storedKnown || storedCovers());
+    }
+
+    // Called holding deliveryLock and saveLock, with what is stored known. Compared by asString, since a Checkpoint
+    // promises no equals
+    private boolean storedCovers() {
+        if (storedBeforeAnyDelivery) {
+            return true;
+        }
+        String stored = storedPosition;
+        return stored != null && (stored.equals(coveringPosition) || storedByResumeAfter(stored, latestReposition) || storedByResumeAfter(stored, repositionOfPrevious));
+    }
+
+    private boolean storedByResumeAfter(String stored, Reposition reposition) {
+        return stored.equals(reposition.position()) && reposition.count() > coveringRepositions;
     }
 
     // Taken inside deliveryLock, so it writes nothing once this registration has stopped writing, nor a position
-    // read before a resume at a position stored its own. The save answers true when it wrote and false when it
-    // threw, in which case it may have written
-    void saveQuietPositionIfAllowed(long repositionsWhenRead, Checkpoint quietPosition, BooleanSupplier save) {
+    // read before a resume at a position stored its own. When a write that threw left what is stored unknown, it
+    // reads what is stored before it writes, and saves the quiet position only if what the read found covers the
+    // delivery. The save answers true when it wrote and false when it threw and may have written, and throws when
+    // the storage refused it. The read throws when it can't tell, and what is stored stays unknown
+    void saveQuietPositionIfStoredCovers(long repositionsWhenRead, Checkpoint quietPosition, BooleanSupplier save, Supplier<@Nullable Checkpoint> read) {
+        underDeliveryLockAndSaveLock(() -> {
+            if (cancelled || repositions != repositionsWhenRead || deliveriesUnderWay > 0) {
+                return;
+            }
+            if (!storedKnown) {
+                try {
+                    storedRead(read.get());
+                } catch (Throwable unread) {
+                    // Throwable, since a storage written in Kotlin can throw a checked exception. Still unknown, so
+                    // the next tick reads again
+                    decide();
+                    return;
+                }
+                decide();
+            }
+            if (!storedCovers()) {
+                return;
+            }
+            String position = quietPosition.asString();
+            boolean wrote;
+            try {
+                wrote = save.getAsBoolean();
+            } catch (Throwable refused) {
+                storedUnknown();
+                decide();
+                throw refused;
+            }
+            if (wrote) {
+                storedPosition = position;
+                coveringPosition = position;
+                coveringRepositions = repositions;
+                quietPositionThatThrew = null;
+            } else {
+                storedUnknown();
+                quietPositionThatThrew = position;
+            }
+            decide();
+        });
+    }
+
+    // For tests, the positions this registration compares what is stored with, apart from those of resumes
+    int positionsRemembered() {
         deliveryLock.lock();
         try {
-            if (quietSaveAllowed) {
-                saveLock.lock();
-                try {
-                    if (!cancelled && repositions == repositionsWhenRead) {
-                        if (save.getAsBoolean()) {
-                            latestPosition = quietPosition.asString();
-                            latestRepositions = repositions;
-                            quietPositionsThatMayBeStored.clear();
-                        } else {
-                            quietPositionsThatMayBeStored.add(quietPosition.asString());
-                        }
-                    }
-                } finally {
-                    saveLock.unlock();
-                }
+            return (coveringPosition == null ? 0 : 1) + (quietPositionThatThrew == null ? 0 : 1);
+        } finally {
+            deliveryLock.unlock();
+        }
+    }
+
+    private void underDeliveryLockAndSaveLock(Runnable action) {
+        deliveryLock.lock();
+        try {
+            saveLock.lock();
+            try {
+                action.run();
+            } finally {
+                saveLock.unlock();
             }
         } finally {
             deliveryLock.unlock();
@@ -280,20 +349,33 @@ final class CheckpointRegistration {
         }
     }
 
-    // What it saved, null when it saved nothing. A delivery that started before a resume at a position stored its own
-    // saves nothing
-    @Nullable StoredCheckpoint saveUnlessCancelledOrRepositioned(long repositionsWhenDelivered, Checkpoint checkpoint, Runnable save) {
+    // A delivery that read its event before a resume at a position stored its own saves nothing, and neither does
+    // one of a run a later run has superseded once a delivery of the later run has saved
+    void saveUnlessCancelledRepositionedOrSuperseded(Delivery delivery, Checkpoint checkpoint, Runnable save) {
         saveLock.lock();
         try {
-            if (cancelled || repositions != repositionsWhenDelivered) {
-                return null;
+            if (cancelled || repositions != delivery.repositions() || superseded(delivery)) {
+                return;
             }
-            save.run();
+            readOfLatestSave = delivery.read();
+            latestSave = delivery.number();
+            try {
+                save.run();
+            } catch (Throwable failure) {
+                storedUnknown();
+                throw failure;
+            }
+            stored(checkpoint);
             storedACheckpoint = true;
-            return new StoredCheckpoint(checkpoint, putBacks);
         } finally {
             saveLock.unlock();
         }
+    }
+
+    // A run reads and delivers on one thread, one event at a time, so a delivery of the same read that started later
+    // saves only after the one checked here, unless it comes from another run
+    private boolean superseded(Delivery delivery) {
+        return delivery.read() < readOfLatestSave || (delivery.read() == readOfLatestSave && delivery.number() < latestSave);
     }
 
     void keepCheckpointWhenCancelled() {

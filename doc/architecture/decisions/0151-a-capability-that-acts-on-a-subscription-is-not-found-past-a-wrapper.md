@@ -130,30 +130,40 @@ and skip the events written between its replay position and the new one. The Mon
 again before they throw, so no event was delivered from the new position when the old checkpoint goes back. A failure
 to put the checkpoint back is added to the thrown exception as a suppressed exception.
 
-After a failed resume, the model saves a quiet position only when it knows the checkpoint left stored is at or after
-the position of the latest delivery that ended. It knows that when the checkpoint left stored is one of these:
+A failed resume can put back a checkpoint older than the one a delivery stored, so the model saves a quiet position only
+when it knows which checkpoint is stored and that checkpoint is at or after the position of the latest delivery that
+ended. The model notes what every write did, under the lock all checkpoint writes take:
 
-* the checkpoint that delivery stored
-* a quiet position saved after the delivery, also one whose save threw, since that save may have written
-* the position of a resume made after the delivery read its event
+* after a delivery's save or a quiet save returns, its checkpoint is stored
+* after a put-back writes, the checkpoint read before the resume is stored
+* after a read, the checkpoint it read is stored
+* after a write throws, a refused one included, the stored checkpoint is unknown, since the write may have gone
+  through
 
-Otherwise quiet saves wait until a delivery stores its checkpoint.
+The stored checkpoint is at or after the latest delivery when it is the checkpoint that delivery stored, a quiet
+position saved after it, or the position of a resume made after the delivery read its event. The model compares when the
+delivery ends, with the checkpoint stored at that moment. A put-back that wrote an older checkpoint over the delivery's
+own then holds quiet saves, and one that wrote the delivery's own checkpoint again doesn't. A delivery whose action
+stored no checkpoint, or one that hasn't ended yet, holds quiet saves until a later delivery stores its checkpoint.
 
-When the put-back wrote, the checkpoint left stored is the one read before the resume. A put-back that threw may have
-written or not, so the model reads the stored checkpoint again, and a read that throws holds quiet saves until a
-delivery stores its checkpoint. The model holds the deliveries' lock from the put-back to that decision, so no delivery
-ends in between.
+When a put-back throws, the model reads the stored checkpoint right away. It holds the deliveries' lock from the
+put-back to the decision, so no delivery ends in between. While the stored checkpoint is unknown, after that read threw
+or after any other write that threw, every quiet save reads it before it writes. When the read returns the last
+checkpoint known to be at or after the latest delivery, or the quiet position whose save threw, the model saves the
+quiet position in the same attempt.
 
-Counting the deliveries that started and ended around the resume can't decide this, since a delivery that stores its
-checkpoint while the resume reads the previous one gives the same counts whether the read saw that checkpoint or not.
-Instead, a delivery that stored its checkpoint before the put-back and ends after it doesn't count as stored, because
-the put-back may have written an older checkpoint over it. That holds even when the put-back wrote the delivery's own
-checkpoint again, and quiet saves then wait for the next event that stores its checkpoint.
+The model remembers 2 positions, the last checkpoint known to be at or after the latest delivery and the latest quiet
+position whose save threw. One quiet position is enough, because after a save throws the next quiet save reads before it
+writes.
 
-The model remembers every quiet position whose save threw since the latest delivery ended or a quiet save last wrote.
-A quiet save of Q1 can write and then throw, and a later save of Q2 throw without writing, so the resume reads Q1 and
-puts it back. In the other order the resume puts Q2 back. The latest delivery ending, or a quiet save that writes,
-makes the model forget them.
+A run of the subscription that a pause stopped can still be in its action for an event, since the MongoDB models stop
+waiting for a running handler after one second. The model drops that run's save once a later run has started saving the
+checkpoint of one of its own events. Each delivery records which read of the wrapped model it came from and when it
+started. A run reads and delivers one event at a time on one thread. So when a delivery from a later read, or from the
+same read and started later, starts saving while an earlier one hasn't, the earlier one belongs to a run that a resume
+replaced. Without the refusal, a stopped run that returns from its action for e1 after the resumed run stored e2 writes
+e1 over e2. A restart would then only deliver e2 again, but quiet saves would wait for the next event, since e1 is
+before e2.
 
 When nothing was stored before, the new checkpoint stays. Deleting it could remove a checkpoint that another node, or
 the resumed subscription's own events, wrote in the meantime. With nothing stored, a restart subscribes the wrapped
@@ -174,6 +184,9 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
   `false` for it. A catch-up model over a durable model therefore stores the position at each live hand-over
   it repositions, which is the position it already stores for itself when both share one checkpoint storage, as they
   do in the Spring Boot starter.
+* The save of a run that a pause stopped and a resume replaced is dropped once the resumed run has started saving the
+  checkpoint of one of its events. It used to write the older checkpoint over the newer one. This holds after the
+  plain `resumeSubscription(subscriptionId)` as well as after a resume at a position.
 * `capability(..)` for `Subscribable`, `CancellableSubscriptions` or a model type built on them answers empty on a
   wrapper that doesn't implement it, where it used to answer the model beneath.
 * A `SubscriptionModelWrapper` of an application's own that should be found for an acting capability has to implement
