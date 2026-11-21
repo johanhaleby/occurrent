@@ -1257,7 +1257,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * When the resume went on from the wrapped model's own position, it doesn't store it once the resumed subscription
      * has started saving the checkpoint of one of its own events or a quiet position, or has stored the position it
      * restarts from after its history was lost. Neither does a quiet position read before the pause. A quiet position
-     * read after a resume to the stored checkpoint is saved as before. So the stored checkpoint doesn't move back.
+     * read after a resume to the stored checkpoint is saved as before. So the stored checkpoint doesn't move back. The
+     * resume goes to the stored checkpoint when the wrapped model's {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
+     * answers {@code true} for it. The MongoDB models answer {@code false} for a checkpoint their change stream can't
+     * open at, such as a catch-up's position, and go on from their own position.
      * <p>
      * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited
      * for. If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes
@@ -1292,11 +1295,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                             // A resume at the stored checkpoint, with nothing to write. A handler the pause stopped
                             // waiting for, or a quiet position handed out before, would store a checkpoint of the run
                             // this replaces over it, so their saves are refused, and the checkpoint covers the
-                            // deliveries read before it while it stays stored
-                            writing.forEach(paused -> {
-                                paused.repositioning();
-                                paused.repositionStored(checkpoint, checkpoint);
-                            });
+                            // deliveries read before it while it stays stored. Only when the wrapped model restarts
+                            // at it, since one that goes on from its own position delivers none of those again
+                            if (repositionable.get().restartsAt(checkpoint)) {
+                                writing.forEach(paused -> {
+                                    paused.repositioning();
+                                    paused.repositionStored(checkpoint, checkpoint);
+                                });
+                            }
                             resumeAt.set(checkpoint);
                         }
                     });

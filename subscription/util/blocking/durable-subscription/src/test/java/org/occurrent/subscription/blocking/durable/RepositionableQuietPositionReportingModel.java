@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.durable;
 
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -30,14 +31,29 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A {@link QuietPositionReportingModel} that can be paused and resumed, at a position or from its own, and that
- * restarts at any checkpoint. A pause returns at once, as the pause of a wrapped model does that stops waiting for a
- * handler that is still running.
+ * restarts at any checkpoint, or, from {@link #continuingFromItsOwnPositionForAGlobalCheckpoint()}, at any checkpoint
+ * but a {@link GlobalCheckpoint}. A resume at a {@code GlobalCheckpoint} then goes on from its own position and
+ * delivers nothing again, as a MongoDB model does.
+ * A pause returns at once, as the pause of a wrapped model does that stops waiting for a handler that is still running.
  */
 final class RepositionableQuietPositionReportingModel extends QuietPositionReportingModel implements RepositionableSubscriptions {
     private final Set<String> paused = ConcurrentHashMap.newKeySet();
     // Where each resume at a position resumed the subscription, in the order they came
     final List<Checkpoint> resumedAt = new CopyOnWriteArrayList<>();
     final AtomicInteger plainResumes = new AtomicInteger();
+    private final boolean continuesFromItsOwnPositionForAGlobalCheckpoint;
+
+    RepositionableQuietPositionReportingModel() {
+        this(false);
+    }
+
+    private RepositionableQuietPositionReportingModel(boolean continuesFromItsOwnPositionForAGlobalCheckpoint) {
+        this.continuesFromItsOwnPositionForAGlobalCheckpoint = continuesFromItsOwnPositionForAGlobalCheckpoint;
+    }
+
+    static RepositionableQuietPositionReportingModel continuingFromItsOwnPositionForAGlobalCheckpoint() {
+        return new RepositionableQuietPositionReportingModel(true);
+    }
 
     @Override
     public void pauseSubscription(String subscriptionId) {
@@ -65,7 +81,16 @@ final class RepositionableQuietPositionReportingModel extends QuietPositionRepor
 
     @Override
     public boolean restartsAt(Checkpoint checkpoint) {
-        return true;
+        return !continuesFromItsOwnPositionForAGlobalCheckpoint || !isGlobal(checkpoint);
+    }
+
+    private static boolean isGlobal(Checkpoint checkpoint) {
+        try {
+            GlobalCheckpoint.parse(checkpoint);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private static Subscription subscription(String subscriptionId) {

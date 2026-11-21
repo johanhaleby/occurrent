@@ -198,12 +198,22 @@ e2 again while quiet saves wait for the next event. A quiet position handed out 
 would write over it, and once the history no longer holds that quiet position, a restart from it skips the events
 written after the restart position.
 
-A plain resume that goes to the stored checkpoint stores nothing, so the model notes the checkpoint it read as stored
-and as the position of a resume. A quiet position handed out after the resume, or a delivery the resumed run reads,
-then saves as it would after a resume at a position. A plain resume where the wrapped model goes on from the position
-it has read to, because the subscription still holds its own start or the model can't be repositioned, doesn't count.
-The resumed run continues the replaced one's reads, so its saves follow them, and dropping the replaced run's saves
-there would hold quiet saves until the next event stores its checkpoint.
+A plain resume goes to the stored checkpoint when the wrapped model's `restartsAt(..)` answers `true` for it, the same
+check that decides whether a resume at a position stores its position. Such a resume stores nothing, so the model
+notes the checkpoint it read as stored and as the position of a resume. A quiet position handed out after the resume,
+or a delivery the resumed run reads, then saves as it would after a resume at a position.
+
+A plain resume where the wrapped model goes on from the position it has read to doesn't count. That happens when the
+subscription still holds its own start, when the model can't be repositioned, and on the MongoDB models when the stored
+checkpoint is one their change stream can't open at, such as a catch-up's `GlobalCheckpoint` or a time. The resumed run
+continues the replaced one's reads, so its saves follow them, and dropping the replaced run's saves there would hold
+quiet saves until the next event stores its checkpoint.
+
+Counting such a resume would lose events. Say a subscription started at `StartAt.now()` with a `GlobalCheckpoint`
+stored delivers e1, and the persist predicate declines e1's checkpoint. Quiet saves wait, since the stored checkpoint
+doesn't cover e1. Had the plain resume counted, the model would take the `GlobalCheckpoint` as covering e1 while the
+MongoDB model goes on after e1, and the next quiet position would be stored past e1. A restart then wouldn't deliver e1
+again, although its checkpoint was never stored.
 
 The first position the model records for a subscription that starts at the model default follows the same rule. The
 evaluation of the start position notes how many times the subscription was repositioned before it reads the stored
@@ -239,7 +249,8 @@ do. `resumeSubscription(subscriptionId, startAt)` throws `UnsupportedOperationEx
   resumed run has started saving. It used to write the older checkpoint over the newer one, and a quiet position handed
   out before a restart position was stored could write over the restart position. A plain
   `resumeSubscription(subscriptionId)` that goes to the stored checkpoint drops it right away. One where the wrapped
-  model goes on from its own position drops it once the resumed run has started saving.
+  model goes on from its own position, as a MongoDB model does for a stored `GlobalCheckpoint`, drops it once the
+  resumed run has started saving.
 * A first position the model records is dropped, and the evaluation throws `IllegalStateException`, once a resume, a
   put-back or a restart position came after the evaluation found nothing stored. It used to be written, and could
   replace the position stored then with an earlier one.
