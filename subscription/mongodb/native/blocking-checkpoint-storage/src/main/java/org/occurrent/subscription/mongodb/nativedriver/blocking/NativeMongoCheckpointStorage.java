@@ -170,6 +170,26 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     }
 
     /**
+     * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
+     * in the same {@code findOneAndUpdate}, see
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        if (!(candidate instanceof MongoOperationTimeCheckpoint)) {
+            return Optional.empty();
+        }
+        Document candidateDocument = generateCheckpointDocument(subscriptionId, candidate);
+        Supplier<Document> resolve = () -> requireNonNull(checkpointCollection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
+        return interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion);
+    }
+
+    /**
      * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace} is, see
      * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution}. Package
      * private for the same reason {@link #persistConditionalCheckpointDocument} is.

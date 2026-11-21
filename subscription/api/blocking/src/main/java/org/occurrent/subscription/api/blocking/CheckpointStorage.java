@@ -206,4 +206,33 @@ public interface CheckpointStorage {
     default Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
         return Optional.empty();
     }
+
+    /**
+     * Does what {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion} with the
+     * checkpoint that governs in the same atomic write. A first position stored earlier than {@code candidate} stays
+     * stored, now with {@code writeVersion}, so this never moves the stored position later.
+     * <p>
+     * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
+     * allow it. When the storage holds a newer version, nothing is written and
+     * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
+     * <p>
+     * The default answers {@link Optional#empty()} and writes nothing, like the default of
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint)}. A storage that overrides that method should also
+     * override this three-argument method. A caller that gets an empty answer can only store the version with
+     * {@link #save(String, Checkpoint, CheckpointWriteCondition) save(id, candidate, notOlderThan(writeVersion))},
+     * which writes {@code candidate} over an earlier first position another node stored in between.
+     * {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} override both.
+     *
+     * @param subscriptionId The id of the subscription whose first position is being contested
+     * @param candidate      The position competing to be the subscription's first
+     * @param writeVersion   The version to store with the checkpoint that governs
+     * @return The checkpoint that governs {@code subscriptionId}'s first position once this call returns, stored with
+     * {@code writeVersion}, or empty when this storage cannot compare the two, and then nothing is written
+     * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
+     *                                                       {@code writeVersion}
+     */
+    @NullMarked
+    default Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        return Optional.empty();
+    }
 }
