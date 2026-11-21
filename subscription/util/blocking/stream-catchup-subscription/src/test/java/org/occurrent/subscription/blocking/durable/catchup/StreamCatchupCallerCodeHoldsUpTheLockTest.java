@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Code a caller supplied, a {@code StartAt.dynamic} function or a {@link CatchupListener}, that runs under the model
@@ -378,6 +379,104 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         assertThat(handleOfZ.get()).as("the handle the resume of z returned").isNotNull();
         assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("later-stop"))).as("a later stop").succeedsWithin(BOUND);
         assertThat(model.isRunning()).as("whether the model runs after the later stop").isFalse();
+    }
+
+    @Test
+    void a_stop_from_another_thread_completes_without_calling_the_wrapped_stop_while_a_shutdown_that_gave_up_on_the_lock_is_held_in_a_wrapped_model_that_serializes_every_call_on_one_monitor_and_nothing_is_left_running_once_it_is_released() throws Exception {
+        // Given a wrapped model whose calls share one monitor, a shutdown that gave up on the lock and is held inside it, and a lock holder that has let go
+        givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAtTime.beginningOfTime());
+        model.awaitTheHandedCalls("the test");
+
+        // When a stop from another thread runs while the shutdown is held
+        assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-shutdown-is-held"))).as("a stop while the shutdown without the lock is held on the monitor the wrapped stop() needs").succeedsWithin(STOP_BOUND);
+
+        // Then it never called the wrapped stop()
+        assertThat(live.stops.get()).as("the stops the wrapped model got while the shutdown without the lock was held").isZero();
+        assertThat(live.monitoredCalls).as("the calls made on the monitor of the wrapped model").noneMatch(call -> call.startsWith("stop@"));
+
+        // And once the shutdown is released, nothing is left running in either model
+        releaseTheLocklessShutdown.countDown();
+        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
+        assertThat(shutdownWithoutTheLock().thrown()).as("what the shutdown threw").isNull();
+        awaitNothingIsLeftInEitherModel();
+    }
+
+    @Test
+    void a_resume_of_x_from_another_thread_returns_a_handle_that_never_starts_without_calling_the_wrapped_resume_while_a_shutdown_that_gave_up_on_the_lock_is_held_in_a_wrapped_model_that_serializes_every_call_on_one_monitor_and_nothing_is_left_running_once_it_is_released() throws Exception {
+        // Given a wrapped model whose calls share one monitor, a shutdown that gave up on the lock and is held inside it, and a lock holder that has let go
+        givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAtTime.beginningOfTime());
+        model.awaitTheHandedCalls("the test");
+
+        // When a resume of x, which the action resumed live and the catch-up model holds no state for, from another thread runs while the shutdown is held
+        CompletableFuture<Subscription> resume = CompletableFuture.supplyAsync(() -> model.resumeSubscription(X), daemonExecutor("resume-while-the-shutdown-is-held"));
+
+        // Then it returns, and the handle it returned never starts
+        assertThat(resume).as("a resume of x while the shutdown without the lock is held on the monitor the wrapped resume needs").succeedsWithin(STOP_BOUND);
+        assertThat(resume.get().waitUntilStarted(WAIT)).as("whether the handle of the resume that the shutdown kept from running starts").isFalse();
+        assertThat(live.resumed).as("the resumes of x the wrapped model got, that of the action only").containsOnlyOnce(X);
+        assertThat(live.monitoredCalls).as("the calls made on the monitor of the wrapped model").doesNotContain("resumeSubscription@resume-while-the-shutdown-is-held");
+
+        // And once the shutdown is released, nothing is left running in either model
+        releaseTheLocklessShutdown.countDown();
+        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
+        assertThat(shutdownWithoutTheLock().thrown()).as("what the shutdown threw").isNull();
+        awaitNothingIsLeftInEitherModel();
+    }
+
+    @Test
+    void a_lock_holder_whose_function_returned_while_a_shutdown_that_gave_up_on_the_lock_is_held_on_the_monitor_of_the_wrapped_model_does_not_subscribe_in_it_so_a_stop_completes_and_nothing_is_left_running_once_it_is_released() throws Exception {
+        // Given a wrapped model whose calls share one monitor, and a shutdown that gave up on the lock and is held inside it while the function, which the catch-up model asks itself
+        // under the lock, waits, and a function that answers now, so the subscribe of z calls the wrapped subscribePaused() next
+        givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAt.now());
+
+        // When the function returned, so the lock holder went on with the subscribe, and a stop from another thread runs while the shutdown is held
+        model.awaitTheHandedCalls("the test");
+        assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-shutdown-is-held"))).as("a stop while the shutdown without the lock is held on the monitor the wrapped subscribePaused() needs").succeedsWithin(STOP_BOUND);
+
+        // Then the lock holder did not enter the wrapped subscribePaused(), which the subscribe failed instead of
+        assertThat(live.monitoredCalls).as("the calls the lifecycle thread made on the monitor of the wrapped model").noneMatch(call -> call.equals("subscribePaused@" + LIFECYCLE_THREAD));
+        assertThat(catchThrowable(() -> handleOfZ.get().waitUntilStarted(WAIT))).as("what the handle of the subscribe of z that the lock holder ran threw").isInstanceOf(IllegalStateException.class);
+
+        // And once the shutdown is released, nothing is left running in either model
+        releaseTheLocklessShutdown.countDown();
+        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
+        assertThat(shutdownWithoutTheLock().thrown()).as("what the shutdown threw").isNull();
+        awaitNothingIsLeftInEitherModel();
+    }
+
+    // A shutdown that gave up on the lock and whose wrapped shutdown() holds the shared monitor of the wrapped model and is held, only the first of them.
+    // The function, which the catch-up model asks itself on the lifecycle thread under the lock, returns startAtAfterwards once that shutdown holds
+    private void givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAt startAtAfterwards) throws Exception {
+        AtomicBoolean first = new AtomicBoolean();
+        live.sharesOneMonitor = true;
+        live.afterShutdown = () -> {
+            if (first.compareAndSet(false, true)) {
+                locklessShutdownHeld.countDown();
+                HookedSubscriptionModel.awaitLatch(releaseTheLocklessShutdown);
+            }
+        };
+        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
+            if (functionAsked.compareAndSet(false, true)) {
+                callOfTheFunction.set(new Call("shutdown-without-the-lock", model::shutdown));
+                locklessShutdownReachedTheHold.set(awaitTheLatch(locklessShutdownHeld));
+                functionReturned.countDown();
+            }
+            return startAtAfterwards;
+        }));
+        awaitTheFunction();
+        assertThat(locklessShutdownReachedTheHold.get()).as("whether the wrapped shutdown() of the shutdown that gave up on the lock held within " + BOUND + " on the monitor of the wrapped model").isTrue();
+    }
+
+    private void awaitNothingIsLeftInEitherModel() {
+        Awaitility.await().atMost(BOUND).untilAsserted(() -> {
+            assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds").isEmpty();
+            for (String id : List.of(X, Y, Z)) {
+                assertThat(inMemory.isRunning(id)).as("whether the wrapped model runs " + id).isFalse();
+                assertThat(inMemory.isPaused(id)).as("whether the wrapped model holds " + id + " paused").isFalse();
+                assertThat(model.isRunning(id)).as("whether the catch-up model runs " + id).isFalse();
+                assertThat(model.isPaused(id)).as("whether the catch-up model holds " + id + " paused").isFalse();
+            }
+        });
     }
 
     // The action of y, a live action, hands the resume of x over and then subscribes z paused behind it, so z subscribes on

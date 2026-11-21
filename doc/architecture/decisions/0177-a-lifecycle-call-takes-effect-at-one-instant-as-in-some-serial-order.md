@@ -234,9 +234,28 @@ So the catch-up counts the calls without the lock that haven't returned yet. A p
 holds the lock while that count is above zero doesn't call the wrapped model. Its pass is parked instead, and the call
 without the lock that brings the count to zero hands every parked pass to the lifecycle thread. Nothing waits for the
 count while it holds the lock or runs on the lifecycle thread. A later `shutdown()` whose pass is parked returns at
-once, and counts as under way until that pass has run. A call without the lock that finds a pass under the lock inside
-the wrapped model's `shutdown()` skips its own call, since that pass shuts the wrapped model down, and while it runs no
-code a caller supplied holds the lock.
+once, and counts as under way until that pass has run. That holds only for a pass under the lock. A later
+`shutdown()` that makes its own call without the lock, because it gave up on the lock too or because a `start(..)` is
+inside the wrapped model's `start(..)`, puts a second call into the wrapped model's `shutdown()`, and a wrapped model
+that serializes `shutdown()` holds it there until the first has returned. It holds no lock while it waits. A call
+without the lock that finds a pass under the lock inside the wrapped model's `shutdown()` skips its own call, since
+that pass shuts the wrapped model down, and while it runs no code a caller supplied holds the lock.
+
+The parking covers the shutdown's own pass, but any other call to the wrapped model made under the lock would wait the
+same way. `ChangeStreamSubscriptions` runs `stop()` and `start(..)` inside the same `synchronized (monitor)` as its
+`shutdown()`, and both MongoDB subscription models pass themselves as that monitor and run subscribe, pause and resume
+inside `synchronized (this)`. A
+`stop()` from another thread that took the lock once the lifecycle thread had let it go would wait in the wrapped
+model's `stop()` for the call without the lock, and every lifecycle call behind it would wait for the lock. So no thread
+that holds the lock calls the wrapped model while a call without the lock is inside it. A `start(..)`, `stop()`,
+`stopReplay()`, `resumeReplay()` or `resumeSubscription(id)` that takes the lock then changes nothing and returns, the
+resume with a handle whose `waitUntilStarted(..)` answers `false`, as it does when the shutdown began while it waited
+behind the handed calls. A thread that held the lock while code a caller supplied ran, and goes on once that code
+returns, gets `IllegalStateException` from the subscribe, resume or pause it would make in the wrapped model, which a
+MongoDB subscription model that has shut down throws for a resume or a pause too. What the thread reads from the
+wrapped model, such as `isRunning(id)`, answers `false`. The shutdown has forgotten the catch-ups by then, and its pass
+under the lock shuts the wrapped model down once the call without the lock has returned, so no subscription runs in the
+wrapped model after that pass, whichever of these calls came.
 
 A pass that throws is logged at `ERROR` and handed to the lifecycle thread again after a backoff of 100 ms, doubled
 each time up to 2 seconds, until it returns normally. A pass that is only run again when some thread next takes the

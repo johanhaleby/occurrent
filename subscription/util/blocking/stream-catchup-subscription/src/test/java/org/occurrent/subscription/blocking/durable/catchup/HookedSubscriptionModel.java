@@ -34,6 +34,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * A live delegate over the in-memory model that runs a hook of the test before each of its {@code start(..)},
@@ -73,6 +74,13 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     // delegate that evaluates a StartAt.dynamic function does. The catch-up model hands that function to a delegate only
     // for the context type of a wrapper, which AsksAsAWrapper is
     volatile boolean asksTheStartAtInsideTheDelegate = false;
+    // On, start(..), stop(), shutdown(), subscribe, subscribePaused, resumeSubscription, pauseSubscription and
+    // cancelSubscription all run one at a time on one monitor, as the native Mongo model does, so a shutdown() held
+    // inside it holds every other call of those at the monitor. isRunning and isPaused answer without it
+    volatile boolean sharesOneMonitor = false;
+    // The calls made on the shared monitor, as call@thread, recorded before the monitor is taken
+    final List<String> monitoredCalls = new CopyOnWriteArrayList<>();
+    private final Object sharedMonitor = new Object();
 
     /**
      * The context type the start-at is asked with when {@code asksTheStartAtInsideTheDelegate} is on.
@@ -97,14 +105,18 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        beforeSubscribe.accept(subscriptionId);
-        return delegate.subscribe(subscriptionId, filter, startAtForTheDelegate(startAt), action);
+        return onTheMonitor("subscribe", () -> {
+            beforeSubscribe.accept(subscriptionId);
+            return delegate.subscribe(subscriptionId, filter, startAtForTheDelegate(startAt), action);
+        });
     }
 
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        beforeSubscribe.accept(subscriptionId);
-        return delegate.subscribePaused(subscriptionId, filter, startAtForTheDelegate(startAt), action);
+        return onTheMonitor("subscribePaused", () -> {
+            beforeSubscribe.accept(subscriptionId);
+            return delegate.subscribePaused(subscriptionId, filter, startAtForTheDelegate(startAt), action);
+        });
     }
 
     private StartAt startAtForTheDelegate(StartAt startAt) {
@@ -121,16 +133,20 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     @Override
     public void stop() {
-        stops.incrementAndGet();
-        beforeStop.run();
-        delegate.stop();
+        onTheMonitor("stop", () -> {
+            stops.incrementAndGet();
+            beforeStop.run();
+            delegate.stop();
+        });
     }
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        starts.incrementAndGet();
-        beforeStart.run();
-        delegate.start(resumeSubscriptionsAutomatically);
+        onTheMonitor("start", () -> {
+            starts.incrementAndGet();
+            beforeStart.run();
+            delegate.start(resumeSubscriptionsAutomatically);
+        });
     }
 
     @Override
@@ -150,30 +166,51 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        resumed.add(subscriptionId);
-        beforeResume.run();
-        return delegate.resumeSubscription(subscriptionId);
+        return onTheMonitor("resumeSubscription", () -> {
+            resumed.add(subscriptionId);
+            beforeResume.run();
+            return delegate.resumeSubscription(subscriptionId);
+        });
     }
 
     @Override
     public void pauseSubscription(String subscriptionId) {
-        delegate.pauseSubscription(subscriptionId);
+        onTheMonitor("pauseSubscription", () -> delegate.pauseSubscription(subscriptionId));
     }
 
     @Override
     public void cancelSubscription(String subscriptionId) {
-        delegate.cancelSubscription(subscriptionId);
+        onTheMonitor("cancelSubscription", () -> delegate.cancelSubscription(subscriptionId));
     }
 
     @Override
     public void shutdown() {
         shutdownAttempts.add(Thread.currentThread().getName());
-        if (serializesShutdown) {
+        if (sharesOneMonitor) {
+            onTheMonitor("shutdown", this::shutDownHooked);
+        } else if (serializesShutdown) {
             synchronized (shutdownMonitor) {
                 shutDownHooked();
             }
         } else {
             shutDownHooked();
+        }
+    }
+
+    private void onTheMonitor(String call, Runnable body) {
+        onTheMonitor(call, () -> {
+            body.run();
+            return null;
+        });
+    }
+
+    private <T> T onTheMonitor(String call, Supplier<T> body) {
+        if (!sharesOneMonitor) {
+            return body.get();
+        }
+        monitoredCalls.add(call + "@" + Thread.currentThread().getName());
+        synchronized (sharedMonitor) {
+            return body.get();
         }
     }
 

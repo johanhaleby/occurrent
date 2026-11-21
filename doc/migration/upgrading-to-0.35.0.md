@@ -2988,8 +2988,16 @@ the catch-up is not affected.
   that call, and every other such call still in the wrapped model's `shutdown()`, has returned and the thread that
   held the lock has let it go, the catch-up's lifecycle thread shuts the wrapped model down again under the lock, so
   the wrapped model keeps no subscription that the code went on to register. The thread that held the lock neither
-  makes nor waits for that call. A later `shutdown()` made while such a call is still in the wrapped model's
-  `shutdown()` doesn't wait for it, and hands its own call to the lifecycle thread the same way. When the call on the
+  makes nor waits for that call. A later `shutdown()` that takes the lock while such a call is still in the wrapped model's
+  `shutdown()` doesn't wait for it, and hands its own call to the lifecycle thread the same way. A later `shutdown()`
+  that makes its own call without the lock, because it gave up on the lock too or because a `start(..)` is inside the
+  wrapped model's `start(..)`, doesn't return at once. A wrapped model that makes a second `shutdown()` wait for one
+  under way, as both MongoDB subscription models do, holds that call until the first has returned. While a call
+  without the lock is in the wrapped model's `shutdown()`, a `start(..)`, `stop()`, `stopReplay()` or
+  `resumeReplay()` that takes the lock changes nothing and doesn't call the wrapped model, and a
+  `resumeSubscription(id)` returns a handle whose `waitUntilStarted(..)` answers `false`. When the code that held the
+  lock returns meanwhile, the call that ran it, such as the subscribe whose `StartAt.dynamic(..)` function it was,
+  fails with `IllegalStateException` instead of subscribing in the wrapped model. When the call on the
   lifecycle thread throws, it is logged at `ERROR` and made again after a wait that starts at 100 ms and doubles up to
   2 seconds, until it returns normally, and until then a `start(..)` doesn't start the wrapped model.
 

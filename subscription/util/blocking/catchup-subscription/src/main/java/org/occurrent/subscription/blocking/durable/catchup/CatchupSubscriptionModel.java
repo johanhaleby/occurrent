@@ -344,7 +344,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
             List<Runnable> steps = new ArrayList<>();
             presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
             steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
-            steps.add(getWrappedSubscriptionModel()::stop);
+            steps.add(anyCatchupModel()::stopTheLiveDelegate);
             AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
         });
     }
@@ -385,10 +385,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 replaysOnResume = resumeSubscriptionsAutomatically
                         ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
                         : null;
-                anyCatchupModel().startTheLiveDelegate(this, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null));
+                anyCatchupModel().startTheLiveDelegate(this, () -> anyCatchupModel().enteringTheLiveDelegate(subscriptionModel).start(resumeSubscriptionsAutomatically && replaysOnResume == null));
             } catch (Throwable e) {
                 boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
-                        && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
+                        && !anyCatchupModel().staysOutOfTheLiveDelegate() && AbstractCatchupSubscriptionModel.runsAfterFailedStart(subscriptionModel, e);
                 attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns, e));
                 throw e;
             }
@@ -417,13 +417,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public boolean isRunning() {
         return presentCatchupModels().anyMatch(AbstractCatchupSubscriptionModel::isRunning)
-                || getWrappedSubscriptionModel().isRunning();
+                || !anyCatchupModel().staysOutOfTheLiveDelegate() && subscriptionModel.isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isRunning(subscriptionId))
-                || getWrappedSubscriptionModel().isRunning(subscriptionId);
+                || !anyCatchupModel().staysOutOfTheLiveDelegate() && subscriptionModel.isRunning(subscriptionId);
     }
 
     /**
@@ -455,7 +455,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public boolean isPaused(String subscriptionId) {
         return !anyCatchupModel().isRepositioning(subscriptionId) && (presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))
-                || (presentCatchupModels().noneMatch(model -> model.isReplayingToResume(subscriptionId)) && getWrappedSubscriptionModel().isPaused(subscriptionId)));
+                || (presentCatchupModels().noneMatch(model -> model.isReplayingToResume(subscriptionId))
+                    && !anyCatchupModel().staysOutOfTheLiveDelegate() && subscriptionModel.isPaused(subscriptionId)));
     }
 
     /**
@@ -490,7 +491,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * of them made while it runs waits for it the same way. It also waits with no deadline for the calls that actions
      * handed over before it, so a resume made after an action's {@code stop()} takes effect after that stop. When it
      * waited for such calls and a {@code shutdown()} began meanwhile, it changes nothing, and the
-     * {@code waitUntilStarted} of the handle it returns answers {@code false}. While code a caller supplied, such as a
+     * {@code waitUntilStarted} of the handle it returns answers {@code false}. The same holds, without calling the
+     * wrapped model's {@code resumeSubscription(id)}, when it takes the model lock while a {@code shutdown()} is in the
+     * wrapped model without the lock. While code a caller supplied, such as a
      * {@code StartAt.dynamic} function a subscribe asks on the lifecycle thread, runs under the model lock, either wait
      * ends ten seconds after it began, or after that code began if later, and this throws
      * {@link IllegalStateException} and changes nothing, since that code may be waiting for this resume. The same holds
@@ -556,7 +559,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 }
             }
             anyCatchupModel().awaitTheCancelledReplay(subscriptionId, whatChanged);
-            Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+            Subscription resumed = anyCatchupModel().enteringTheLiveDelegate(subscriptionModel).resumeSubscription(subscriptionId);
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
             return resumed;
         }
@@ -603,14 +606,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public void addStartRefusalListener(StartRefusalListener listener) {
         Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
         presentCatchupModels().forEach(model -> model.addHeldPausedListener(listener));
-        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.addStartRefusalListener(listener));
+        if (!anyCatchupModel().staysOutOfTheLiveDelegate()) {
+            StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.addStartRefusalListener(listener));
+        }
     }
 
     @Override
     public void removeStartRefusalListener(StartRefusalListener listener) {
         Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
         presentCatchupModels().forEach(model -> model.removeHeldPausedListener(listener));
-        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.removeStartRefusalListener(listener));
+        if (!anyCatchupModel().staysOutOfTheLiveDelegate()) {
+            StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.removeStartRefusalListener(listener));
+        }
     }
 
     /**
@@ -620,7 +627,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
         return presentCatchupModels().anyMatch(model -> model.holdsTheReplayHeldFor(subscriptionId, refusal))
-               || StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+               || !anyCatchupModel().staysOutOfTheLiveDelegate() && StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
     }
 
     /**
@@ -629,7 +636,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      */
     @Override
     public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
-        return StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+        return !anyCatchupModel().staysOutOfTheLiveDelegate() && StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
     }
 
     /**
@@ -691,7 +698,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
             if (replaying != null) {
                 replaying.pauseSubscription(subscriptionId);
             } else {
-                getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+                anyCatchupModel().enteringTheLiveDelegate(subscriptionModel).pauseSubscription(subscriptionId);
             }
         }
     }
@@ -717,7 +724,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
             Runnable cancelAskedSubscribes = anyCatchupModel().askedSubscribesToCancel(subscriptionId);
             boolean nothingKept = anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
                 presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
-                subscriptionModel.cancelSubscription(subscriptionId);
+                anyCatchupModel().cancelInTheLiveDelegate(subscriptionId);
             });
             if (nothingKept) {
                 // Position storage is shared config, not per-mode state. Either inner model's config deletes the same

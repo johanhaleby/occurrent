@@ -62,6 +62,13 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     // The name of the thread of each shutdown(), recorded before the monitor of a serialized shutdown() is taken
     final List<String> shutdownAttempts = new CopyOnWriteArrayList<>();
     private final Object shutdownMonitor = new Object();
+    // On, shutdown() runs on the monitor of the model, which stop(), start(..), subscribe, subscribePaused, resumeSubscription,
+    // pauseSubscription and cancelSubscription take too, as the native Mongo model does. A shutdown() held inside it, by
+    // afterShutdown, then holds every one of those at the monitor, and it drops the subscriptions without rejecting a
+    // subscribe. isRunning and isPaused answer without the monitor
+    volatile boolean sharesOneMonitor = false;
+    // The subscribePaused(..), resumeSubscription(id) and stop() calls made, as call@thread, recorded before the monitor is taken
+    final List<String> monitoredCalls = new CopyOnWriteArrayList<>();
 
     /**
      * The context type the start-at is asked with, since the catch-up model hands the function to a live model only for
@@ -107,7 +114,11 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     @Override
     public void shutdown() {
         shutdownAttempts.add(Thread.currentThread().getName());
-        if (serializesShutdown) {
+        if (sharesOneMonitor) {
+            synchronized (this) {
+                shutDownHooked();
+            }
+        } else if (serializesShutdown) {
             synchronized (shutdownMonitor) {
                 shutDownHooked();
             }
@@ -117,7 +128,7 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     private void shutDownHooked() {
-        if (asksTheStartAtAndRejectsOnceShutDown) {
+        if (asksTheStartAtAndRejectsOnceShutDown || sharesOneMonitor) {
             shutDown = true;
             subscriptions.clear();
         }
@@ -132,7 +143,12 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     @Override
-    public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        monitoredCalls.add("subscribePaused@" + Thread.currentThread().getName());
+        return subscribePausedHoldingTheMonitor(subscriptionId, startAt, action);
+    }
+
+    private synchronized Subscription subscribePausedHoldingTheMonitor(String subscriptionId, StartAt startAt, Consumer<CloudEvent> action) {
         asksTheStartAt(startAt);
         FakeSubscription subscription = new FakeSubscription(subscriptionId, action);
         subscriptions.put(subscriptionId, subscription);
@@ -145,7 +161,12 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     @Override
-    public synchronized void stop() {
+    public void stop() {
+        monitoredCalls.add("stop@" + Thread.currentThread().getName());
+        stopHoldingTheMonitor();
+    }
+
+    private synchronized void stopHoldingTheMonitor() {
         running = false;
         subscriptions.values().forEach(subscription -> subscription.started = false);
     }
@@ -195,6 +216,7 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        monitoredCalls.add("resumeSubscription@" + Thread.currentThread().getName());
         beforeResume.run();
         return resumeHoldingTheMonitor(subscriptionId);
     }
