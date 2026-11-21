@@ -364,69 +364,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Whether a shutdown() has shut the live delegate down, with no start(..) of the model since, so a later
         // shutdown() doesn't shut it down again. Written only with the model lock held, and read under it
         private boolean shutDown;
-        // The passes under the lock that threw and wait on a backoff to run again, which a shutdown() of the model that
-        // shuts the live delegate down under the lock settles. Read and written only with the model lock held
-        private final Set<ShutdownLeftToTheLifecycleThread> passesThatThrew = new LinkedHashSet<>();
-        // Calls to the live delegate's shutdown() without the model lock that haven't returned. While one is counted, no
-        // pass under the lock calls the live delegate, since a live delegate can serialize its shutdown() and the lock
-        // holder would then wait on a call its caller didn't make
-        private int shutdownsWithoutTheLock;
-        // Passes under the lock inside the live delegate's shutdown(), which a call without the lock doesn't join
-        private int passesUnderTheLockInTheLiveDelegate;
-        // Passes under the lock left to wait until no call without the lock is counted. The call that brings the count to
-        // zero hands every one of them to the lifecycle thread
-        private final Set<ShutdownLeftToTheLifecycleThread> parked = new LinkedHashSet<>();
-    }
-
-    // A shutdown() that gave up on the model lock, or whose pass under the lock found a call without the lock still in
-    // the live delegate. It counts as under way, so a start(..) of the model doesn't start the live delegate, until its
-    // pass without the lock, if it has one, has returned and its pass under the lock has returned normally
-    private static final class ShutdownLeftToTheLifecycleThread {
-        private final Object model;
-        private final LiveDelegateCalls calls;
-        private final Runnable forgetTheCatchups;
-        private final Runnable shutDownTheLiveDelegate;
-        private final AtomicInteger passesLeft;
-        // Read and written only with the model lock held
-        private boolean passUnderTheLockDone;
-        private int failures;
-
-        private ShutdownLeftToTheLifecycleThread(Object model, LiveDelegateCalls calls, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate, int passesLeft) {
-            this.model = model;
-            this.calls = calls;
-            this.forgetTheCatchups = forgetTheCatchups;
-            this.shutDownTheLiveDelegate = shutDownTheLiveDelegate;
-            this.passesLeft = new AtomicInteger(passesLeft);
-        }
-
-        private void passRan() {
-            if (passesLeft.decrementAndGet() == 0) {
-                synchronized (calls) {
-                    calls.shutdowns--;
-                }
-            }
-        }
-
-        // With the model lock held
-        private void passUnderTheLockRan() {
-            if (passUnderTheLockDone) {
-                return;
-            }
-            passUnderTheLockDone = true;
-            calls.passesThatThrew.remove(this);
-            passRan();
-        }
-
-        // With the model lock held
-        private Duration backoffAfterFailure() {
-            return backoffAfter(++failures);
-        }
-    }
-
-    // FIRST_BACKOFF, doubled with each failure in a row up to MAX_BACKOFF
-    private static Duration backoffAfter(int failuresInARow) {
-        long millis = FIRST_BACKOFF.toMillis() << Math.min(failuresInARow - 1, 16);
-        return Duration.ofMillis(Math.min(millis, MAX_BACKOFF.toMillis()));
     }
 
     // A subscribe whose function is asked with no claim held, kept from before the function is asked until the
@@ -767,8 +704,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         Subscribed made = subscribed.get(subscriptionId);
         SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
-        return made != null && (made.owner().hasParkedReplay(subscriptionId)
-                || !staysOutOfTheLiveDelegate() && (liveDelegate.isRunning(subscriptionId) || liveDelegate.isPaused(subscriptionId)));
+        return made != null && (made.owner().hasParkedReplay(subscriptionId) || liveDelegate.isRunning(subscriptionId) || liveDelegate.isPaused(subscriptionId));
     }
 
     /**
@@ -838,8 +774,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     final Subscription subscribeInTheWrappedModel(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, @Nullable Subscribed made) {
         Consumer<CloudEvent> afterEndedReplays = made == null ? event -> acceptInAnAction(action, event) : afterEndedReplaysReturned(subscriptionId, action, made);
         return holdPaused
-                ? enteringTheLiveDelegate(subscriptionModel).subscribePaused(subscriptionId, filter, startAt, afterEndedReplays)
-                : enteringTheLiveDelegate(subscriptionModel).subscribe(subscriptionId, filter, startAt, afterEndedReplays);
+                ? getWrappedSubscriptionModel().subscribePaused(subscriptionId, filter, startAt, afterEndedReplays)
+                : getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, afterEndedReplays);
     }
 
     // The action, called only while made, the record of the subscription the caller subscribes, is still the record for
@@ -978,8 +914,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * returned, and what it throws there is logged at {@code ERROR}. Until then the live delegate can go on delivering
      * to the action, and the replay can go on to its next event. From any other thread it also waits for the calls such
      * actions handed over before it, and takes effect after them, or changes nothing when a {@code shutdown()} has
-     * begun by then. It also changes nothing, without calling the live delegate's {@code stop()}, when it takes the
-     * lock while a {@code shutdown()} is in the live delegate without the lock, as {@link #runInTurn} describes.
+     * begun by then.
      *
      * @throws IllegalStateException when called on a thread that runs a replay of this model outside the subscriber's
      *                               action, such as in a {@link CatchupListener}, or from a thread on which the model
@@ -989,7 +924,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public void stop() {
-        runInTurn(this, "stop()", () -> runEach(List.<Runnable>of(this::stopReplay, this::stopTheLiveDelegate), Runnable::run));
+        runInTurn(this, "stop()", () -> runEach(List.<Runnable>of(this::stopReplay, getWrappedSubscriptionModel()::stop), Runnable::run));
     }
 
     /**
@@ -1024,9 +959,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link #runInTurn} describes. Called from inside the action of a live call or a replay of this model, it returns at
      * once and takes effect on another thread once the action has returned, and what it throws there is logged at
      * {@code ERROR}. From any other thread it also waits for the calls such actions handed over before it, and takes
-     * effect after them, or changes nothing when a {@code shutdown()} has begun by then. It also changes nothing when it
-     * takes the lock while a {@code shutdown()} is in the live delegate without the lock, as {@link #runInTurn}
-     * describes. A {@code shutdown()} that comes while the live delegate's {@code start(..)} runs shuts the live
+     * effect after them, or changes nothing when a {@code shutdown()} has begun by then. A {@code shutdown()} that comes while the live delegate's {@code start(..)} runs shuts the live
      * delegate down without waiting for this start, as {@link #shutDownInTurn} describes, and keeps it from resuming
      * anything once the live delegate's {@code start(..)} has returned. One under way when this start begins keeps it
      * from starting the live delegate.
@@ -1044,9 +977,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             final boolean resumeEachHere;
             try {
                 resumeEachHere = resumeSubscriptionsAutomatically && anyResumeReplays();
-                startTheLiveDelegate(this, () -> enteringTheLiveDelegate(subscriptionModel).start(resumeSubscriptionsAutomatically && !resumeEachHere));
+                startTheLiveDelegate(this, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere));
             } catch (Throwable e) {
-                undoStart(attempt, attempt.wasStopped() && !staysOutOfTheLiveDelegate() && runsAfterFailedStart(subscriptionModel, e), e);
+                undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e), e);
                 throw e;
             }
             // A shutdown that didn't wait for this start has forgotten the catch-ups by now, so nothing is resumed after it
@@ -1113,11 +1046,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         do {
             cancelsStartedBefore = cancelsStarted.get();
             paused.addAll(cancelsUnderWay.keySet());
-            if (!staysOutOfTheLiveDelegate()) {
-                Set<String> known = IntrospectableSubscriptions.findIn(liveDelegate).map(IntrospectableSubscriptions::subscriptionIds)
-                        .orElseGet(() -> Set.copyOf(subscribed.keySet()));
-                known.stream().filter(liveDelegate::isPaused).forEach(paused::add);
-            }
+            Set<String> known = IntrospectableSubscriptions.findIn(liveDelegate).map(IntrospectableSubscriptions::subscriptionIds)
+                    .orElseGet(() -> Set.copyOf(subscribed.keySet()));
+            known.stream().filter(liveDelegate::isPaused).forEach(paused::add);
             paused.addAll(cancelsUnderWay.keySet());
         } while (cancelsStarted.get() != cancelsStartedBefore);
         return paused;
@@ -1180,7 +1111,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     @Override
     public boolean isRunning() {
-        return !runningCatchupSubscriptions.isEmpty() || !staysOutOfTheLiveDelegate() && subscriptionModel.isRunning();
+        return !runningCatchupSubscriptions.isEmpty() || getWrappedSubscriptionModel().isRunning();
     }
 
     // Running while a resume replays for it, also while that replay hands over and isn't catching up any more, since
@@ -1188,7 +1119,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Override
     public boolean isRunning(String subscriptionId) {
         return runningCatchupSubscriptions.containsKey(subscriptionId) || isReplayingToResume(subscriptionId)
-                || isRepositioning(subscriptionId) || !staysOutOfTheLiveDelegate() && subscriptionModel.isRunning(subscriptionId);
+                || isRepositioning(subscriptionId) || getWrappedSubscriptionModel().isRunning(subscriptionId);
     }
 
     @Override
@@ -1226,7 +1157,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Override
     public boolean isPaused(String subscriptionId) {
         return !isRepositioning(subscriptionId) && (pauseRequestedDuringCatchup.containsKey(subscriptionId) || parkedReplays.containsKey(subscriptionId)
-                || (!isReplayingToResume(subscriptionId) && !staysOutOfTheLiveDelegate() && subscriptionModel.isPaused(subscriptionId)));
+                || (!isReplayingToResume(subscriptionId) && getWrappedSubscriptionModel().isPaused(subscriptionId)));
     }
 
     // Whether a resume at a given position runs for subscriptionId, on this model or another child of the same dispatcher
@@ -1264,8 +1195,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * handed over before it, as {@link #awaitTheHandedCalls(String)} describes, so a resume made after an action's
      * {@code stop()} takes effect after that stop. When it waited for such calls and a {@code shutdown()} began
      * meanwhile, it changes nothing, and the {@code waitUntilStarted} of the handle it returns answers {@code false}.
-     * The same holds when it takes the lock while a {@code shutdown()} is in the live delegate without the lock, as
-     * {@link #runInTurn} describes, and the live delegate's {@code resumeSubscription(id)} isn't called then.
      * While code a caller supplied, such as a {@code StartAt.dynamic} function, holds either wait up, the wait ends after
      * {@link #LIFECYCLE_WAIT} as {@link #runInTurn} describes, and this throws {@link IllegalStateException} and changes
      * nothing.
@@ -1318,7 +1247,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return replaying;
             }
             awaitTheCancelledReplay(subscriptionId, whatChanged);
-            Subscription resumed = enteringTheLiveDelegate(subscriptionModel).resumeSubscription(subscriptionId);
+            Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
             liveDelegateResumed();
             return resumed;
         }
@@ -1515,8 +1444,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         if (liveStartAt != null) {
                             givenPosition = resumedAt(liveStartAt);
                         }
-                        StartAt resumeAt = liveStartAt == null ? startAt : goingLiveFrom(answered, liveStartAt);
-                        resumed = enteringTheLiveDelegate(repositionable).resumeSubscription(subscriptionId, resumeAt);
+                        resumed = repositionable.resumeSubscription(subscriptionId, liveStartAt == null ? startAt : goingLiveFrom(answered, liveStartAt));
                     }
                 } catch (Throwable e) {
                     // Throwable, since a live delegate written in Kotlin can throw a checked exception
@@ -1593,7 +1521,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // stored only when the live delegate restarts at it.
     private @Nullable Checkpoint restartPosition(String subscriptionId, Checkpoint given, RepositionableSubscriptions liveDelegate) {
         if (!replaysFrom(given)) {
-            return enteringTheLiveDelegate(liveDelegate).restartsAt(given) ? given : null;
+            return liveDelegate.restartsAt(given) ? given : null;
         }
         CatchupCheckpoints.Start start = CatchupCheckpoints.parse(given);
         if (start.liveFrom() != null || originAfterTheBeginning(start) == null) {
@@ -1646,7 +1574,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try (ReplayScope<?> scope = openScope(null)) {
             liveStart = scope.liveStart();
         }
-        Checkpoint present = liveStart == null ? enteringTheLiveDelegate(subscriptionModel).globalCheckpoint() : new StringBasedCheckpoint(liveStart);
+        Checkpoint present = liveStart == null ? subscriptionModel.globalCheckpoint() : new StringBasedCheckpoint(liveStart);
         if (present == null) {
             throw new IllegalStateException("The live subscription model " + subscriptionModel.getClass().getName() + " answered nothing when asked for the current position, so subscription "
                                             + subscriptionId + " can't be resumed at " + requested + " with the position stored. " + NOTHING_CHANGED);
@@ -1685,18 +1613,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void addStartRefusalListener(StartRefusalListener listener) {
         Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
         addHeldPausedListener(listener);
-        if (!staysOutOfTheLiveDelegate()) {
-            StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(liveDelegate -> liveDelegate.addStartRefusalListener(listener));
-        }
+        StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).ifPresent(liveDelegate -> liveDelegate.addStartRefusalListener(listener));
     }
 
     @Override
     public void removeStartRefusalListener(StartRefusalListener listener) {
         Objects.requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
         removeHeldPausedListener(listener);
-        if (!staysOutOfTheLiveDelegate()) {
-            StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(liveDelegate -> liveDelegate.removeStartRefusalListener(listener));
-        }
+        StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).ifPresent(liveDelegate -> liveDelegate.removeStartRefusalListener(listener));
     }
 
     /**
@@ -1707,7 +1631,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Override
     public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
         return holdsTheReplayHeldFor(subscriptionId, refusal)
-               || !staysOutOfTheLiveDelegate() && StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+               || StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
     }
 
     /**
@@ -1716,7 +1640,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
-        return !staysOutOfTheLiveDelegate() && StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+        return StartRefusalReportingSubscriptions.findIn(getWrappedSubscriptionModel()).map(liveDelegate -> liveDelegate.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
     }
 
     /**
@@ -1860,7 +1784,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private @Nullable ResumeReplay replayThatResumeRuns(String subscriptionId) {
         Subscribed subscription = subscribed.get(subscriptionId);
         if (subscription == null || subscription.owner() != this || shuttingDown
-                || (!cancelsUnderWay.containsKey(subscriptionId) && !(!staysOutOfTheLiveDelegate() && subscriptionModel.isPaused(subscriptionId)))
+                || (!cancelsUnderWay.containsKey(subscriptionId) && !getWrappedSubscriptionModel().isPaused(subscriptionId))
                 || (subscription.startAt().isDynamic() && subscription.startAt().get(generateSubscriptionModelContext()) == null)) {
             return null;
         }
@@ -1953,7 +1877,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         Subscribed made = attempt.replay.made;
         Consumer<CloudEvent> letInByTheRecord = made == null ? event -> acceptInAnAction(liveConsumer, event) : afterEndedReplaysReturned(subscriptionId, liveConsumer, made);
-        Subscription subscription = enteringTheLiveDelegate(subscriptionModel).subscribe(subscriptionId, filter, startAtToUse, letInByTheRecord);
+        Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, letInByTheRecord);
         attempt.wentLive = true;
         markDidNotGoLive(subscriptionId, false);
         live.complete(subscription);
@@ -2010,11 +1934,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         StartAt liveStart = startAtToUse.get(new SubscriptionModelContext(innermost.getClass()));
         Subscription resumed;
         if (!(liveStart instanceof StartAtCheckpoint)) {
-            resumed = enteringTheLiveDelegate(liveDelegate).resumeSubscription(subscriptionId);
+            resumed = liveDelegate.resumeSubscription(subscriptionId);
         } else if (takesOver) {
             resumed = resumeWhereTheTakeoverGoesLive(subscriptionId, liveStart);
         } else {
-            resumed = enteringTheLiveDelegate(repositionableLiveDelegate(subscriptionId)).resumeSubscription(subscriptionId, liveStart);
+            resumed = repositionableLiveDelegate(subscriptionId).resumeSubscription(subscriptionId, liveStart);
         }
         liveDelegateResumed();
         return resumed;
@@ -2028,9 +1952,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         RepositionableSubscriptions repositionable = repositionableLiveDelegate(subscriptionId);
         SubscriptionAlreadyRunningException resumedMeanwhile = null;
         while (true) {
-            if (enteringTheLiveDelegate(liveDelegate).isRunning(subscriptionId)) {
+            if (liveDelegate.isRunning(subscriptionId)) {
                 try {
-                    enteringTheLiveDelegate(liveDelegate).pauseSubscription(subscriptionId);
+                    liveDelegate.pauseSubscription(subscriptionId);
                 } catch (SubscriptionNotRunningException pausedOrEndedMeanwhile) {
                     // The resume below says which
                 }
@@ -2038,7 +1962,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 throw resumedMeanwhile;
             }
             try {
-                return enteringTheLiveDelegate(repositionable).resumeSubscription(subscriptionId, liveStart);
+                return repositionable.resumeSubscription(subscriptionId, liveStart);
             } catch (SubscriptionAlreadyRunningException e) {
                 resumedMeanwhile = e;
             }
@@ -2169,7 +2093,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * a position a catch-up replays from are not checked.
      */
     protected Subscription subscribeLiveUnlessItsStartIsLost(String subscriptionId, StartAt firstStartAt, boolean holdPaused, Function<Boolean, Subscription> subscribeLive) {
-        if (firstStartAt.isDynamic() || !(firstStartAt instanceof StartAtCheckpoint at) || isCatchupCheckpoint(at.checkpoint) || enteringTheLiveDelegate(subscriptionModel).canResumeFrom(at.checkpoint)) {
+        if (firstStartAt.isDynamic() || !(firstStartAt instanceof StartAtCheckpoint at) || isCatchupCheckpoint(at.checkpoint) || subscriptionModel.canResumeFrom(at.checkpoint)) {
             return subscribeLive.apply(holdPaused);
         }
         return refuseOrHoldPaused(subscriptionId, HistoryLossMessages.cannotStartFrom(subscriptionId, at.checkpoint), at.checkpoint, false, () -> subscribeLive.apply(true));
@@ -2191,7 +2115,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         CatchupCheckpoints.Start stored = CatchupCheckpoints.parse(at.checkpoint);
         Checkpoint liveFrom = stored.liveFrom();
         String origin = originAfterTheBeginning(stored);
-        if (liveFrom == null || origin == null || enteringTheLiveDelegate(subscriptionModel).canResumeFrom(liveFrom)) {
+        if (liveFrom == null || origin == null || subscriptionModel.canResumeFrom(liveFrom)) {
             return null;
         }
         return refuseOrHoldPaused(subscriptionId, liveStartLostAfterTheBeginning(subscriptionId, origin, liveFrom), liveFrom, true,
@@ -2249,7 +2173,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Where the subscription is while a takeover keeps it, for a log. A start(true) of the live delegate can resume it
     // where the live delegate lost the history, which the live delegate then reports again.
     private String whileTakenOver(String subscriptionId) {
-        return !staysOutOfTheLiveDelegate() && subscriptionModel.isRunning(subscriptionId)
+        return getWrappedSubscriptionModel().isRunning(subscriptionId)
                 ? "The subscription model resumed the subscription where it lost the history, and pauses it again once it reports that loss."
                 : "The subscription stays paused meanwhile.";
     }
@@ -2257,12 +2181,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Where the subscription is once no replay of this model resumes it, and what resumes it, for a log
     private String whenNoReplayResumesIt(String subscriptionId) {
         SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
-        boolean asksTheLiveDelegate = !staysOutOfTheLiveDelegate();
         if (hasParkedReplay(subscriptionId)) {
             return "The subscription stays paused until it is resumed or start(true) is called on this model, which runs the replay it holds again.";
-        } else if (asksTheLiveDelegate && liveDelegate.isRunning(subscriptionId)) {
+        } else if (liveDelegate.isRunning(subscriptionId)) {
             return "The subscription model runs the subscription.";
-        } else if (asksTheLiveDelegate && liveDelegate.isPaused(subscriptionId)) {
+        } else if (liveDelegate.isPaused(subscriptionId)) {
             return "The subscription model holds the subscription paused until it is resumed. Resuming it through the catch-up replays from the position stored for it when that is one the catch-up replays from, and otherwise resumes it where the subscription model holds it. If the subscription model loses that position again, cancel the subscription and subscribe it again.";
         }
         return "The subscription model neither runs the subscription nor holds it paused.";
@@ -2288,7 +2211,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             HandedOver made = handedOver.get(subscriptionId);
             if (made == null || made.owner() != this
-                || !(made.takingOver().get() || made.takeOverAsked().get() && !staysOutOfTheLiveDelegate() && subscriptionModel.isPaused(subscriptionId))) {
+                || !(made.takingOver().get() || made.takeOverAsked().get() && getWrappedSubscriptionModel().isPaused(subscriptionId))) {
                 return null;
             }
             Subscribed subscription = made.subscribed();
@@ -2366,7 +2289,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // finds the pause
                 pauseRequestedDuringCatchup.put(subscriptionId, true);
             } else {
-                enteringTheLiveDelegate(subscriptionModel).pauseSubscription(subscriptionId);
+                getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
             }
         }
     }
@@ -2377,7 +2300,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     protected void applyPendingPauseIfAny(String subscriptionId) {
         if (pauseRequestedDuringCatchup.remove(subscriptionId) != null) {
-            enteringTheLiveDelegate(subscriptionModel).pauseSubscription(subscriptionId);
+            getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
         }
     }
 
@@ -2523,9 +2446,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return again;
         }
 
-        // Called with the handover lock held.
+        // FIRST_BACKOFF, doubled with each failure in a row up to MAX_BACKOFF. Called with the handover lock held.
         private Duration backoffAfterFailure() {
-            return backoffAfter(++failures);
+            failures++;
+            long millis = FIRST_BACKOFF.toMillis() << Math.min(failures - 1, 16);
+            return Duration.ofMillis(Math.min(millis, MAX_BACKOFF.toMillis()));
         }
     }
 
@@ -2875,10 +2800,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private boolean wrappedModelCanResumeFrom(Checkpoint liveFrom) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
         if (attempt == null) {
-            return callWrappedModel(stillWanted -> enteringTheLiveDelegate(subscriptionModel).canResumeFrom(liveFrom, stillWanted));
+            return callWrappedModel(stillWanted -> subscriptionModel.canResumeFrom(liveFrom, stillWanted));
         }
         BeforeTheCall before = beforeTheCall(attempt);
-        boolean canResume = callWrappedModel(stillWanted -> enteringTheLiveDelegate(subscriptionModel).canResumeFrom(liveFrom, stillWanted));
+        boolean canResume = callWrappedModel(stillWanted -> subscriptionModel.canResumeFrom(liveFrom, stillWanted));
         if (canResume || !noLongerWantedSince(attempt, before)) {
             return canResume;
         }
@@ -3201,6 +3126,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     static final String STARTED_BUT_NOT_RESUMED = "The model was stopped and is started, as a resume starts a stopped model, but the subscription wasn't resumed.";
     static final String STARTED_BUT_NOT_RUN_AGAIN = "The catch-up replay held for the subscription wasn't run again. The call doesn't stop a model it started, and it went on to the other subscriptions first.";
     static final String STOPPED_ALL_THE_SAME = "The model is stopped all the same, and a catch-up replay for the subscription delivers no further event until start(true) or resumeSubscription runs it again.";
+    // What a shutdown() that gives up on the model lock did before it waited for the lock
+    static final String NOT_SHUT_DOWN = "The catch-up replays are ended and the model is marked as shutting down, but the wrapped subscription model isn't shut down,"
+            + " and its subscriptions still run. Call shutdown() again once that code has returned.";
+    static final String SHUT_DOWN_TO_END_A_START = "The catch-up replays are ended and the model is marked as shutting down. The wrapped subscription model was shut down without"
+            + " the model lock to end the start(..) inside it. Call shutdown() again once that code has returned, so the wrapped model is shut down under the lock.";
 
     // The lock behind the claim of subscriptionId, counting the caller as one that holds it or waits for it until it calls
     // releaseClaimLock
@@ -3285,7 +3215,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * always answers {@code true}, and the wrapped model retries as it does for the calls a subscribe makes.
      */
     protected Checkpoint captureLiveResumeCheckpoint(@Nullable String liveStart) {
-        Checkpoint checkpoint = liveStart == null ? callWrappedModel(stillWanted -> enteringTheLiveDelegate(subscriptionModel).globalCheckpoint(stillWanted)) : new StringBasedCheckpoint(liveStart);
+        Checkpoint checkpoint = liveStart == null ? callWrappedModel(stillWanted -> subscriptionModel.globalCheckpoint(stillWanted)) : new StringBasedCheckpoint(liveStart);
         if (checkpoint == null) {
             throw new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.");
         }
@@ -3834,7 +3764,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             Runnable cancelAskedSubscribes = askedSubscribesToCancel(subscriptionId);
             boolean nothingKept = cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
                 cancelRunningCatchup(subscriptionId);
-                cancelInTheLiveDelegate(subscriptionId);
+                subscriptionModel.cancelSubscription(subscriptionId);
             });
             if (nothingKept) {
                 deletePositionFromStorage(subscriptionId);
@@ -4311,9 +4241,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             subscribed.clear();
         }
         handedOver.values().removeIf(made -> made.owner() == this);
-        if (!staysOutOfTheLiveDelegate()) {
-            HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.removeHistoryLossListener(historyLossListener));
-        }
+        HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.removeHistoryLossListener(historyLossListener));
         parkedReplays.values().forEach(parked -> parked.replay().result.cancel(false));
         parkedReplays.clear();
     }
@@ -4429,12 +4357,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * handed call, it doesn't run {@code body} when a {@code shutdown()} has begun by then, and returns normally. The
      * calling thread runs no action of these children, so the actions those calls wait for run on other threads. An
      * action that, after handing a call over, waits for a call it asked another thread to make never returns.
-     * <p>
-     * A thread that takes the lock while a {@code shutdown()} is in the live delegate without the lock, as
-     * {@link #shutDownInTurn} describes, doesn't run {@code body} either, and returns normally. A live delegate can make
-     * every call wait for a {@code shutdown()} under way, as the MongoDB models do for {@code stop()}, and every call
-     * waiting for the lock would then wait behind it. The {@code shutdown()} has forgotten the catch-ups by then, and
-     * shuts the live delegate down again under the lock once its call without the lock has returned.
      * <p>
      * The thread that holds the lock, the lifecycle thread or another one, can run code a caller supplied, such as a
      * {@code StartAt.dynamic} function that a subscribe, a resume or the live delegate asks, or a {@link CatchupListener}
@@ -4564,13 +4486,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // would wait for it to give the lock back. On the lifecycle thread body doesn't run once a shutdown() has begun, as
     // with a handed call, since a shutdown from another thread doesn't wait for the calls queued there and a start that
     // ran after it would start the live delegate it shut down. Either wait ends as heldUpByCallersCode describes, and
-    // call then throws without body having run. Nor does body run on a thread holding the lock while a shutdown() is in
-    // the live delegate without it, see staysOutOfTheLiveDelegate
+    // call then throws without body having run
     private void runAfterTheHandedCalls(String call, Runnable body) {
         if (modelLock.isHeldByCurrentThread()) {
-            if (!staysOutOfTheLiveDelegate()) {
-                underTheModelLock(body);
-            }
+            underTheModelLock(body);
             return;
         }
         if (callsOnTheLifecycleThread.get() > 0) {
@@ -4581,9 +4500,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             throw callersCodeHeldUp(call);
         }
         try {
-            if (!staysOutOfTheLiveDelegate()) {
-                body.run();
-            }
+            body.run();
         } finally {
             modelLock.unlock();
         }
@@ -4711,19 +4628,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     private IllegalStateException callersCodeHeldUp(String call) {
+        return callersCodeHeldUp(call, NOTHING_CHANGED);
+    }
+
+    private IllegalStateException callersCodeHeldUp(String call, String whatChanged) {
         log.error("{} waited {} ms for the model lock while code the caller supplied, such as a StartAt.dynamic function, ran under it, and gives up. {}",
-                call, LIFECYCLE_WAIT.toMillis(), NOTHING_CHANGED);
+                call, LIFECYCLE_WAIT.toMillis(), whatChanged);
         return new IllegalStateException("Cannot run " + call + ", because code the caller supplied, such as a StartAt.dynamic function or a CatchupListener, ran under the model lock for "
                 + LIFECYCLE_WAIT.toMillis() + " ms while this call waited for the lock, and that code may be waiting for this call. Don't wait inside such code for a lifecycle call"
-                + " made on another thread. " + NOTHING_CHANGED);
+                + " made on another thread. " + whatChanged);
     }
 
     /**
      * Runs {@code code}, which a caller supplied, such as a {@link CatchupListener}. On a thread that holds the model
      * lock, as a subscribe, a resume or a {@link #start(boolean)} does on the lifecycle thread or in turn, a call from
      * another thread that waits for the lock or for the lifecycle thread meanwhile gives up after {@link #LIFECYCLE_WAIT}
-     * and throws {@link IllegalStateException}, changing nothing, since {@code code} can be waiting for that call.
-     * Nested calls count from the outermost one.
+     * and throws {@link IllegalStateException}, since {@code code} can be waiting for that call. The call changes
+     * nothing then, apart from a {@code shutdown()}, which has ended the catch-up replays before it waited, as
+     * {@link #shutDownInTurn} describes. Nested calls count from the outermost one.
      */
     private void runCallersCode(Runnable code) {
         askCallersCode(() -> {
@@ -4792,34 +4714,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * under way has returned. A call from another thread doesn't wait for the calls queued on the lifecycle thread,
      * handed over by an action or made from another thread behind one, which run nothing once the model is flagged.
      * While code a caller supplied holds the lock up, as {@link #runInTurn} describes, it waits for the lock up to
-     * {@link #LIFECYCLE_WAIT} that way, and then runs {@code shutDownTheLiveDelegate} without the lock and logs a
-     * {@code WARN}, since that code may be waiting for this shutdown. That code can be inside the live delegate, which
-     * goes on registering a subscription once the code returns, so once {@code shutDownTheLiveDelegate} without the lock
-     * has returned, the shutdown hands {@code forgetTheCatchups} and {@code shutDownTheLiveDelegate} to the lifecycle
-     * thread, which runs them again under the lock once the thread that held it has let it go. That thread doesn't run
-     * them or wait for them. When that run throws, it is logged at {@code ERROR} and handed to the lifecycle thread again
-     * after a backoff of 100 ms, doubled each time up to 2 seconds, until it returns normally or a later
-     * {@code shutdown()} of {@code model} shuts the live delegate down under the lock. Until then the shutdown counts
-     * as under way, and a {@code start(..)} doesn't start the live delegate.
-     * <p>
-     * No thread runs {@code shutDownTheLiveDelegate} under the lock while a run of it without the lock, by this
-     * {@code shutdown()} of {@code model} or by another one, hasn't returned, since a live delegate can make a second
-     * {@code shutdown()} wait for one under way. A run under the lock that would start then, on the lifecycle thread or
-     * in a later {@code shutdown()}, is set aside without blocking any thread, and the run without the lock that returns
-     * last hands it to the lifecycle thread. Such a later {@code shutdown()} returns without waiting for it, and counts as under way
-     * until it has run. A later {@code shutdown()} that makes its own run without the lock, because a {@code start(..)}
-     * is in the live delegate's {@code start(..)} or because it gave up on the lock too, doesn't return at once. Its run
-     * goes into the live delegate beside the first, and a live delegate that makes a second {@code shutdown()} wait for
-     * one under way holds it there until the first has returned. A run without the lock that would start while a run
-     * under the lock is inside the live delegate doesn't run, since that run shuts the live delegate down.
-     * <p>
-     * While a run without the lock is in the live delegate, a thread holding the lock makes no other call to the live
-     * delegate either, as {@link #staysOutOfTheLiveDelegate} describes. A {@code start(..)}, {@code stop()},
-     * {@code stopReplay()} or {@code resumeReplay()} that takes the lock then returns and changes nothing, and a
-     * {@code resumeSubscription(id)} returns a handle whose {@code waitUntilStarted} answers {@code false}. A thread that
-     * held the lock while its caller's code ran, and goes on once that code returns, gets
-     * {@link IllegalStateException} from a subscribe, resume or pause it then makes in the live delegate, and its
-     * {@code isRunning} and {@code isPaused} answer {@code false}.
+     * {@link #LIFECYCLE_WAIT} that way, since that code may be waiting for this shutdown, and then throws
+     * {@link IllegalStateException} without running {@code shutDownTheLiveDelegate} under the lock. By then
+     * {@code forgetTheCatchups} has run, and {@code shutDownTheLiveDelegate} has run without the lock only when a start
+     * was in the live delegate's {@code start(..)}, which the exception says. A {@code shutdown()} once that code has
+     * returned shuts the live delegate down.
      * <p>
      * Called from inside the action of a replay or of a live call, or on a thread that holds a {@link #claim}, the
      * shutdown doesn't wait. This returns once {@code forgetTheCatchups} has run, and the lifecycle thread the children
@@ -4828,234 +4727,53 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * Once the live delegate's {@code shutdown()} has returned normally under the lock, a later {@code shutdown()} of
      * {@code model} doesn't call it there again, until a {@code start(..)} of {@code model} has started the live delegate
-     * again or a run on the lifecycle thread that threw waits to run again. One that threw left the live delegate
-     * running, so the next {@code shutdown()} calls it again.
+     * again. One that threw left the live delegate running, so the next {@code shutdown()} calls it again.
      */
     void shutDownInTurn(Object model, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate) {
         forgetTheCatchups.run();
         ActionOnThread action = outermostActionOnTheCallingThread();
         if (action == null && !replaysOrClaimsOnTheCallingThread()) {
-            shutDownTheLiveDelegateInTurn(model, forgetTheCatchups, shutDownTheLiveDelegate, true);
+            shutDownTheLiveDelegateInTurn(model, shutDownTheLiveDelegate, true);
             return;
         }
-        handToTheLifecycleThread(action == null ? NOTHING_TO_WAIT_FOR : action.returned(), () -> shutDownTheLiveDelegateInTurn(model, forgetTheCatchups, shutDownTheLiveDelegate, false),
+        handToTheLifecycleThread(action == null ? NOTHING_TO_WAIT_FOR : action.returned(), () -> shutDownTheLiveDelegateInTurn(model, shutDownTheLiveDelegate, false),
                 e -> logHandedCallThrew(model, "shutdown()", e));
     }
 
     // A start that registers in the monitor before this does is ended without the lock, and one that registers after
     // this sees the shutdown under way and doesn't start the live delegate, so neither leaves this waiting for good. On a
-    // thread other than the lifecycle thread, the wait for the lock ends as heldUpByCallersCode describes, and the live
-    // delegate is then shut down without the lock, as for a stuck start, since that code can be waiting for this shutdown.
-    // That code can be inside the live delegate, which then goes on registering a subscription once it returns, so once
-    // the call without the lock has returned the shutdown hands a pass under the lock to the lifecycle thread, and
-    // counts as under way until both passes have run. The thread holding the lock never runs or waits for that pass.
-    // A pass under the lock that finds a call without the lock, of any shutdown, still in the live delegate is parked
-    // as enterUnderTheLock describes, and this returns without waiting for it
-    private void shutDownTheLiveDelegateInTurn(Object model, Runnable forgetTheCatchups, Runnable shutDownTheLiveDelegate, boolean givesUpBehindCallersCode) {
+    // thread other than the lifecycle thread, the wait for the lock ends as heldUpByCallersCode describes, and this then
+    // throws, since that code can be waiting for this shutdown and no thread calls the live delegate for it without the
+    // lock unless a start is in the live delegate's start(..)
+    private void shutDownTheLiveDelegateInTurn(Object model, Runnable shutDownTheLiveDelegate, boolean givesUpBehindCallersCode) {
         LiveDelegateCalls calls = liveDelegateCalls.computeIfAbsent(model, ignored -> new LiveDelegateCalls());
         boolean aStartIsInTheLiveDelegate;
         synchronized (calls) {
             calls.shutdowns++;
             aStartIsInTheLiveDelegate = calls.starts > 0;
         }
-        boolean leftToTheLifecycleThread = false;
         try {
             if (aStartIsInTheLiveDelegate) {
-                shutDownWithoutTheLock(calls, shutDownTheLiveDelegate);
+                shutDownTheLiveDelegate.run();
             }
             if (!givesUpBehindCallersCode) {
                 modelLock.lock();
             } else if (!lockUnlessHeldUpByCallersCode()) {
-                log.warn("shutdown() of {} waited {} ms for the model lock while code the caller supplied, such as a StartAt.dynamic function, ran under it, and shuts the wrapped model down without the lock, and again under it on the lifecycle thread once that code has let it go.",
-                        model, LIFECYCLE_WAIT.toMillis());
-                ShutdownLeftToTheLifecycleThread left = new ShutdownLeftToTheLifecycleThread(model, calls, forgetTheCatchups, shutDownTheLiveDelegate, 2);
-                leftToTheLifecycleThread = true;
-                try {
-                    if (!aStartIsInTheLiveDelegate) {
-                        shutDownWithoutTheLock(calls, shutDownTheLiveDelegate);
-                    }
-                } finally {
-                    left.passRan();
-                    // Handed over only now, so the pass never runs while the call without the lock is still in the live delegate
-                    leaveThePassUnderTheLockToTheLifecycleThread(left);
-                }
-                return;
+                throw callersCodeHeldUp("shutdown()", aStartIsInTheLiveDelegate ? SHUT_DOWN_TO_END_A_START : NOT_SHUT_DOWN);
             }
             try {
-                if (!calls.shutDown || !calls.passesThatThrew.isEmpty()) {
-                    ShutdownLeftToTheLifecycleThread pass = new ShutdownLeftToTheLifecycleThread(model, calls, forgetTheCatchups, shutDownTheLiveDelegate, 1);
-                    if (!enterUnderTheLock(pass)) {
-                        leftToTheLifecycleThread = true;
-                        return;
-                    }
-                    try {
-                        shutDownTheLiveDelegate.run();
-                    } finally {
-                        leaveUnderTheLock(calls);
-                    }
+                if (!calls.shutDown) {
+                    shutDownTheLiveDelegate.run();
                     calls.shutDown = true;
-                    // This call did what each of them is waiting to do, under the lock once the thread that held it had let it go
-                    List.copyOf(calls.passesThatThrew).forEach(ShutdownLeftToTheLifecycleThread::passUnderTheLockRan);
                 }
             } finally {
                 modelLock.unlock();
             }
         } finally {
-            if (!leftToTheLifecycleThread) {
-                synchronized (calls) {
-                    calls.shutdowns--;
-                }
-            }
-        }
-    }
-
-    // Calls the live delegate's shutdown() without the model lock, counted while it runs, unless a pass under the lock is
-    // inside it, which shuts the live delegate down and would otherwise wait on this call. The call that brings the count
-    // to zero, also when it throws, hands every parked pass to the lifecycle thread
-    private void shutDownWithoutTheLock(LiveDelegateCalls calls, Runnable shutDownTheLiveDelegate) {
-        synchronized (calls) {
-            if (calls.passesUnderTheLockInTheLiveDelegate > 0) {
-                return;
-            }
-            calls.shutdownsWithoutTheLock++;
-        }
-        try {
-            shutDownTheLiveDelegate.run();
-        } finally {
-            List<ShutdownLeftToTheLifecycleThread> unparked = List.of();
             synchronized (calls) {
-                if (--calls.shutdownsWithoutTheLock == 0) {
-                    unparked = List.copyOf(calls.parked);
-                    calls.parked.clear();
-                }
-            }
-            unparked.forEach(this::handThePassUnderTheLockOver);
-        }
-    }
-
-    // With the model lock held. Whether the pass may call the live delegate now, which it may while no call without the
-    // lock is in it. Otherwise the pass is parked, and the call without the lock that brings the count to zero hands it
-    // to the lifecycle thread, so neither the thread holding the lock nor the lifecycle thread waits on a call without
-    // the lock, which a live delegate that serializes its shutdown() would make them do. A pass that enters calls
-    // leaveUnderTheLock once the live delegate has returned
-    private static boolean enterUnderTheLock(ShutdownLeftToTheLifecycleThread pass) {
-        LiveDelegateCalls calls = pass.calls;
-        synchronized (calls) {
-            if (calls.shutdownsWithoutTheLock > 0) {
-                calls.parked.add(pass);
-                return false;
-            }
-            calls.passesUnderTheLockInTheLiveDelegate++;
-            return true;
-        }
-    }
-
-    private static void leaveUnderTheLock(LiveDelegateCalls calls) {
-        synchronized (calls) {
-            calls.passesUnderTheLockInTheLiveDelegate--;
-        }
-    }
-
-    /**
-     * Whether the calling thread holds the model lock while a {@code shutdown()} of this model, or of another child of
-     * the same dispatcher, is in the live delegate without the lock. Such a thread doesn't call the live delegate, since
-     * a live delegate can make every call wait for a {@code shutdown()} under way, and every lifecycle call that waits
-     * for the lock would then wait for that {@code shutdown()} too. A {@code shutdown()} has begun by then, and the
-     * live delegate is shut down under the lock once the call without it has returned.
-     */
-    boolean staysOutOfTheLiveDelegate() {
-        if (!modelLock.isHeldByCurrentThread()) {
-            return false;
-        }
-        for (LiveDelegateCalls calls : liveDelegateCalls.values()) {
-            synchronized (calls) {
-                if (calls.shutdownsWithoutTheLock > 0) {
-                    return true;
-                }
+                calls.shutdowns--;
             }
         }
-        return false;
-    }
-
-    /**
-     * Returns {@code target}, the live delegate or a capability of it, for a call the calling thread is about to make.
-     *
-     * @throws IllegalStateException when the calling thread {@link #staysOutOfTheLiveDelegate stays out of the live
-     *                               delegate}, as the MongoDB models throw for a resume or a pause once they are
-     *                               shut down
-     */
-    <T> T enteringTheLiveDelegate(T target) {
-        if (staysOutOfTheLiveDelegate()) {
-            throw new IllegalStateException("Cannot call the live subscription model " + subscriptionModel.getClass().getName()
-                    + " while a shutdown() of this model is in it without the model lock, since the shutdown shuts it down.");
-        }
-        return target;
-    }
-
-    /**
-     * Stops the live delegate, unless the calling thread {@link #staysOutOfTheLiveDelegate stays out of it}. The
-     * {@code shutdown()} under way then shuts the live delegate down, which ends every subscription it runs.
-     */
-    void stopTheLiveDelegate() {
-        if (!staysOutOfTheLiveDelegate()) {
-            subscriptionModel.stop();
-        }
-    }
-
-    /**
-     * Cancels {@code subscriptionId} in the live delegate, unless the calling thread
-     * {@link #staysOutOfTheLiveDelegate stays out of it}. The {@code shutdown()} under way then shuts the live delegate
-     * down, which removes the subscription.
-     */
-    void cancelInTheLiveDelegate(String subscriptionId) {
-        if (!staysOutOfTheLiveDelegate()) {
-            subscriptionModel.cancelSubscription(subscriptionId);
-        }
-    }
-
-    // The pass is parked while a call without the lock is in the live delegate, and handed to the lifecycle thread
-    // otherwise
-    private void leaveThePassUnderTheLockToTheLifecycleThread(ShutdownLeftToTheLifecycleThread left) {
-        synchronized (left.calls) {
-            if (left.calls.shutdownsWithoutTheLock > 0) {
-                left.calls.parked.add(left);
-                return;
-            }
-        }
-        handThePassUnderTheLockOver(left);
-    }
-
-    // The lifecycle thread runs the pass after the calls handed to it before, and takes the lock for it, so it runs once
-    // the thread that held the lock has let it go, whether that thread is the lifecycle thread or another one
-    private void handThePassUnderTheLockOver(ShutdownLeftToTheLifecycleThread left) {
-        handToTheLifecycleThread(NOTHING_TO_WAIT_FOR, () -> underTheModelLock(() -> shutDownAgainUnderTheLock(left)), e -> logHandedCallThrew(left.model, "shutdown()", e));
-    }
-
-    // Run with the model lock held on the lifecycle thread. It forgets again what a subscribe or a resume under way added
-    // after the first forget, and shuts the live delegate down again, whatever that call registered there. A pass that
-    // finds a call without the lock in the live delegate is parked again. A pass that threw stays under way, so no
-    // start(..) of the model starts the live delegate, and is left to the lifecycle thread again after a backoff, until
-    // it returns normally or a shutdown() of the model shuts the live delegate down under the lock. The backoff waits on
-    // no thread that runs lifecycle calls
-    private void shutDownAgainUnderTheLock(ShutdownLeftToTheLifecycleThread left) {
-        if (left.passUnderTheLockDone || !enterUnderTheLock(left)) {
-            return;
-        }
-        try {
-            left.forgetTheCatchups.run();
-            left.shutDownTheLiveDelegate.run();
-            left.calls.shutDown = true;
-        } catch (Throwable e) {
-            // Every Throwable, since the live delegate keeps the subscription for good when the pass never runs again
-            Duration backoff = left.backoffAfterFailure();
-            log.error("shutdown() of {}, run again under the model lock on the lifecycle thread once the code a caller supplied had let it go, threw. It runs again in {} ms.", left.model, backoff.toMillis(), e);
-            left.calls.passesThatThrew.add(left);
-            CompletableFuture.delayedExecutor(backoff.toMillis(), TimeUnit.MILLISECONDS, Runnable::run).execute(() -> leaveThePassUnderTheLockToTheLifecycleThread(left));
-            return;
-        } finally {
-            leaveUnderTheLock(left.calls);
-        }
-        left.passUnderTheLockRan();
     }
 
     // The lifecycle thread waits for the action to return before it runs body, which takes the lock itself, so a call it

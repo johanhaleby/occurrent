@@ -11,7 +11,6 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCall.StartFailure;
 
@@ -20,8 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -30,9 +28,6 @@ import java.util.function.Predicate;
  * A change-stream-like live model. A subscribe while the model is stopped is held, a resume starts the model and that
  * subscription, start(true) resumes every held one. A start can fail before it takes effect or after it, and can wait.
  * Pausing a subscription that is not running throws, as {@code SubscriptionModelLifeCycle#pauseSubscription} says.
- * With {@code asksTheStartAtAndRejectsOnceShutDown} on it is made like the in-memory model, which asks the start-at
- * function before it registers a subscription, and whose subscribe registers the subscription and then throws once the
- * model is shut down. A {@code shutdown()} then drops every subscription.
  */
 final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
 
@@ -53,32 +48,8 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     // Runs at the start of subscribe(id, ..), before the model's monitor is taken, so a test can hold a handover in the live model
     volatile Consumer<String> beforeSubscribe = id -> {
     };
-    volatile boolean asksTheStartAtAndRejectsOnceShutDown = false;
-    // Runs at the end of shutdown(), inside the monitor when serializesShutdown is on, so a test can hold a shutdown() after it dropped the subscriptions
-    volatile Runnable afterShutdown = () -> {
-    };
-    // On, shutdown() runs one at a time on a monitor, as a wrapped model does whose shutdown() is synchronized
-    volatile boolean serializesShutdown = false;
-    // The name of the thread of each shutdown(), recorded before the monitor of a serialized shutdown() is taken
-    final List<String> shutdownAttempts = new CopyOnWriteArrayList<>();
-    private final Object shutdownMonitor = new Object();
-    // On, shutdown() runs on the monitor of the model, which stop(), start(..), subscribe, subscribePaused, resumeSubscription,
-    // pauseSubscription and cancelSubscription take too, as the native Mongo model does. A shutdown() held inside it, by
-    // afterShutdown, then holds every one of those at the monitor, and it drops the subscriptions without rejecting a
-    // subscribe. isRunning and isPaused answer without the monitor
-    volatile boolean sharesOneMonitor = false;
-    // The subscribePaused(..), resumeSubscription(id) and stop() calls made, as call@thread, recorded before the monitor is taken
-    final List<String> monitoredCalls = new CopyOnWriteArrayList<>();
-
-    /**
-     * The context type the start-at is asked with, since the catch-up model hands the function to a live model only for
-     * the context type of a wrapper.
-     */
-    interface AsksAsAWrapper extends SubscriptionModelWrapper {
-    }
-
-    private volatile boolean shutDown = false;
     final Map<String, FakeSubscription> subscriptions = new ConcurrentHashMap<>();
+    final AtomicInteger shutdowns = new AtomicInteger();
 
     @Override
     public @Nullable Checkpoint globalCheckpoint() {
@@ -93,46 +64,7 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         beforeSubscribe.accept(subscriptionId);
-        asksTheStartAt(startAt);
-        Subscription subscription = subscribeHoldingTheMonitor(subscriptionId, action);
-        rejectsOnceShutDown();
-        return subscription;
-    }
-
-    private void asksTheStartAt(StartAt startAt) {
-        if (asksTheStartAtAndRejectsOnceShutDown) {
-            startAt.get(new StartAt.SubscriptionModelContext(AsksAsAWrapper.class));
-        }
-    }
-
-    private void rejectsOnceShutDown() {
-        if (asksTheStartAtAndRejectsOnceShutDown && shutDown) {
-            throw new RejectedExecutionException("shut down");
-        }
-    }
-
-    @Override
-    public void shutdown() {
-        shutdownAttempts.add(Thread.currentThread().getName());
-        if (sharesOneMonitor) {
-            synchronized (this) {
-                shutDownHooked();
-            }
-        } else if (serializesShutdown) {
-            synchronized (shutdownMonitor) {
-                shutDownHooked();
-            }
-        } else {
-            shutDownHooked();
-        }
-    }
-
-    private void shutDownHooked() {
-        if (asksTheStartAtAndRejectsOnceShutDown || sharesOneMonitor) {
-            shutDown = true;
-            subscriptions.clear();
-        }
-        afterShutdown.run();
+        return subscribeHoldingTheMonitor(subscriptionId, action);
     }
 
     private synchronized Subscription subscribeHoldingTheMonitor(String subscriptionId, Consumer<CloudEvent> action) {
@@ -143,16 +75,9 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     @Override
-    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        monitoredCalls.add("subscribePaused@" + Thread.currentThread().getName());
-        return subscribePausedHoldingTheMonitor(subscriptionId, startAt, action);
-    }
-
-    private synchronized Subscription subscribePausedHoldingTheMonitor(String subscriptionId, StartAt startAt, Consumer<CloudEvent> action) {
-        asksTheStartAt(startAt);
+    public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         FakeSubscription subscription = new FakeSubscription(subscriptionId, action);
         subscriptions.put(subscriptionId, subscription);
-        rejectsOnceShutDown();
         return subscription;
     }
 
@@ -161,12 +86,7 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     @Override
-    public void stop() {
-        monitoredCalls.add("stop@" + Thread.currentThread().getName());
-        stopHoldingTheMonitor();
-    }
-
-    private synchronized void stopHoldingTheMonitor() {
+    public synchronized void stop() {
         running = false;
         subscriptions.values().forEach(subscription -> subscription.started = false);
     }
@@ -198,6 +118,12 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     }
 
     @Override
+    public void shutdown() {
+        shutdowns.incrementAndGet();
+        stop();
+    }
+
+    @Override
     public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
         return resumeSubscription(subscriptionId);
     }
@@ -216,7 +142,6 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        monitoredCalls.add("resumeSubscription@" + Thread.currentThread().getName());
         beforeResume.run();
         return resumeHoldingTheMonitor(subscriptionId);
     }

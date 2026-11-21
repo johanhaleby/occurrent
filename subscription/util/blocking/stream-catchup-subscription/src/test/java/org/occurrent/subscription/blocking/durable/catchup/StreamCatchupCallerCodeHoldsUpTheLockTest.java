@@ -19,7 +19,6 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
-import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -45,13 +44,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Code a caller supplied, a {@code StartAt.dynamic} function or a {@link CatchupListener}, that runs under the model
  * lock and waits for a lifecycle call made on another thread does not deadlock with that call. The call gives up after
  * {@code LIFECYCLE_WAIT} and throws {@link IllegalStateException}, changing nothing, and a later lifecycle call
- * completes. A {@code shutdown()} shuts the wrapped model down without the lock instead.
+ * completes. A {@code shutdown()} throws too, and leaves the wrapped model running, since it has ended the catch-up
+ * replays and marked the model as shutting down before it waited. A {@code shutdown()} made once the code has returned
+ * shuts the wrapped model down.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(90)
@@ -63,9 +63,6 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     // The fix answers in about LIFECYCLE_WAIT (10 s), so a call that has not ended after this is a hang
     private static final Duration BOUND = Duration.ofSeconds(30);
     private static final Duration WAIT = Duration.ofSeconds(10);
-    // Far below the 30 s a held shutdown() lets go of its hold after, so a stop that waits for the held shutdown() cannot end within it by the hold expiring. A stop needs no LIFECYCLE_WAIT when the lock is free
-    private static final Duration STOP_BOUND = Duration.ofSeconds(5);
-    private static final String LIFECYCLE_THREAD = "occurrent-catchup-lifecycle";
 
     private final CountDownLatch actionReturned = new CountDownLatch(1);
     private final CountDownLatch functionReturned = new CountDownLatch(1);
@@ -75,9 +72,6 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     private final AtomicReference<@Nullable Subscription> handleOfX = new AtomicReference<>();
     private final AtomicReference<@Nullable Subscription> handleOfZ = new AtomicReference<>();
     private final AtomicReference<@Nullable Call> callOfTheFunction = new AtomicReference<>();
-    private final CountDownLatch locklessShutdownHeld = new CountDownLatch(1);
-    private final CountDownLatch releaseTheLocklessShutdown = new CountDownLatch(1);
-    private final AtomicBoolean locklessShutdownReachedTheHold = new AtomicBoolean();
     private InMemorySubscriptionModel inMemory;
     private HookedSubscriptionModel live;
     private InMemoryEventStore eventStore;
@@ -93,7 +87,6 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
 
     @AfterEach
     void shut_down() throws Exception {
-        releaseTheLocklessShutdown.countDown();
         CompletableFuture.runAsync(() -> {
             model.shutdown();
             inMemory.shutdown();
@@ -159,192 +152,29 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     }
 
     @Test
-    void a_shutdown_from_another_thread_returns_after_the_wait_and_shuts_the_wrapped_model_down_without_the_lock() throws Exception {
+    void a_shutdown_from_another_thread_throws_instead_of_waiting_for_the_function_and_leaves_the_wrapped_model_running_and_a_later_shutdown_shuts_it_down() throws Exception {
         // Given an action that resumes x and then subscribes z paused, whose function waits for a shutdown from another thread
         actionResumesXThenSubscribesZWhoseFunctionWaitsFor(model::shutdown);
 
         // When the action returns and the lifecycle thread asks the function under the model lock
         awaitTheFunction();
 
-        // Then the shutdown returned while the function waited, and shut the wrapped model down
-        assertThat(callEndedWhileTheFunctionWaited.get()).as("whether the shutdown returned within " + BOUND + " while the function waited for it").isTrue();
-        assertThat(callOfTheFunction.get().thrown()).as("what the shutdown threw").isNull();
-        assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got from the shutdown that gave up on the lock").isGreaterThanOrEqualTo(1);
-    }
+        // Then the shutdown throws after the wait, and the wrapped model is not shut down and y still runs in it
+        assertThat(callEndedWhileTheFunctionWaited.get()).as("whether the shutdown ended within " + BOUND + " while the function waited for it").isTrue();
+        assertThat(callOfTheFunction.get().elapsed()).as("how long the shutdown took to give up").isLessThan(WAIT.plusSeconds(5));
+        assertThat(callOfTheFunction.get().thrown()).as("what shutdown() threw")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageStartingWith("Cannot run shutdown()")
+                .hasMessageContaining("because code the caller supplied")
+                .hasMessageContaining("the wrapped subscription model isn't shut down")
+                .hasMessageEndingWith("Call shutdown() again once that code has returned.");
+        assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got from the shutdown that gave up").isZero();
+        assertThat(live.isRunning(Y)).as("whether y still runs in the wrapped model after the shutdown that gave up").isTrue();
 
-    @Test
-    void a_shutdown_that_gave_up_while_the_wrapped_model_asks_the_function_leaves_no_subscription_in_either_model_once_the_subscribe_has_unwound() throws Exception {
-        // Given a wrapped model that asks the function from inside its subscribe, before it registers the subscription, and an action that resumes x and then subscribes z paused,
-        // whose function answers now, so z goes live, and waits for a shutdown from another thread when the wrapped model asks
-        live.asksTheStartAtInsideTheDelegate = true;
-        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
-            if (context.subscriptionModelType() == HookedSubscriptionModel.AsksAsAWrapper.class && functionAsked.compareAndSet(false, true)) {
-                waitForTheCall(model::shutdown);
-            }
-            return StartAt.now();
-        }));
-
-        // When the shutdown gave up on the lock and returned, the function returned, and the subscribe of z has unwound
-        awaitTheFunction();
-        assertThat(callEndedWhileTheFunctionWaited.get()).as("whether the shutdown returned within " + BOUND + " while the function waited for it").isTrue();
-        assertThat(callOfTheFunction.get().thrown()).as("what the shutdown threw").isNull();
+        // And once the caller's code has returned, a later shutdown shuts the wrapped model down
         model.awaitTheHandedCalls("the test");
-
-        // Then neither model holds z, which the wrapped model registered after the shutdown had returned
-        assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds").doesNotContain(Z);
-        assertThat(inMemory.isRunning(Z)).as("whether the wrapped model runs z").isFalse();
-        assertThat(inMemory.isPaused(Z)).as("whether the wrapped model holds z paused").isFalse();
-        assertThat(model.isRunning(Z)).as("whether the catch-up model runs z").isFalse();
-        assertThat(model.isPaused(Z)).as("whether the catch-up model holds z paused").isFalse();
-    }
-
-    @Test
-    void a_shutdown_held_in_its_wrapped_shutdown_after_it_removed_the_subscriptions_leaves_no_subscription_in_either_model_once_it_is_released_with_no_further_lifecycle_call() throws Exception {
-        // Given a wrapped model that asks the function from inside its subscribe, a shutdown that gave up on the lock and whose wrapped shutdown() removed the subscriptions and is held,
-        // and a function that returns only then, so the wrapped model registers z after the removal
-        givenTheLocklessShutdownHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks();
-
-        // When the function returned and the subscribe of z has unwound, so the lock holder let the lock go
-        model.awaitTheHandedCalls("the test");
-
-        // Then the shutdown is still held, and the wrapped model still holds z, since the pass under the lock waits for the call without the lock
-        assertThat(shutdownWithoutTheLock().endedWithin(Duration.ZERO)).as("whether the shutdown whose wrapped shutdown() is held has returned").isFalse();
-        assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds while the shutdown without the lock is held").contains(Z);
-
-        // And once the shutdown is released and has returned, neither model holds z with no further lifecycle call
-        releaseTheLocklessShutdown.countDown();
-        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
-        assertThat(shutdownWithoutTheLock().thrown()).as("what the shutdown threw").isNull();
-        awaitNeitherModelHoldsZ();
-    }
-
-    @Test
-    void a_start_while_a_shutdown_that_gave_up_on_the_lock_is_still_held_starts_nothing_and_a_start_after_it_returned_starts_the_wrapped_model() throws Exception {
-        // Given a shutdown that gave up on the lock, whose wrapped shutdown() is held, and a lock holder that has let the lock go
-        givenTheLocklessShutdownHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks();
-        model.awaitTheHandedCalls("the test");
-
-        // When a start from another thread runs while the shutdown is held
-        assertThat(CompletableFuture.runAsync(() -> model.start(false), daemonExecutor("start-while-the-shutdown-is-held"))).as("a start while the shutdown is held").succeedsWithin(BOUND);
-
-        // Then it starts nothing
-        assertThat(live.starts.get()).as("the starts the wrapped model got while the shutdown was under way").isZero();
-
-        // And a start after the shutdown has returned and its pass under the lock has removed z starts the wrapped model
-        releaseTheLocklessShutdown.countDown();
-        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
-        awaitNeitherModelHoldsZ();
-        assertThat(CompletableFuture.runAsync(() -> model.start(false), daemonExecutor("start-after-the-shutdown"))).as("a start after the shutdown returned").succeedsWithin(BOUND);
-        assertThat(live.starts.get()).as("the starts the wrapped model got after the shutdown returned").isEqualTo(1);
-    }
-
-    @Test
-    void a_pass_under_the_lock_that_threw_once_runs_again_on_its_own_so_neither_model_holds_z_and_a_start_after_it_starts_the_wrapped_model() throws Exception {
-        // Given a shutdown that gave up on the lock whose pass under the lock on the lifecycle thread throws once, before it shuts the wrapped model down
-        AtomicBoolean threwOnce = new AtomicBoolean();
-        live.beforeShutdown = () -> {
-            if (LIFECYCLE_THREAD.equals(Thread.currentThread().getName()) && threwOnce.compareAndSet(false, true)) {
-                throw new IllegalStateException("the wrapped shutdown() of the pass under the lock fails once");
-            }
-        };
-        givenAShutdownThatGaveUpOnTheLockWhileTheFunctionWaitsForIt();
-
-        // When nothing but reads follow, so the retry is the only thing that can shut the wrapped model down again
-        awaitNeitherModelHoldsZ();
-
-        // Then the wrapped model got the shutdown without the lock, the one that threw and the one that ran again
-        assertThat(threwOnce.get()).as("whether the pass under the lock threw").isTrue();
-        assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got, the one without the lock, the one that threw and the one that ran it again").isEqualTo(3);
-
-        // And a start from another thread starts the wrapped model
-        assertThat(CompletableFuture.runAsync(() -> model.start(false), daemonExecutor("start-after-the-retry"))).as("a start after the retry succeeded").succeedsWithin(BOUND);
-        assertThat(live.starts.get()).as("the starts the wrapped model got after the retry succeeded").isEqualTo(1);
-    }
-
-    @Test
-    void a_pass_under_the_lock_that_keeps_throwing_is_run_again_on_its_own_and_holds_back_a_start_until_it_succeeds_and_then_neither_model_holds_z() throws Exception {
-        // Given a shutdown that gave up on the lock whose pass under the lock on the lifecycle thread throws until the test lets it succeed
-        AtomicBoolean passFails = new AtomicBoolean(true);
-        live.beforeShutdown = () -> {
-            if (passFails.get() && LIFECYCLE_THREAD.equals(Thread.currentThread().getName())) {
-                throw new IllegalStateException("the wrapped shutdown() of the pass under the lock fails");
-            }
-        };
-        givenAShutdownThatGaveUpOnTheLockWhileTheFunctionWaitsForIt();
-
-        // When the pass has run again on its own, with only reads in between
-        Awaitility.await().atMost(BOUND).untilAsserted(() -> assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got, the one without the lock and at least two passes that threw").isGreaterThanOrEqualTo(4));
-        assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds while the pass keeps throwing").contains(Z);
-
-        // Then a start from another thread starts nothing
-        assertThat(CompletableFuture.runAsync(() -> model.start(false), daemonExecutor("start-behind-the-pending-pass"))).as("a start behind the pending pass").succeedsWithin(BOUND);
-        assertThat(live.starts.get()).as("the starts the wrapped model got while a pass was pending").isZero();
-
-        // And once the pass can succeed it runs again on its own, neither model holds z and a start starts the wrapped model
-        passFails.set(false);
-        awaitNeitherModelHoldsZ();
-        assertThat(CompletableFuture.runAsync(() -> model.start(false), daemonExecutor("start-after-the-pass-succeeded"))).as("a start after the pass succeeded").succeedsWithin(BOUND);
-        assertThat(live.starts.get()).as("the starts the wrapped model got after the pass succeeded").isEqualTo(1);
-    }
-
-    @Test
-    void a_second_shutdown_while_a_pass_that_keeps_throwing_is_pending_returns_settles_it_and_a_start_after_it_starts_the_wrapped_model() throws Exception {
-        // Given a shutdown that gave up on the lock whose pass under the lock on the lifecycle thread throws on every run, so it is pending, while a shutdown on any other thread succeeds
-        live.beforeShutdown = () -> {
-            if (LIFECYCLE_THREAD.equals(Thread.currentThread().getName())) {
-                throw new IllegalStateException("the wrapped shutdown() of the pass under the lock fails");
-            }
-        };
-        givenAShutdownThatGaveUpOnTheLockWhileTheFunctionWaitsForIt();
-        assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds while the pass keeps throwing").contains(Z);
-
-        // When another thread shuts the model down again
-        assertThat(CompletableFuture.runAsync(model::shutdown, daemonExecutor("second-shutdown"))).as("a second shutdown while a pass is pending").succeedsWithin(BOUND);
-
-        // Then neither model holds z
-        assertNeitherModelHoldsZ();
-
-        // And a start from another thread starts the wrapped model, which only the second shutdown settling the pending pass lets it do, as the pass itself can never succeed
-        assertThat(CompletableFuture.runAsync(() -> model.start(false), daemonExecutor("start-after-the-second-shutdown"))).as("a start after the second shutdown").succeedsWithin(BOUND);
-        assertThat(live.starts.get()).as("the starts the wrapped model got after the second shutdown").isEqualTo(1);
-    }
-
-    @Test
-    void a_wrapped_model_with_a_serialized_shutdown_held_in_the_shutdown_without_the_lock_is_not_waited_on_by_the_lock_holder_or_a_lifecycle_call_and_holds_no_subscription_once_released() throws Exception {
-        // Given a wrapped model whose shutdown() is serialized, a shutdown that gave up on the lock and is held inside it after it removed the subscriptions,
-        // and a function that returns only then, so the lock holder, the lifecycle thread running the subscribe of z, unwinds
-        live.serializesShutdown = true;
-        givenTheLocklessShutdownHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks();
-
-        // When a lifecycle call from another thread runs while the shutdown is held, which needs the lock the holder let go
-        assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-shutdown-is-held"))).as("a stop while the shutdown without the lock is held in the wrapped shutdown()").succeedsWithin(BOUND);
-
-        // Then no thread but the shutdown's own has entered or waits to enter the wrapped shutdown()
-        assertThat(live.shutdownAttempts).as("the threads that entered or wait to enter the wrapped shutdown() while the shutdown without the lock is held").containsExactly("shutdown-without-the-lock");
-
-        // And once the shutdown is released, neither model holds z with no further lifecycle call
-        releaseTheLocklessShutdown.countDown();
-        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
-        awaitNeitherModelHoldsZ();
-    }
-
-    @Test
-    void a_stop_from_another_thread_completes_while_a_second_shutdown_is_held_in_a_serialized_wrapped_shutdown_after_a_first_one_returned_and_neither_model_holds_z_once_it_is_released() throws Exception {
-        // Given a wrapped model whose shutdown() is serialized, a shutdown that gave up on the lock and returned, and a second shutdown that gave up on it too and is held inside
-        // the wrapped shutdown() after it removed the subscriptions, and a function that returns only then, so the lock holder, the lifecycle thread running the subscribe of z, unwinds
-        live.serializesShutdown = true;
-        givenAShutdownThatReturnedAndASecondHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks();
-
-        // When a lifecycle call from another thread runs while the second shutdown is held, which needs the lock the lifecycle thread must not hold while it waits for the serialized wrapped shutdown()
-        assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-second-shutdown-is-held"))).as("a stop while the second shutdown without the lock is held in the wrapped shutdown()").succeedsWithin(STOP_BOUND);
-
-        // Then no thread but the two shutdowns' own has entered or waits to enter the wrapped shutdown()
-        assertThat(live.shutdownAttempts).as("the threads that entered or wait to enter the wrapped shutdown() while the second shutdown without the lock is held").containsExactlyInAnyOrder("first-shutdown-without-the-lock", "second-shutdown-without-the-lock");
-
-        // And once the second shutdown is released, neither model holds z with no further lifecycle call
-        releaseTheLocklessShutdown.countDown();
-        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the second shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
-        awaitNeitherModelHoldsZ();
+        assertThat(CompletableFuture.runAsync(model::shutdown, daemonExecutor("later-shutdown"))).as("a later shutdown").succeedsWithin(BOUND);
+        assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got once the later shutdown completed").isEqualTo(1);
     }
 
     @Test
@@ -381,118 +211,17 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         assertThat(model.isRunning()).as("whether the model runs after the later stop").isFalse();
     }
 
-    @Test
-    void a_stop_from_another_thread_completes_without_calling_the_wrapped_stop_while_a_shutdown_that_gave_up_on_the_lock_is_held_in_a_wrapped_model_that_serializes_every_call_on_one_monitor_and_nothing_is_left_running_once_it_is_released() throws Exception {
-        // Given a wrapped model whose calls share one monitor, a shutdown that gave up on the lock and is held inside it, and a lock holder that has let go
-        givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAtTime.beginningOfTime());
-        model.awaitTheHandedCalls("the test");
-
-        // When a stop from another thread runs while the shutdown is held
-        assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-shutdown-is-held"))).as("a stop while the shutdown without the lock is held on the monitor the wrapped stop() needs").succeedsWithin(STOP_BOUND);
-
-        // Then it never called the wrapped stop()
-        assertThat(live.stops.get()).as("the stops the wrapped model got while the shutdown without the lock was held").isZero();
-        assertThat(live.monitoredCalls).as("the calls made on the monitor of the wrapped model").noneMatch(call -> call.startsWith("stop@"));
-
-        // And once the shutdown is released, nothing is left running in either model
-        releaseTheLocklessShutdown.countDown();
-        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
-        assertThat(shutdownWithoutTheLock().thrown()).as("what the shutdown threw").isNull();
-        awaitNothingIsLeftInEitherModel();
-    }
-
-    @Test
-    void a_resume_of_x_from_another_thread_returns_a_handle_that_never_starts_without_calling_the_wrapped_resume_while_a_shutdown_that_gave_up_on_the_lock_is_held_in_a_wrapped_model_that_serializes_every_call_on_one_monitor_and_nothing_is_left_running_once_it_is_released() throws Exception {
-        // Given a wrapped model whose calls share one monitor, a shutdown that gave up on the lock and is held inside it, and a lock holder that has let go
-        givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAtTime.beginningOfTime());
-        model.awaitTheHandedCalls("the test");
-
-        // When a resume of x, which the action resumed live and the catch-up model holds no state for, from another thread runs while the shutdown is held
-        CompletableFuture<Subscription> resume = CompletableFuture.supplyAsync(() -> model.resumeSubscription(X), daemonExecutor("resume-while-the-shutdown-is-held"));
-
-        // Then it returns, and the handle it returned never starts
-        assertThat(resume).as("a resume of x while the shutdown without the lock is held on the monitor the wrapped resume needs").succeedsWithin(STOP_BOUND);
-        assertThat(resume.get().waitUntilStarted(WAIT)).as("whether the handle of the resume that the shutdown kept from running starts").isFalse();
-        assertThat(live.resumed).as("the resumes of x the wrapped model got, that of the action only").containsOnlyOnce(X);
-        assertThat(live.monitoredCalls).as("the calls made on the monitor of the wrapped model").doesNotContain("resumeSubscription@resume-while-the-shutdown-is-held");
-
-        // And once the shutdown is released, nothing is left running in either model
-        releaseTheLocklessShutdown.countDown();
-        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
-        assertThat(shutdownWithoutTheLock().thrown()).as("what the shutdown threw").isNull();
-        awaitNothingIsLeftInEitherModel();
-    }
-
-    @Test
-    void a_lock_holder_whose_function_returned_while_a_shutdown_that_gave_up_on_the_lock_is_held_on_the_monitor_of_the_wrapped_model_does_not_subscribe_in_it_so_a_stop_completes_and_nothing_is_left_running_once_it_is_released() throws Exception {
-        // Given a wrapped model whose calls share one monitor, and a shutdown that gave up on the lock and is held inside it while the function, which the catch-up model asks itself
-        // under the lock, waits, and a function that answers now, so the subscribe of z calls the wrapped subscribePaused() next
-        givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAt.now());
-
-        // When the function returned, so the lock holder went on with the subscribe, and a stop from another thread runs while the shutdown is held
-        model.awaitTheHandedCalls("the test");
-        assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("stop-while-the-shutdown-is-held"))).as("a stop while the shutdown without the lock is held on the monitor the wrapped subscribePaused() needs").succeedsWithin(STOP_BOUND);
-
-        // Then the lock holder did not enter the wrapped subscribePaused(), which the subscribe failed instead of
-        assertThat(live.monitoredCalls).as("the calls the lifecycle thread made on the monitor of the wrapped model").noneMatch(call -> call.equals("subscribePaused@" + LIFECYCLE_THREAD));
-        assertThat(catchThrowable(() -> handleOfZ.get().waitUntilStarted(WAIT))).as("what the handle of the subscribe of z that the lock holder ran threw").isInstanceOf(IllegalStateException.class);
-
-        // And once the shutdown is released, nothing is left running in either model
-        releaseTheLocklessShutdown.countDown();
-        assertThat(shutdownWithoutTheLock().endedWithin(BOUND)).as("whether the shutdown returned within " + BOUND + " once its wrapped shutdown() was released").isTrue();
-        assertThat(shutdownWithoutTheLock().thrown()).as("what the shutdown threw").isNull();
-        awaitNothingIsLeftInEitherModel();
-    }
-
-    // A shutdown that gave up on the lock and whose wrapped shutdown() holds the shared monitor of the wrapped model and is held, only the first of them.
-    // The function, which the catch-up model asks itself on the lifecycle thread under the lock, returns startAtAfterwards once that shutdown holds
-    private void givenAShutdownHeldOnTheSharedMonitorWhileTheCatchupModelAsksTheFunction(StartAt startAtAfterwards) throws Exception {
-        AtomicBoolean first = new AtomicBoolean();
-        live.sharesOneMonitor = true;
-        live.afterShutdown = () -> {
-            if (first.compareAndSet(false, true)) {
-                locklessShutdownHeld.countDown();
-                HookedSubscriptionModel.awaitLatch(releaseTheLocklessShutdown);
-            }
-        };
-        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
-            if (functionAsked.compareAndSet(false, true)) {
-                callOfTheFunction.set(new Call("shutdown-without-the-lock", model::shutdown));
-                locklessShutdownReachedTheHold.set(awaitTheLatch(locklessShutdownHeld));
-                functionReturned.countDown();
-            }
-            return startAtAfterwards;
-        }));
-        awaitTheFunction();
-        assertThat(locklessShutdownReachedTheHold.get()).as("whether the wrapped shutdown() of the shutdown that gave up on the lock held within " + BOUND + " on the monitor of the wrapped model").isTrue();
-    }
-
-    private void awaitNothingIsLeftInEitherModel() {
-        Awaitility.await().atMost(BOUND).untilAsserted(() -> {
-            assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds").isEmpty();
-            for (String id : List.of(X, Y, Z)) {
-                assertThat(inMemory.isRunning(id)).as("whether the wrapped model runs " + id).isFalse();
-                assertThat(inMemory.isPaused(id)).as("whether the wrapped model holds " + id + " paused").isFalse();
-                assertThat(model.isRunning(id)).as("whether the catch-up model runs " + id).isFalse();
-                assertThat(model.isPaused(id)).as("whether the catch-up model holds " + id + " paused").isFalse();
-            }
-        });
-    }
-
     // The action of y, a live action, hands the resume of x over and then subscribes z paused behind it, so z subscribes on
     // the lifecycle thread under the model lock and asks the function there. The function runs call on another thread
     // and waits for it, which is the wait that deadlocks without the fix
     private void actionResumesXThenSubscribesZWhoseFunctionWaitsFor(Runnable call) throws Exception {
-        actionResumesXThenSubscribesZ(StartAt.dynamic(() -> {
+        givenXPaused();
+        StartAt waits = StartAt.dynamic(() -> {
             if (functionAsked.compareAndSet(false, true)) {
                 waitForTheCall(call);
             }
             return StartAtTime.beginningOfTime();
-        }));
-    }
-
-    private void actionResumesXThenSubscribesZ(StartAt waits) throws Exception {
-        givenXPaused();
+        });
         model.subscribe(Y, null, StartAt.now(), event -> {
             try {
                 handleOfX.set(model.resumeSubscription(X));
@@ -515,97 +244,6 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         callOfTheFunction.set(started);
         callEndedWhileTheFunctionWaited.set(started.endedWithin(BOUND));
         functionReturned.countDown();
-    }
-
-    // A shutdown whose wrapped shutdown() removes the subscriptions and then holds, only the first of them. The function, asked
-    // inside the wrapped model's subscribe under the lock, returns once that shutdown holds
-    private void givenTheLocklessShutdownHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks() throws Exception {
-        AtomicBoolean first = new AtomicBoolean();
-        live.afterShutdown = () -> {
-            if (first.compareAndSet(false, true)) {
-                locklessShutdownHeld.countDown();
-                HookedSubscriptionModel.awaitLatch(releaseTheLocklessShutdown);
-            }
-        };
-        live.asksTheStartAtInsideTheDelegate = true;
-        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
-            if (context.subscriptionModelType() == HookedSubscriptionModel.AsksAsAWrapper.class && functionAsked.compareAndSet(false, true)) {
-                callOfTheFunction.set(new Call("shutdown-without-the-lock", model::shutdown));
-                locklessShutdownReachedTheHold.set(awaitTheLatch(locklessShutdownHeld));
-                functionReturned.countDown();
-            }
-            return StartAt.now();
-        }));
-        awaitTheFunction();
-        assertThat(locklessShutdownReachedTheHold.get()).as("whether the wrapped shutdown() of the shutdown that gave up on the lock held within " + BOUND + " after it removed the subscriptions").isTrue();
-    }
-
-    // Two shutdowns that give up on the lock, one after the other, each from its own thread. The first one's wrapped shutdown() is not held and returns. The second one's is held
-    // after it removed the subscriptions, and shutdownWithoutTheLock() is that second one. The function, asked inside the wrapped model's subscribe under the lock, returns once it holds
-    private void givenAShutdownThatReturnedAndASecondHeldAfterItRemovedTheSubscriptionsWhileTheFunctionAsks() throws Exception {
-        live.afterShutdown = () -> {
-            if (Thread.currentThread().getName().equals("second-shutdown-without-the-lock")) {
-                locklessShutdownHeld.countDown();
-                HookedSubscriptionModel.awaitLatch(releaseTheLocklessShutdown);
-            }
-        };
-        live.asksTheStartAtInsideTheDelegate = true;
-        AtomicBoolean firstShutdownReturned = new AtomicBoolean();
-        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
-            if (context.subscriptionModelType() == HookedSubscriptionModel.AsksAsAWrapper.class && functionAsked.compareAndSet(false, true)) {
-                Call first = new Call("first-shutdown-without-the-lock", model::shutdown);
-                firstShutdownReturned.set(first.endedWithin(BOUND) && first.thrown() == null);
-                callOfTheFunction.set(new Call("second-shutdown-without-the-lock", model::shutdown));
-                locklessShutdownReachedTheHold.set(awaitTheLatch(locklessShutdownHeld));
-                functionReturned.countDown();
-            }
-            return StartAt.now();
-        }));
-        awaitTheFunction();
-        assertThat(firstShutdownReturned.get()).as("whether the first shutdown that gave up on the lock returned without an exception within " + BOUND + " while the function waited for it").isTrue();
-        assertThat(locklessShutdownReachedTheHold.get()).as("whether the wrapped shutdown() of the second shutdown that gave up on the lock held within " + BOUND + " after it removed the subscriptions").isTrue();
-    }
-
-    // The function waits for a shutdown to return, which gives up on the lock after LIFECYCLE_WAIT, shuts the wrapped model down
-    // without it and then hands its pass under the lock to the lifecycle thread. Returns once that pass has run for the first time,
-    // and failed or not as the hook of the test on the wrapped model decides
-    private void givenAShutdownThatGaveUpOnTheLockWhileTheFunctionWaitsForIt() throws Exception {
-        live.asksTheStartAtInsideTheDelegate = true;
-        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
-            if (context.subscriptionModelType() == HookedSubscriptionModel.AsksAsAWrapper.class && functionAsked.compareAndSet(false, true)) {
-                waitForTheCall(model::shutdown);
-            }
-            return StartAt.now();
-        }));
-        awaitTheFunction();
-        assertThat(callEndedWhileTheFunctionWaited.get()).as("whether the shutdown returned within " + BOUND + " while the function waited for it").isTrue();
-        assertThat(callOfTheFunction.get().thrown()).as("what the shutdown threw").isNull();
-        model.awaitTheHandedCalls("the test");
-    }
-
-    private Call shutdownWithoutTheLock() {
-        return callOfTheFunction.get();
-    }
-
-    private void awaitNeitherModelHoldsZ() {
-        Awaitility.await().atMost(BOUND).untilAsserted(this::assertNeitherModelHoldsZ);
-    }
-
-    private void assertNeitherModelHoldsZ() {
-        assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds").doesNotContain(Z);
-        assertThat(inMemory.isRunning(Z)).as("whether the wrapped model runs z").isFalse();
-        assertThat(inMemory.isPaused(Z)).as("whether the wrapped model holds z paused").isFalse();
-        assertThat(model.isRunning(Z)).as("whether the catch-up model runs z").isFalse();
-        assertThat(model.isPaused(Z)).as("whether the catch-up model holds z paused").isFalse();
-    }
-
-    private static boolean awaitTheLatch(CountDownLatch latch) {
-        try {
-            return latch.await(BOUND.toMillis(), TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
     }
 
     private void awaitTheFunction() throws InterruptedException {
@@ -647,6 +285,8 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     // One call on a thread of its own, which records what it threw
     private static final class Call {
         private final Thread thread;
+        private final long startedAt = System.nanoTime();
+        private volatile long endedAt;
         private final CountDownLatch ended = new CountDownLatch(1);
         private final AtomicReference<@Nullable Throwable> thrown = new AtomicReference<>();
 
@@ -657,6 +297,7 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
                 } catch (Throwable e) {
                     thrown.set(e);
                 } finally {
+                    endedAt = System.nanoTime();
                     ended.countDown();
                 }
             }, name);
@@ -671,6 +312,10 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
                 Thread.currentThread().interrupt();
                 return false;
             }
+        }
+
+        Duration elapsed() {
+            return Duration.ofNanos(endedAt - startedAt);
         }
 
         @Nullable Throwable thrown() {

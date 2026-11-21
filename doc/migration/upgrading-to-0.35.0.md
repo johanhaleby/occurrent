@@ -2984,22 +2984,8 @@ the catch-up is not affected.
   `resumeSubscription(id)` calls when it relaunches a parked replay. While such code runs there, each of the waits
   above on another thread ends once that code and the wait have both run for 10 seconds. A `start(..)`, `stop()`,
   `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
-  changed." in its message, and a `shutdown()` shuts the wrapped model down without the lock and logs a `WARN`. Once
-  that call, and every other such call still in the wrapped model's `shutdown()`, has returned and the thread that
-  held the lock has let it go, the catch-up's lifecycle thread shuts the wrapped model down again under the lock, so
-  the wrapped model keeps no subscription that the code went on to register. The thread that held the lock neither
-  makes nor waits for that call. A later `shutdown()` that takes the lock while such a call is still in the wrapped model's
-  `shutdown()` doesn't wait for it, and hands its own call to the lifecycle thread the same way. A later `shutdown()`
-  that makes its own call without the lock, because it gave up on the lock too or because a `start(..)` is inside the
-  wrapped model's `start(..)`, doesn't return at once. A wrapped model that makes a second `shutdown()` wait for one
-  under way, as both MongoDB subscription models do, holds that call until the first has returned. While a call
-  without the lock is in the wrapped model's `shutdown()`, a `start(..)`, `stop()`, `stopReplay()` or
-  `resumeReplay()` that takes the lock changes nothing and doesn't call the wrapped model, and a
-  `resumeSubscription(id)` returns a handle whose `waitUntilStarted(..)` answers `false`. When the code that held the
-  lock returns meanwhile, the call that ran it, such as the subscribe whose `StartAt.dynamic(..)` function it was,
-  fails with `IllegalStateException` instead of subscribing in the wrapped model. When the call on the
-  lifecycle thread throws, it is logged at `ERROR` and made again after a wait that starts at 100 ms and doubles up to
-  2 seconds, until it returns normally, and until then a `start(..)` doesn't start the wrapped model.
+  changed." in its message. A `shutdown()` throws `IllegalStateException` too, but by then it has ended the catch-up
+  replays and marked the model as shutting down, and the wrapped model still runs.
 
 ### What to do
 
@@ -3008,9 +2994,10 @@ don't rely on the model being stopped or started, or on the subscription being r
 make after it, since that call waits for the action to return. An action that never returns keeps the call it made,
 and every call made after it, from taking effect.
 
-Don't wait in a `StartAt.dynamic(..)` function or a `CatchupListener` for a `start(..)`, `stop()` or resume you
-asked another thread to make, since that call waits for the function or the listener to return and throws after 10
-seconds.
+Don't wait in a `StartAt.dynamic(..)` function or a `CatchupListener` for a `start(..)`, `stop()`, `shutdown()` or
+resume you asked another thread to make, since that call waits for the function or the listener to return and throws
+after 10 seconds. When a `shutdown()` throws that way, call it again once the function or the listener has returned,
+and that call shuts the wrapped model down.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 
