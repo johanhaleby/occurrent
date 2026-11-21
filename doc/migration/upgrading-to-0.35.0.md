@@ -978,8 +978,9 @@ instances, each poll logs a `WARN` and tries again. The runbook covers what is l
 `SagaCodec` stores a release in three fields, `failureReleasedAt`, `failureQuarantineId` and `quarantineSkipCount`,
 which `SpringMongoSagaStateStore` writes as top-level fields of the instance's document. The skipped inputs are documents in a collection
 of their own, named after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the
-input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, the event as a CloudEvents
-JSON string. A document 0.34.0 wrote has none of these fields, and reads as an instance
+input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key`, `event` and `data`. `event` holds the
+event's attributes and extensions as a CloudEvents JSON string, and `data` its data the way the MongoDB event store
+stores it, binary data as BSON binary and a JSON object as a document. MongoDB stores at most 16 MiB in a record, and the record holds the saga id, the quarantine id and the key beside the event, so an event that comes that close to 16 MiB in the event store doesn't fit. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it. A document 0.34.0 wrote has none of these fields, and reads as an instance
 that is not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga
 collection whose name ends in `_skipped_inputs`, because a store on the name without that suffix would keep its skipped
 inputs in the same collection. Rename such a collection before you upgrade.
@@ -1002,7 +1003,7 @@ interface and `occurrent.saga.quarantine-enabled=false`.
 
 A store that implements it keeps the skipped inputs, each with its event, and returns the event from
 `findSkippedInputs`. An extension can come back with another type than it was given, and `SpringMongoSagaStateStore`,
-which stores the event as CloudEvents JSON, returns a number that isn't an `Integer`, such as a `Long`, and a URI, a timestamp or a binary
+which stores the event's extensions as CloudEvents JSON, returns a number that isn't an `Integer`, such as a `Long`, and a URI, a timestamp or a binary
 extension as a `String`. Apart from `delete(sagaId)`, it changes the records only in three
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version

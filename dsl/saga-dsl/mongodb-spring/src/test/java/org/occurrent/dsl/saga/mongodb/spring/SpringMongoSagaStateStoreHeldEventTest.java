@@ -16,10 +16,14 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.jackson.JsonFormat;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -47,10 +51,16 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -80,6 +90,8 @@ class SpringMongoSagaStateStoreHeldEventTest {
     private static final String COLLECTION = "saga-held-event";
     private static final String STREAM = "orders";
     private static final String ORDER = "order-1";
+    private static final String OTHER_ORDER = "order-2";
+    private static final int MONGODB_DOCUMENT_LIMIT = 16 * 1024 * 1024;
     private static final OffsetDateTime HAPPENED_AT = OffsetDateTime.parse("2026-01-01T10:15:30.123Z");
 
     sealed interface OrderEvent permits OrderPlaced, ItemAdded {
@@ -99,6 +111,7 @@ class SpringMongoSagaStateStoreHeldEventTest {
     private InMemoryEventStore eventStore;
     private CloudEventConverter<OrderEvent> converter;
     private SpringMongoSagaStateStore<String> stateStore;
+    private MongoTemplate template;
     private final List<Pack> dispatched = new CopyOnWriteArrayList<>();
     private final Set<String> failing = ConcurrentHashMap.newKeySet();
     private SagaSubscription subscription;
@@ -110,7 +123,8 @@ class SpringMongoSagaStateStoreHeldEventTest {
         converter = new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test"))
                 .timeMapper(event -> HAPPENED_AT).build();
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-held-" + UUID.randomUUID()));
-        stateStore = new SpringMongoSagaStateStore<>(new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase())), COLLECTION, String.class);
+        template = new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
+        stateStore = new SpringMongoSagaStateStore<>(template, COLLECTION, String.class);
     }
 
     @AfterEach
@@ -169,7 +183,7 @@ class SpringMongoSagaStateStoreHeldEventTest {
                 () -> assertThat(held).extracting(input -> input.event().getType()).containsExactly(book.getType(), pen.getType()),
                 () -> assertThat(held).extracting(input -> input.event().getSource()).containsExactly(book.getSource(), pen.getSource()),
                 () -> assertThat(held).extracting(input -> input.event().getExtensionNames()).containsExactly(book.getExtensionNames(), pen.getExtensionNames()),
-                () -> assertThat(held).extracting(input -> requireNonNull(input.event().getData()).toBytes()).containsExactly(requireNonNull(book.getData()).toBytes(), requireNonNull(pen.getData()).toBytes()),
+                () -> assertThat(held).as("the data reads back as the same JSON value").extracting(input -> json(input.event())).containsExactly(json(book), json(pen)),
                 () -> assertThat(held.get(1).event().getTime()).isEqualTo(HAPPENED_AT),
                 () -> assertThat(held.get(1).event().getExtension(OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM),
                 () -> assertThat(held.get(1).event().getExtension(OccurrentCloudEventExtension.STREAM_VERSION)).hasToString(String.valueOf(pen.getExtension(OccurrentCloudEventExtension.STREAM_VERSION))),
@@ -213,6 +227,109 @@ class SpringMongoSagaStateStoreHeldEventTest {
                 () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(dispatched).as("each held event is applied once, in order").containsExactly(new Pack("book", 2), new Pack("pen", 5))
         );
+    }
+
+    @Test
+    void a_13_MiB_binary_event_quarantines_the_instance_it_fails_on_and_stalls_neither_the_subscription_nor_the_release() {
+        byte[] data = new byte[13 * 1024 * 1024];
+        new Random(7).nextBytes(data);
+        String blob = blobItem(data);
+        subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, withBinaryEvents())
+                .run("orders", saga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
+        write(new OrderPlaced(ORDER));
+        failing.add(blob);
+        eventStore.write(STREAM, List.of(binaryEvent(data)));
+
+        await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                assertThat(instance(ORDER).status()).as("the instance the 13 MiB binary event fails on is quarantined, which stores it in a record under the 16 MiB limit").isEqualTo(SagaStatus.QUARANTINED));
+        write(new ItemAdded(ORDER, "nib", 1));
+        write(new OrderPlaced(OTHER_ORDER));
+        write(new ItemAdded(OTHER_ORDER, "pen", 5));
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(dispatched).as("another instance gets the event written after the 13 MiB binary event, so the subscription did not stall on it").containsExactly(new Pack("pen", 5)));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(held()).as("the binary event and the input after it").hasSize(2));
+        List<SkippedInput> held = held();
+        CloudEvent heldBlob = held.get(0).event();
+        byte[] heldBytes = requireNonNull(heldBlob.getData()).toBytes();
+        int jsonSize = new JsonFormat().serialize(binaryEvent(data)).length;
+        List<Integer> recordSizes = recordSizes();
+
+        assertAll(
+                () -> assertThat(jsonSize).as("the window: the event as CloudEvents JSON with base64 data is over MongoDB's 16 MiB limit").isGreaterThan(MONGODB_DOCUMENT_LIMIT),
+                () -> assertThat(recordSizes).as("the window: the stored record of the binary event, in $bsonSize, takes more than its data and at most 16 MiB")
+                        .anySatisfy(size -> assertThat(size).isGreaterThan(data.length).isLessThanOrEqualTo(MONGODB_DOCUMENT_LIMIT)),
+                () -> assertThat(held).extracting(input -> input.event().getType()).containsExactly(binaryEvent(data).getType(), converter.getCloudEventType(ItemAdded.class)),
+                () -> assertThat(heldBlob.getDataContentType()).isEqualTo("application/octet-stream"),
+                () -> assertThat(heldBytes.length).as("the held binary data reads back to its length").isEqualTo(data.length),
+                () -> assertThat(sha256(heldBytes)).as("the held binary data reads back to its bytes").isEqualTo(sha256(data))
+        );
+
+        failing.clear();
+        subscription.release(ORDER);
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(instance(ORDER).status()).isEqualTo(SagaStatus.ACTIVE));
+        assertThat(dispatched).as("the release applies the held events in order, and the binary event reaches the saga with the length and the hash of its bytes")
+                .containsExactly(new Pack("pen", 5), new Pack(blob, data.length), new Pack("nib", 1));
+    }
+
+    private CloudEvent binaryEvent(byte[] data) {
+        return CloudEventBuilder.v1().withId("binary-1").withSource(URI.create("urn:test")).withType(converter.getCloudEventType(ItemAdded.class))
+                .withSubject(ORDER).withTime(HAPPENED_AT).withDataContentType("application/octet-stream").withData(data).build();
+    }
+
+    // Reads a binary event as an item named after the hash of its bytes, and a quantity that is their length
+    private CloudEventConverter<OrderEvent> withBinaryEvents() {
+        return new CloudEventConverter<>() {
+            @Override
+            public CloudEvent toCloudEvent(OrderEvent domainEvent) {
+                return converter.toCloudEvent(domainEvent);
+            }
+
+            @Override
+            public OrderEvent toDomainEvent(CloudEvent cloudEvent) {
+                if (!"application/octet-stream".equals(cloudEvent.getDataContentType())) {
+                    return converter.toDomainEvent(cloudEvent);
+                }
+                byte[] bytes = requireNonNull(cloudEvent.getData()).toBytes();
+                return new ItemAdded(requireNonNull(cloudEvent.getSubject()), blobItem(bytes), bytes.length);
+            }
+
+            @Override
+            public String getCloudEventType(Class<? extends OrderEvent> type) {
+                return converter.getCloudEventType(type);
+            }
+        };
+    }
+
+    private static String blobItem(byte[] bytes) {
+        return "blob-" + sha256(bytes);
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private List<Integer> recordSizes() {
+        return template.getCollection(COLLECTION + "_skipped_inputs")
+                .aggregate(List.of(new Document("$project", new Document("size", new Document("$bsonSize", "$$ROOT")))))
+                .map(document -> document.getInteger("size")).into(new java.util.ArrayList<>());
+    }
+
+    private SagaEnvelope<String> instance(String sagaId) {
+        return SagaEnvelopes.of(stateStore, null).find(sagaId).orElseThrow();
+    }
+
+    private static JsonNode json(CloudEvent event) {
+        try {
+            return new ObjectMapper().readTree(requireNonNull(event.getData()).toBytes());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private List<SkippedInput> held() {

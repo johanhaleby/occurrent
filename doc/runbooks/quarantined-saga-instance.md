@@ -408,7 +408,9 @@ db.getCollection("saga-order-fulfilment")
 
 `failureReleasedAt` is stored as epoch milliseconds. The inputs still to replay are documents in the collection named
 after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the input the instance
-stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, the event as a CloudEvents JSON string. A
+stopped on, each with `sagaId`, `quarantineId`, `seq`, `key`, `event` and `data`. `event` holds the event's
+attributes and extensions as a CloudEvents JSON string, and `data` its data the way the MongoDB event store stores it,
+binary data as BSON binary and a JSON object as a document. MongoDB stores at most 16 MiB in a record, and the record holds the saga id, the quarantine id and the key beside the event, so an event that comes that close to 16 MiB in the event store doesn't fit. `compareAndSaveSkipped` then throws an `IllegalStateException` that names the instance and the input, before it writes anything, so the instance and its records stay as they were. A subscription that retries the event stops on it. A
 release replays them in order of `seq`, and only those under the instance's `failureQuarantineId`:
 
 ```javascript

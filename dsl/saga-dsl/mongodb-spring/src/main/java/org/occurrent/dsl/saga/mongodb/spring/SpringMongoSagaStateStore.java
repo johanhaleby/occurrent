@@ -33,6 +33,8 @@ import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
@@ -41,6 +43,7 @@ import org.bson.Document;
 import org.bson.RawBsonDocument;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.conversions.Bson;
+import org.bson.types.ObjectId;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -54,6 +57,8 @@ import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventReader;
+import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventWriter;
 import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
@@ -231,6 +236,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String SKIPPED_SEQ = "seq";
     private static final String SKIPPED_KEY = "key";
     private static final String SKIPPED_EVENT = "event";
+    private static final String SKIPPED_DATA = "data";
 
     /**
      * How many times a read or a write calls MongoDB before it gives up, 10, the same number
@@ -651,9 +657,47 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private static SkippedInput toSkippedInput(Document document) {
         CloudEvent event = CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8));
+        Object data = document.get(SKIPPED_DATA);
+        if (data != null) {
+            event = CloudEventBuilder.from(event).withData(heldData(event, data)).build();
+        }
         return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY), event);
     }
 
+    // The event's attributes and extensions as CloudEvents JSON, so they read back with the types the event had, and its
+    // data the way the MongoDB event store stores it. Binary data stays binary instead of growing by a third as base64,
+    // so a record takes about what the event takes in the event store.
+    private static Document heldEvent(CloudEvent event) {
+        Document held = new Document(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(CloudEventBuilder.from(event).withoutData().build()), StandardCharsets.UTF_8));
+        Object data = DocumentCloudEventWriter.toDocument(event).get(SKIPPED_DATA);
+        if (data != null) {
+            held.append(SKIPPED_DATA, data);
+        }
+        return held;
+    }
+
+    // Read by the event store's own reader, which needs only the attributes that say what the data is
+    private static CloudEventData heldData(CloudEvent event, Object data) {
+        Document withData = new Document("specversion", event.getSpecVersion().toString())
+                .append("id", event.getId())
+                .append("source", event.getSource().toString())
+                .append("type", event.getType());
+        if (event.getDataContentType() != null) {
+            withData.append("datacontenttype", event.getDataContentType());
+        }
+        return Objects.requireNonNull(DocumentCloudEventReader.toCloudEvent(withData.append(SKIPPED_DATA, data)).getData());
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The record holds the event's attributes and extensions as a CloudEvents JSON string and its data the way the
+     * MongoDB event store stores it, binary data as BSON binary and a JSON object as a document. MongoDB stores at most
+     * 16 MiB in the record, and the record holds the saga id, the quarantine id and the key beside the event, so an event
+     * that comes that close to 16 MiB in the event store doesn't fit. This then throws an {@link IllegalStateException}
+     * that names the instance and the input, before it writes anything. A subscription that retries the event stops on
+     * it.
+     */
     @Override
     public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
         return joiningCallersTransaction(() -> {
@@ -666,9 +710,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     ? database -> instances(database).updateOne(Filters.eq(ID, saga.sagaId()), setOnInsert(toDocument(saga)), new UpdateOptions().upsert(true)).getUpsertedId() != null
                     : database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), withoutState(saga)).getMatchedCount() > 0;
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
+            Document held = new Document(SKIPPED_SEQ, input.seq());
+            held.putAll(heldEvent(input.event()));
             // Set on insert, so a record of the key keeps its first seq and event
-            Bson record = Updates.combine(Updates.setOnInsert(SKIPPED_SEQ, input.seq()),
-                    Updates.setOnInsert(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(input.event()), StandardCharsets.UTF_8)));
+            Document record = new Document("$setOnInsert", held);
+            refuseTooLargeRecord(saga.sagaId(), input.key(), filter, record);
             return transition(writeInstance, database -> skippedInputs(database).updateOne(filter, record, new UpdateOptions().upsert(true)));
         });
     }
@@ -728,6 +774,25 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return document.getByteBuffer().remaining() <= MAX_DOCUMENT_SIZE
                && encodedSize(statement(filter, document), codecs) <= MAX_STATEMENT_SIZE
                && encodedSize(statement(filter, update), codecs) <= MAX_STATEMENT_SIZE;
+    }
+
+    // Checked before the transaction, since the driver throws a BsonMaximumSizeExceededException that names neither the
+    // instance nor the input, and a retry sends the same record again
+    private void refuseTooLargeRecord(String sagaId, String key, Document filter, Document record) {
+        CodecRegistry codecs = skippedInputs(databaseFactory.getMongoDatabase()).getCodecRegistry();
+        // An upsert stores the fields of the filter, the fields it sets on insert and an ObjectId as the _id
+        Document stored = new Document(ID, new ObjectId());
+        stored.putAll(filter);
+        stored.putAll(record.get("$setOnInsert", Document.class));
+        int storedSize = new RawBsonDocument(stored, codecs.get(Document.class)).getByteBuffer().remaining();
+        int statementSize = encodedSize(statement(filter.toBsonDocument(BsonDocument.class, codecs), record.toBsonDocument(BsonDocument.class, codecs)), codecs);
+        if (storedSize > MAX_DOCUMENT_SIZE || statementSize > MAX_STATEMENT_SIZE) {
+            throw new IllegalStateException("Saga instance '" + sagaId + "' cannot record the input '" + key + "' it skips. Its record takes "
+                    + storedSize + " bytes of BSON, where MongoDB stores at most " + MAX_DOCUMENT_SIZE + ", and the write that sends it takes "
+                    + statementSize + " bytes, where the driver sends at most " + MAX_STATEMENT_SIZE + ". The record holds the event as the "
+                    + "MongoDB event store holds it, together with the saga id, the quarantine id and the key, so an event that close to "
+                    + "MongoDB's limit leaves no room for them. Nothing is written for the input.");
+        }
     }
 
     // An update or replacement as the driver writes it into the update command, see SplittablePayload

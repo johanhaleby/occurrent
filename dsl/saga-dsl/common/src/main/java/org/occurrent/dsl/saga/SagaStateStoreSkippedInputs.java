@@ -121,6 +121,9 @@ public interface SagaStateStoreSkippedInputs {
      * that quarantine id is kept as it is, with its {@code seq} and event. The write that quarantines an instance uses
      * this method too, and records the input the instance was quarantined on, whose {@code expectedVersion} can be
      * {@code 0} for an instance the store does not hold yet.
+     * <p>
+     * A store whose writes have a size limit throws an {@link IllegalStateException} for an input whose record would go
+     * over it, before it writes anything, so the instance and its records stay as they were.
      *
      * @return {@code true} when both are written, {@code false} when the stored version is not {@code expectedVersion},
      * and then neither is written
