@@ -362,6 +362,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // that point, which nothing outside this model can reach.
     private volatile Runnable onceNoWrappedCallIsInFlight = () -> {
     };
+    // Runs on the thread that counts a delivery as ended, once it has found the end not counted yet and before it counts
+    // it. Exists so a test can hold that thread there, which nothing outside this model can reach.
+    private volatile Runnable beforeADeliveryEndIsCounted = () -> {
+    };
     private final QuietPositionReportingSubscriptions.QuietPositionListener quietPositionListener = this::quietPositionSaverFor;
 
     /**
@@ -423,6 +427,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // this model's contract.
     void runOnceNoWrappedCallIsInFlight(Runnable hook) {
         this.onceNoWrappedCallIsInFlight = requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that holds a thread at the point the field describes. Not public, and not part of
+    // this model's contract.
+    void runBeforeADeliveryEndIsCounted(Runnable hook) {
+        this.beforeADeliveryEndIsCounted = requireNonNull(hook, "hook cannot be null");
     }
 
     /**
@@ -1672,13 +1682,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                     quietSaves.wrote();
                                 }), Mono.empty()).then();
                     }));
-            // Counted as ended before the completion reaches the wrapped model, which can start the next delivery from
-            // it. A cancel after the end isn't counted again.
+            // Counted as ended once, before a completion, an error or a cancel goes on to the wrapped model, which can
+            // start the next delivery from it. Under the monitor of quietSaves, so whichever comes second waits until
+            // the first has counted the end.
             return Mono.defer(() -> {
                 AtomicBoolean ended = new AtomicBoolean();
                 Runnable end = () -> {
-                    if (ended.compareAndSet(false, true)) {
-                        quietSaves.deliveryEnded(stored.get());
+                    synchronized (quietSaves) {
+                        if (ended.compareAndSet(false, true)) {
+                            beforeADeliveryEndIsCounted.run();
+                            quietSaves.deliveryEnded(stored.get());
+                        }
                     }
                 };
                 quietSaves.deliveryStarted();
