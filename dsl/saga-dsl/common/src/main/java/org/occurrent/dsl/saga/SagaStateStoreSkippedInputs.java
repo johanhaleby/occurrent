@@ -30,9 +30,10 @@ import java.util.List;
  * <p>
  * A store persists the {@link SkippedInput#event() event} of a record with it and returns it from
  * {@link #findSkippedInputs(String, String, int)}, for a release to replay. A release converts the event again, so a
- * store returns the event exactly as it was delivered, with the same data class, the same values of the same Java
- * classes, the same bytes and content type, and the extensions with the same values and the same classes. The saga
- * keeps no other copy of a skipped event.
+ * store returns the event as it was delivered, with the same attributes, the same data class, the same values of the
+ * same Java classes at any depth, the same bytes, and the extensions with the same values and the same classes. A map or
+ * a list inside the data may come back as another implementation of {@code Map} or {@code List}. The saga keeps no
+ * other copy of a skipped event.
  * <p>
  * Every write of a record is one of the three {@code compareAndSave} methods here, and each writes the instance and its
  * records together, in one atomic write. The instance is saved only when its stored version is the expected one, and
@@ -124,7 +125,8 @@ public interface SagaStateStoreSkippedInputs {
      * <p>
      * A store whose writes have a size limit throws an {@link IllegalStateException} for an input whose record would go
      * over it, before it writes anything, so the instance and its records stay as they were. A store that can't hold an
-     * input's event exactly as it was delivered throws one the same way.
+     * input's event as it was delivered throws one the same way. {@code SpringMongoSagaStateStore} finds that out with a
+     * round trip, encoding the record to BSON, decoding it and reading the event back the way a release does.
      *
      * @return {@code true} when both are written, {@code false} when the stored version is not {@code expectedVersion},
      * and then neither is written

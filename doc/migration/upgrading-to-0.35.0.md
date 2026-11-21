@@ -984,26 +984,28 @@ that is not releasing, with no quarantine id. The constructor now throws an `Ill
 collection whose name ends in `_skipped_inputs`, because a store on the name without that suffix would keep its skipped
 inputs in the same collection. Rename such a collection before you upgrade.
 
-`event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `String`, an
-`Integer`, a `Long`, a `Double`, a `Boolean` and a `byte[]` are stored as they are, and a `URI`, an `OffsetDateTime`, a
-`Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` as a string with a tag that names the class. Data
-delivered as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its
-bytes in `data` unless they are the document's own JSON. Data delivered as a `BytesCloudEventData` is held in `data` as
-its bytes in BSON binary. A release hands the converter the event exactly as it was delivered, with the same data class,
-the same values of the same Java classes, the same bytes and the same extension classes.
+`event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `URI`, an
+`OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a string
+with a tag that names the class, and any other extension as it is. Data delivered as a map, which is how the MongoDB
+event store delivers a JSON object, is held in `dataDocument`, with its bytes in `data` unless they are the document's
+own JSON. Other data is held in `data` as its bytes in BSON binary, and a release hands it to the converter as a
+`BytesCloudEventData`.
 
-`compareAndSaveSkipped` throws an `IllegalStateException` for an input it can't record that way, before it writes
-anything, so the instance and its records stay as they were. The message names the instance, the input and what the
-record can't hold. A subscription that retries the event stops on it. That happens when:
+Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
+the way MongoDB stores it, decodes it, and reads the event back the way a release does. It throws an
+`IllegalStateException` when the event read back isn't the one that was delivered, so the instance and its records
+stay as they were. The message names the instance, the input and, when it's known, where in the event the difference
+is. A subscription that retries the event stops on it. That happens when:
 
+- An attribute, an extension or a data value at any depth comes back as another value or as a value of another class.
+  A `BigDecimal` in a map comes back as a `Decimal128`, a `String` with an unpaired surrogate comes back as another
+  `String`, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
+  `BytesCloudEventData`. A map or a list inside the data may come back as another implementation of `Map` or `List`.
+- Encoding, decoding or reading the event back throws, such as for a map at any depth with a key that isn't a
+  `String`.
 - The record goes over the 16 MiB MongoDB stores in one. The attributes, the saga id, the quarantine id and the key
   share it with the data, so data that comes that close to 16 MiB doesn't fit. A map from another feed, such as one a
   Jackson converter built, is held both as a document and as its bytes, so it fits only up to about half that.
-- The data is a map with a key that isn't a string, or with a value BSON can't encode or reads back as another value
-  or as a value of another class, such as a `BigDecimal`, which reads back as a `Decimal128`.
-- The data is of another class than a map or a `BytesCloudEventData`, such as the `JsonCloudEventData` the CloudEvents
-  JSON format reads a JSON object into.
-- An extension is of another class than the ones above.
 
 An instance that 0.35.0 quarantined is stored with the status `QUARANTINED_RECORDING` instead of `QUARANTINED`. Both
 read back as `SagaStatus.QUARANTINED`, and the store's own queries match both. A query you wrote by hand for
@@ -1022,11 +1024,12 @@ quarantine on whose `SagaStateStore` bean doesn't implement it fails at startup 
 interface and `occurrent.saga.quarantine-enabled=false`.
 
 A store that implements it keeps the skipped inputs, each with its event, and returns the event from
-`findSkippedInputs`. A release converts the event again, so a store returns the event exactly as it was delivered,
-with the same data class, the same values of the same Java classes and the same extension classes. A store that can't
-hold an event that way throws an `IllegalStateException` from `compareAndSaveSkipped` before it writes anything, the way
-`SpringMongoSagaStateStore` does in the cases [Stored saga state for a release](#stored-saga-state-for-a-release)
-lists. Apart from `delete(sagaId)`, it changes the records only in three
+`findSkippedInputs`. A release converts the event again, so a store returns the event as it was delivered, with the
+same attributes, the same data class, the same values of the same Java classes at any depth and the same extension
+classes. A map or a list inside the data may come back as another implementation of `Map` or `List`. A store that
+can't hold an event that way throws an `IllegalStateException` from `compareAndSaveSkipped` before it writes anything.
+`SpringMongoSagaStateStore` finds that out with a round trip, as
+[Stored saga state for a release](#stored-saga-state-for-a-release) describes. Apart from `delete(sagaId)`, it changes the records only in three
 compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
 `compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
 conflict returns `false` and writes neither. `compareAndSaveReplayed` also returns `false` and writes neither when
