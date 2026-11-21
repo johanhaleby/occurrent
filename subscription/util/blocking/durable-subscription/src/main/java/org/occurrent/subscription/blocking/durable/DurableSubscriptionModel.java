@@ -237,6 +237,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // the lock for the id. A collected one is removed by a later subscribe or cancel of any id, which takes no lock
     // of that id and removes the entry only while it still holds that same collected reference
     private final ConcurrentMap<String, UntrackedRegistration> untrackedRegistrations = new ConcurrentHashMap<>();
+    // The registration a subscribe of the id has created and not yet tracked or left untracked, so a run the wrapped
+    // model starts during the subscribe gets its reads numbered too. Removed by identity once the subscribe ends
+    private final ConcurrentMap<String, CheckpointRegistration> subscribingRegistrations = new ConcurrentHashMap<>();
     private final ReferenceQueue<CheckpointRegistration> collectedUntrackedRegistrations = new ReferenceQueue<>();
     // Set by shutdown before it stops the registrations, and read after a registration is put in either map, so a
     // subscribe that puts one while shutdown runs stops it itself unless shutdown finds it
@@ -425,6 +428,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private @Nullable Consumer<Checkpoint> quietPositionSaverFor(String subscriptionId) {
         Duration interval = config.quietPositionSaveInterval;
         CheckpointRegistration registration = registrations.get(subscriptionId);
+        numberReadOfUntrackedRegistrations(subscriptionId, registration);
         if (registration == null) {
             return null;
         }
@@ -441,6 +445,22 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             return null;
         }
         return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, registration, repositions);
+    }
+
+    // The listener gets the id and not the run, so the read is numbered for the registration a subscribe is creating and
+    // for one a failed subscribe left writing too, and they get no quiet save. A run asks before each read and delivers
+    // what it read on the same thread, so a read numbered for a registration that has no run on this thread changes
+    // none of its deliveries
+    private void numberReadOfUntrackedRegistrations(String subscriptionId, @Nullable CheckpointRegistration tracked) {
+        CheckpointRegistration subscribing = subscribingRegistrations.get(subscriptionId);
+        if (subscribing != null && subscribing != tracked) {
+            subscribing.reading();
+        }
+        UntrackedRegistration untracked = untrackedRegistrations.get(subscriptionId);
+        CheckpointRegistration kept = untracked == null ? null : untracked.get();
+        if (kept != null && kept != tracked && kept != subscribing) {
+            kept.reading();
+        }
     }
 
     // A refused write is thrown, so the wrapped model ends delivery on a node whose lease moved, as it does for an
@@ -558,13 +578,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // they open a change stream, outside this lock, so a cancelSubscription can run while a later evaluation
         // reads the checkpoint or writes a first position. An evaluation that comes while this records the first
         // position waits for that write and takes its outcome, see FirstPosition.
-        return underLockFor(subscriptionId, () -> {
+        AtomicReference<@Nullable CheckpointRegistration> subscribing = new AtomicReference<>();
+        return forgottenOnceSubscribed(subscriptionId, subscribing, () -> underLockFor(subscriptionId, () -> {
             settle(asked);
             if (asked.cancelled) {
                 return new CancelledWhileAsked(subscriptionId);
             }
             stopUntrackedRegistrations(subscriptionId);
             CheckpointRegistration registration = new CheckpointRegistration();
+            subscribing.set(registration);
+            subscribingRegistrations.put(subscriptionId, registration);
             AtomicReference<@Nullable FirstPosition> firstPositionToRecord = new AtomicReference<>();
             StartAt startAtToUse = askedOnce == null ? null : generateStartAtPositionFrom(subscriptionId, askedOnce, registration, firstPositionToRecord::set);
             if (startAtToUse == null) {
@@ -657,7 +680,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
             }
             return subscription;
-        });
+        }));
+    }
+
+    // By identity, since a later subscribe of the id can have put its own registration once the lock was let go
+    private Subscription forgottenOnceSubscribed(String subscriptionId, AtomicReference<@Nullable CheckpointRegistration> subscribing,
+                                                 Supplier<Subscription> subscribe) {
+        try {
+            return subscribe.get();
+        } finally {
+            CheckpointRegistration registration = subscribing.get();
+            if (registration != null) {
+                subscribingRegistrations.remove(subscriptionId, registration);
+            }
+        }
     }
 
     // Called once the delegate accepted this managed subscription, or once a failed cancel may have left the delegate
