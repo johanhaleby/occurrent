@@ -163,11 +163,14 @@ checkpoint known to be at or after the latest delivery, or the quiet position or
 the model saves the quiet position in the same attempt.
 
 The model remembers 2 positions, the last checkpoint known to be at or after the latest delivery and the latest quiet
-position or restart position whose write threw. One is enough after a quiet save throws, because the next quiet save
-reads before it writes. A restart position whose write threw replaces a quiet position whose save threw before it, with
-no read in between. When a read then finds that quiet position stored, quiet saves stay off until a later write stores a
-position known to be at or after the latest delivery. The run that lost the history saves no quiet position meanwhile,
-since a listener that throws fails the restart, and the next attempt writes a restart position again.
+position or restart position whose write threw. A write the storage refused with
+`CheckpointWriteConditionNotFulfilledException` wrote nothing, so the model doesn't remember its position. Any other
+failure may have written, a checked exception from a storage written in Kotlin and an `Error` included, so the model
+remembers the position. One is enough after a quiet save throws, because the next quiet save reads before it writes. A
+restart position whose write threw replaces a quiet position whose save threw before it, with no read in between. When
+a read then finds that quiet position stored, quiet saves stay off until a later write stores a position known to be at
+or after the latest delivery. The run that lost the history saves no quiet position meanwhile, since a listener that
+throws fails the restart, and the next attempt writes a restart position again.
 
 A run of the subscription that a pause stopped can still be in its action for an event, since the MongoDB models stop
 waiting for a running handler after one second. It can also still hold a quiet position the wrapped model handed it
