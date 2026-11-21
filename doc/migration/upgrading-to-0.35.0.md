@@ -2647,12 +2647,18 @@ replay that started above position 0. A checkpoint from a replay that started at
 replays again from there instead.
 
 A subscription that is refused, and has no such checkpoint stored with its state, can only start from the beginning
-again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`. Cancel it
-first with `cancelSubscription(id)`, which deletes its stored checkpoint. A blocking catch-up holds a refused resume,
-and holds the stored checkpoint it read with it, so deleting the checkpoint and resuming is refused again. With every
-instance of the application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint
-with every event. For a refused replay whose live start was lost, size the change stream history to reach back across
-the replay. On MongoDB that is the oplog.
+again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`.
+
+With one instance, cancel it first with `cancelSubscription(id)`, which deletes its stored checkpoint. With more than
+one instance, stop every instance, delete the stored checkpoint, and start every instance again with the same start. A
+cancel on one instance deletes the checkpoint every instance shares, so another instance can start at the present and
+store a newer checkpoint before the cancelled instance subscribes again, and the events in between are skipped.
+[How to recover](#how-to-recover) describes the steps.
+
+A blocking catch-up holds a refused resume, and holds the stored checkpoint it read with it, so deleting the checkpoint
+and resuming is refused again. With every instance of the application stopped, deleting the stored checkpoint is
+enough. After that the subscription delivers a checkpoint with every event. For a refused replay whose live start was
+lost, size the change stream history to reach back across the replay. On MongoDB that is the oplog.
 
 `startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated for removal, since
 every value above 0 is refused. Use `StartPosition.BEGINNING` or `DcbStartAt.beginning()` instead of 0.
