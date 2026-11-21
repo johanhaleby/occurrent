@@ -48,6 +48,9 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     // Runs at the start of subscribe(id, ..), before the model's monitor is taken, so a test can hold a handover in the live model
     volatile Consumer<String> beforeSubscribe = id -> {
     };
+    // Runs at the start of shutdown(), before it is counted as done, so a test can hold a shutdown in the live model
+    volatile Runnable beforeShutdown = () -> {
+    };
     final Map<String, FakeSubscription> subscriptions = new ConcurrentHashMap<>();
     final AtomicInteger shutdowns = new AtomicInteger();
 
@@ -120,6 +123,7 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     @Override
     public void shutdown() {
         shutdowns.incrementAndGet();
+        beforeShutdown.run();
         stop();
     }
 

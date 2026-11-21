@@ -496,8 +496,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@link IllegalStateException} and changes nothing, since that code may be waiting for this resume. The same holds
      * for {@link #start(boolean)}, {@link #stop()} and {@link #resumeSubscription(String, StartAt)}. A
      * {@code shutdown()} waiting that way throws {@link IllegalStateException} too, after it has ended the catch-up
-     * replays and marked the model as shutting down, so call it again once that code has returned to shut the wrapped
-     * model down.
+     * replays and marked the model as shutting down, and the wrapped model is shut down once that code has returned,
+     * with no further call. That also holds when a closing Spring context makes the {@code shutdown()}, through the
+     * {@code @PreDestroy} of this model or of a model wrapping it, and nothing calls it again. While that code never
+     * returns, the wrapped model goes on running.
      * <p>
      * On a thread that runs a replay of this model outside the action, such as in a {@link CatchupListener}, or that is
      * in the middle of a call for one of its subscriptions, it neither waits nor runs alone, so it takes effect before

@@ -359,8 +359,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private static final class LiveDelegateCalls {
         // Starts of the live delegate under way
         private int starts;
-        // Shutdowns of the model under way, from the moment they forgot the catch-ups until they return
+        // Shutdowns of the model under way, from the moment they forgot the catch-ups until they return, or until the
+        // lifecycle thread has run the rest of one that code a caller supplied held up
         private int shutdowns;
+        // Whether a shutdown() that code a caller supplied held up has handed the lifecycle thread a shutdown of the
+        // live delegate that hasn't run yet, so a later one held up the same way hands over no second one
+        private boolean shutdownHandedOver;
         // Whether a shutdown() has shut the live delegate down, with no start(..) of the model since, so a later
         // shutdown() doesn't shut it down again. Written only with the model lock held, and read under it
         private boolean shutDown;
@@ -3126,11 +3130,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     static final String STARTED_BUT_NOT_RESUMED = "The model was stopped and is started, as a resume starts a stopped model, but the subscription wasn't resumed.";
     static final String STARTED_BUT_NOT_RUN_AGAIN = "The catch-up replay held for the subscription wasn't run again. The call doesn't stop a model it started, and it went on to the other subscriptions first.";
     static final String STOPPED_ALL_THE_SAME = "The model is stopped all the same, and a catch-up replay for the subscription delivers no further event until start(true) or resumeSubscription runs it again.";
-    // What a shutdown() that gives up on the model lock did before it waited for the lock
-    static final String NOT_SHUT_DOWN = "The catch-up replays are ended and the model is marked as shutting down, but the wrapped subscription model isn't shut down,"
-            + " and its subscriptions still run. Call shutdown() again once that code has returned.";
+    // What a shutdown() that gives up on the model lock did before it waited for the lock, and what happens once that
+    // code returns
+    static final String NOT_SHUT_DOWN = "The catch-up replays are ended and the model is marked as shutting down. The wrapped subscription model isn't shut down yet,"
+            + " and its subscriptions still run until that code returns. Then the wrapped model is shut down under the model lock, with no further call needed.";
     static final String SHUT_DOWN_TO_END_A_START = "The catch-up replays are ended and the model is marked as shutting down. The wrapped subscription model was shut down without"
-            + " the model lock to end the start(..) inside it. Call shutdown() again once that code has returned, so the wrapped model is shut down under the lock.";
+            + " the model lock to end the start(..) inside it, and it's shut down again under the lock once that code returns, with no further call needed.";
 
     // The lock behind the claim of subscriptionId, counting the caller as one that holds it or waits for it until it calls
     // releaseClaimLock
@@ -4715,10 +4720,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * handed over by an action or made from another thread behind one, which run nothing once the model is flagged.
      * While code a caller supplied holds the lock up, as {@link #runInTurn} describes, it waits for the lock up to
      * {@link #LIFECYCLE_WAIT} that way, since that code may be waiting for this shutdown, and then throws
-     * {@link IllegalStateException} without running {@code shutDownTheLiveDelegate} under the lock. By then
-     * {@code forgetTheCatchups} has run, and {@code shutDownTheLiveDelegate} has run without the lock only when a start
-     * was in the live delegate's {@code start(..)}, which the exception says. A {@code shutdown()} once that code has
-     * returned shuts the live delegate down.
+     * {@link IllegalStateException}. By then {@code forgetTheCatchups} has run, and {@code shutDownTheLiveDelegate} has
+     * run without the lock only when a start was in the live delegate's {@code start(..)}, which the exception says.
+     * Before it throws, it hands the lifecycle thread a {@code shutDownTheLiveDelegate} under the model lock, which waits
+     * for the lock with no deadline and so runs once that code has returned, with no further call. So when nobody calls
+     * {@code shutdown()} again, as when a closing Spring context made it, the live delegate is still shut down. When that
+     * code never returns, the handed one waits for good, and so does every call handed to the lifecycle thread after it.
+     * A second {@code shutdown()} held up the same way before it runs hands over no second one. A {@code shutdown()} that
+     * gets the lock first shuts the live delegate down itself, and the handed one then doesn't call it again. One that
+     * gets the lock after the handed one returns without calling it again. A {@code start(..)}, {@code stop()} or
+     * {@code resumeSubscription(id)} from another thread made before the handed one has run waits for it as for every
+     * handed call, and then changes nothing, since a {@code shutdown()} has begun. A {@code start(..)} on a thread that
+     * holds the lock before it runs doesn't start the live delegate.
      * <p>
      * Called from inside the action of a replay or of a live call, or on a thread that holds a {@link #claim}, the
      * shutdown doesn't wait. This returns once {@code forgetTheCatchups} has run, and the lifecycle thread the children
@@ -4743,8 +4756,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // A start that registers in the monitor before this does is ended without the lock, and one that registers after
     // this sees the shutdown under way and doesn't start the live delegate, so neither leaves this waiting for good. On a
     // thread other than the lifecycle thread, the wait for the lock ends as heldUpByCallersCode describes, and this then
-    // throws, since that code can be waiting for this shutdown and no thread calls the live delegate for it without the
-    // lock unless a start is in the live delegate's start(..)
+    // hands the rest of the shutdown to the lifecycle thread and throws, since that code can be waiting for this shutdown
+    // and no thread calls the live delegate for it without the lock unless a start is in the live delegate's start(..)
     private void shutDownTheLiveDelegateInTurn(Object model, Runnable shutDownTheLiveDelegate, boolean givesUpBehindCallersCode) {
         LiveDelegateCalls calls = liveDelegateCalls.computeIfAbsent(model, ignored -> new LiveDelegateCalls());
         boolean aStartIsInTheLiveDelegate;
@@ -4752,6 +4765,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             calls.shutdowns++;
             aStartIsInTheLiveDelegate = calls.starts > 0;
         }
+        boolean handedOver = false;
         try {
             if (aStartIsInTheLiveDelegate) {
                 shutDownTheLiveDelegate.run();
@@ -4759,20 +4773,60 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (!givesUpBehindCallersCode) {
                 modelLock.lock();
             } else if (!lockUnlessHeldUpByCallersCode()) {
+                handedOver = finishOnTheLifecycleThread(model, calls, shutDownTheLiveDelegate);
                 throw callersCodeHeldUp("shutdown()", aStartIsInTheLiveDelegate ? SHUT_DOWN_TO_END_A_START : NOT_SHUT_DOWN);
             }
             try {
-                if (!calls.shutDown) {
-                    shutDownTheLiveDelegate.run();
-                    calls.shutDown = true;
-                }
+                shutDownUnlessShutDown(calls, shutDownTheLiveDelegate);
             } finally {
                 modelLock.unlock();
             }
         } finally {
-            synchronized (calls) {
-                calls.shutdowns--;
+            if (!handedOver) {
+                synchronized (calls) {
+                    calls.shutdowns--;
+                }
             }
+        }
+    }
+
+    // Hands the lifecycle thread a shutdown of the live delegate under the model lock, with no deadline on the wait for
+    // the lock, unless an earlier held-up shutdown handed one over that hasn't run yet. Answers whether it handed this
+    // one over, which then counts in calls.shutdowns until it has run, so a start in between doesn't start the live
+    // delegate
+    private boolean finishOnTheLifecycleThread(Object model, LiveDelegateCalls calls, Runnable shutDownTheLiveDelegate) {
+        synchronized (calls) {
+            if (calls.shutdownHandedOver) {
+                return false;
+            }
+            calls.shutdownHandedOver = true;
+        }
+        try {
+            handToTheLifecycleThread(NOTHING_TO_WAIT_FOR, () -> {
+                try {
+                    underTheModelLock(() -> shutDownUnlessShutDown(calls, shutDownTheLiveDelegate));
+                } finally {
+                    synchronized (calls) {
+                        calls.shutdownHandedOver = false;
+                        calls.shutdowns--;
+                    }
+                }
+            }, e -> logHandedCallThrew(model, "shutdown()", e));
+            return true;
+        } catch (Throwable e) {
+            synchronized (calls) {
+                calls.shutdownHandedOver = false;
+            }
+            throw e;
+        }
+    }
+
+    // Under the model lock. Once the live delegate's shutdown() has returned normally, calls.shutDown keeps a later
+    // shutdown from calling it again until a start has started the live delegate again
+    private static void shutDownUnlessShutDown(LiveDelegateCalls calls, Runnable shutDownTheLiveDelegate) {
+        if (!calls.shutDown) {
+            shutDownTheLiveDelegate.run();
+            calls.shutDown = true;
         }
     }
 

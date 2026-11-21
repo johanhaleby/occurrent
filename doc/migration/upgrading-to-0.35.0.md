@@ -2985,7 +2985,8 @@ the catch-up is not affected.
   above on another thread ends once that code and the wait have both run for 10 seconds. A `start(..)`, `stop()`,
   `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
   changed." in its message. A `shutdown()` throws `IllegalStateException` too, but by then it has ended the catch-up
-  replays and marked the model as shutting down, and the wrapped model still runs.
+  replays and marked the model as shutting down. The wrapped model goes on running until that code returns, and is
+  then shut down with no further call. That covers a `shutdown()` the Spring context makes while it closes.
 
 ### What to do
 
@@ -2996,8 +2997,9 @@ and every call made after it, from taking effect.
 
 Don't wait in a `StartAt.dynamic(..)` function or a `CatchupListener` for a `start(..)`, `stop()`, `shutdown()` or
 resume you asked another thread to make, since that call waits for the function or the listener to return and throws
-after 10 seconds. When a `shutdown()` throws that way, call it again once the function or the listener has returned,
-and that call shuts the wrapped model down.
+after 10 seconds. When a `shutdown()` throws that way, the wrapped model is shut down once the function or the
+listener has returned, so there's no need to call it again. A `shutdown()` you do call again doesn't shut the wrapped
+model down a second time.
 
 ## A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing
 

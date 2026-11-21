@@ -214,9 +214,24 @@ the code while it runs under the model lock. A `start(..)`, `stop()`, `stopRepla
 `resumeSubscription(..)` from another thread gives up once the marked code and its own wait have both run for 10
 seconds, and throws (`NOTHING_CHANGED`). A `shutdown()` that gives up throws too. It ends the catch-up replays and
 marks the model as shutting down before it waits for the lock, as described below, so those two have happened by then,
-but the wrapped model isn't shut down. The exception says so, and a `shutdown()` made once the marked code has returned
-shuts the wrapped model down. A `shutdown()` that found a `start(..)` inside the wrapped model's `start(..)` has also
-shut the wrapped model down without the lock to end that start, and the exception says that instead.
+but the wrapped model isn't shut down yet. A `shutdown()` that found a `start(..)` inside the wrapped model's `start(..)`
+has also shut the wrapped model down without the lock to end that start.
+
+Before it throws, the `shutdown()` hands the lifecycle thread a shutdown of the wrapped model under the model lock. That
+one waits for the lock with no deadline, so it runs once the marked code has returned, and no further call is needed.
+The exception says so. This matters when the Spring context closes. The Spring Boot starter builds the MongoDB,
+durable, catch-up and competing consumer models inside one bean method, and the bean's destroy method is the competing
+consumer model's `shutdown()`, which calls the catch-up model's `shutdown()`. No other destroy method reaches the
+models inside, so nothing calls `shutdown()` again. When the marked code never returns,
+the handed shutdown waits for good, and so does every call handed to the lifecycle thread after it, so the wrapped
+model goes on running. A second `shutdown()` held up the same way before the handed one has run hands over no second
+one. A `shutdown()` that gets the lock before the handed one shuts the wrapped model down itself, and the handed one
+then doesn't call it again. One that gets the lock after the handed one returns without calling the wrapped model again, so the wrapped model is shut
+down once either way. A `start(..)`, `stop()` or `resumeSubscription(id)` from another thread made before the handed one
+has run waits behind it as behind every handed call, and then changes nothing, since a `shutdown()` has begun. A
+`start(..)` on a thread that holds the lock meanwhile doesn't call the wrapped model's `start(..)`, as with any
+`shutdown()` under way. The lifecycle thread logs an `ERROR` for what the handed shutdown throws, and the next
+`shutdown()` calls the wrapped model's `shutdown()` again.
 
 A `shutdown()` held up by the marked code doesn't shut the wrapped model down without the lock. The marked code can
 be inside the wrapped model, which can ask the function again in its own `subscribe(..)` and register the subscription
@@ -325,7 +340,10 @@ only after the action it waits for has returned, and no thread holding the lock 
 caller's thread that waits for the lifecycle thread holds neither the model lock nor a claim and runs no action of the
 children, so the actions the calls ahead of it wait for run on other threads. Only an action that waits for that
 caller's thread, after it handed a call over, never returns. A `shutdown()` that calls the wrapped model's `shutdown()`
-without the lock waits for nothing the start holds.
+without the lock waits for nothing the start holds. The shutdown a held-up `shutdown()` hands over waits on the
+lifecycle thread for the model lock with no deadline. The marked code then holds the lock on another thread, or ran on
+the lifecycle thread ahead of it and has returned. A call from another thread queued behind it gives up after 10
+seconds while the marked code runs, as above.
 
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).
