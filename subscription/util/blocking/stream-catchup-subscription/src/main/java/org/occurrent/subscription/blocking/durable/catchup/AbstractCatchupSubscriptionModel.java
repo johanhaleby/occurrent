@@ -1338,7 +1338,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * the live delegate throws, the position stored before is put back as for that subscription, a replay this held
      * runs again as it was, and this throws what the live delegate threw. When the replay is in the subscription's action or reads
      * history, this holds the replay and waits up to ten seconds for it to return before the live delegate resumes the
-     * subscription, so the replay's action doesn't run alongside the action of the resumed subscription. After a
+     * subscription, so the replay's action doesn't run alongside the action of the resumed subscription. Like a
+     * {@link #stop()}, it first tells the call to the action that the replay let through that its event is no longer
+     * wanted, so an action that waits for a competing consumer's lease returns, and the replay delivers that event again
+     * if it runs again. After a
      * {@link #cancelSubscription(String)} that threw, it waits the same way for the replay that cancel
      * ended, which nothing runs again, also when a {@link #stop()} came before or after the cancel. After a
      * {@link #stop()}, it waits the same way for a position store that a replay a {@code subscribe(..)} started began
@@ -1442,6 +1445,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 } catch (RuntimeException | Error e) {
                     putBack(inTheWay, e);
                     throw e;
+                } finally {
+                    // Also when a hold threw, since a shutdown tells only the replays it finds running and nothing else
+                    // tells the action of a replay held here
+                    inTheWay.forEach(ReplayInTheWay::tellTheActionItIsUnwanted);
                 }
                 // Waited for with no handover lock held, since a held replay takes that lock once its action returns
                 awaitTheActions(subscriptionId, inTheWay);
@@ -4010,7 +4017,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * model, or that a cancel still under way ended, which nothing runs again, is returned as one to wait for, and so is
      * a position store that a replay a subscribe started began before a stop parked it. Returns
      * {@code null} when there is none. Called with the {@link #claim} held, so no other lifecycle call can run the held
-     * replay again before the caller ends it or puts it back.
+     * replay again before the caller ends it or puts it back. The caller tells the call to the subscriber's action that
+     * the held replay let through that its event is no longer wanted, with
+     * {@link ReplayInTheWay#tellTheActionItIsUnwanted()}, once it has let go of the handover lock.
      *
      * @throws IllegalStateException when called from inside the subscriber's action, on the thread of a replay for
      *                               {@code subscriptionId}, while there is a replay in the way. Nothing is changed then,
@@ -4048,8 +4057,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (heldByTheResume) {
                 parked = parkedReplays.get(subscriptionId);
             }
+            // Read under the handover lock its delivery sets the stage under
+            CompletableFuture<Void> actionUnwanted = heldByTheResume ? running.actionUnwanted : CompletableFuture.completedFuture(null);
             return new ReplayInTheWay(subscriptionId, parked, heldByTheResume, CompletableFuture.allOf(cancelledAttemptDone, cancelledReplayReturned, storeOfAParkedSubscribe,
-                    parked == null ? CompletableFuture.completedFuture(null) : parked.earlierAttemptsDone()));
+                    parked == null ? CompletableFuture.completedFuture(null) : parked.earlierAttemptsDone()), actionUnwanted);
         }
     }
 
@@ -4070,19 +4081,31 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * A replay a resume started that {@link #holdReplayToResume} found in the way of a resume at a given position.
-     * {@code actionReturned} completes once the thread of every attempt at it has returned.
+     * {@code actionReturned} completes once the thread of every attempt at it has returned. {@code actionUnwanted} is the
+     * stage of the call to the subscriber's action that the attempt the resume held let through.
      */
     final class ReplayInTheWay {
         private final String subscriptionId;
         private final @Nullable ParkedReplay held;
         private final boolean heldByTheResume;
         private final CompletableFuture<Void> actionReturned;
+        private final CompletableFuture<Void> actionUnwanted;
 
-        private ReplayInTheWay(String subscriptionId, @Nullable ParkedReplay held, boolean heldByTheResume, CompletableFuture<Void> actionReturned) {
+        private ReplayInTheWay(String subscriptionId, @Nullable ParkedReplay held, boolean heldByTheResume, CompletableFuture<Void> actionReturned,
+                               CompletableFuture<Void> actionUnwanted) {
             this.subscriptionId = subscriptionId;
             this.held = held;
             this.heldByTheResume = heldByTheResume;
             this.actionReturned = actionReturned;
+            this.actionUnwanted = actionUnwanted;
+        }
+
+        // Tells the call to the subscriber's action that the held attempt let through that its event is no longer
+        // wanted, as a stop does, so an action that waits for a competing consumer's lease withdraws the event and
+        // returns. Called with no handover lock held, since completing the stage runs what the action's wait put on it.
+        // The replay delivers that event again once it runs again, from the last position it stored.
+        void tellTheActionItIsUnwanted() {
+            actionUnwanted.complete(null);
         }
 
         // A replay a subscribe started that is held because the live delegate lost its live start, so the live delegate
