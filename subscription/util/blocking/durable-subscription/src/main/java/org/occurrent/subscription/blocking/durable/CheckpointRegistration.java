@@ -39,8 +39,9 @@ final class CheckpointRegistration {
     // is saved one interval after the subscribe
     final AtomicLong lastWrite = new AtomicLong(System.nanoTime());
     // Held while a delivery starts or finishes, while a quiet position is saved, while a resume at a position that
-    // failed puts back what was stored before it, and while the position a restart after a lost history starts from
-    // is written, so no quiet position is saved while a delivery of any run of this subscribe is under way. Taken
+    // failed puts back what was stored before it, while a resume of a paused subscription reads the checkpoint stored
+    // and goes to it, and while the position a restart after a lost history starts from is written, so no quiet
+    // position is saved while a delivery of any run of this subscribe is under way. Taken
     // before saveLock. A resume and that restart take the deliveryLocks of the tracked and the untracked
     // registration of an id in that order, under the lock for the id, and before their saveLocks
     final ReentrantLock deliveryLock = new ReentrantLock();
@@ -79,9 +80,10 @@ final class CheckpointRegistration {
     // covers. A listener that throws fails the restart, so the run that lost the history saves no quiet position
     // before it restarts, which writes a restart position again. Written holding deliveryLock and saveLock
     private @Nullable String positionThatThrew;
-    // Whether a position of the subscription was stored before the first delivery, until a current delivery ends or
-    // a read finds nothing stored. Any stored checkpoint covers a subscribe that has delivered nothing. Written
-    // holding deliveryLock and saveLock
+    // Whether a position of the subscription was stored before the first delivery, until a current delivery ends, a
+    // read finds nothing stored, or a resume that goes on from the wrapped model's own position finds a checkpoint
+    // this subscribe didn't store or read. Any stored checkpoint covers a subscribe that has delivered nothing.
+    // Written holding deliveryLock and saveLock
     private boolean storedBeforeAnyDelivery;
     // What the last write or read of this registration left stored, as Checkpoint.asString. A write that threw,
     // refused or not, makes it unknown. Null and known until this registration writes or reads one. Written
@@ -137,11 +139,15 @@ final class CheckpointRegistration {
     }
 
     // A position of the subscription is stored, so before the first event a quiet save moves that position on and
-    // never stores the first one for a subscription that stores no position of its own
-    void startPositionStored() {
+    // never stores the first one for a subscription that stores no position of its own. stored is that position, and
+    // a resume compares it with what it finds stored, unless this registration had already noted a write or a read
+    void startPositionStored(Checkpoint stored) {
         underDeliveryLockAndSaveLock(() -> {
             if (deliveries == 0) {
                 storedBeforeAnyDelivery = true;
+                if (storedKnown && storedPosition == null) {
+                    storedPosition = stored.asString();
+                }
                 decide();
             }
         });
@@ -199,15 +205,31 @@ final class CheckpointRegistration {
         repositions++;
     }
 
-    // Called holding saveLock, once the write of a resume at a position has returned, or with the read of a resume at
-    // the checkpoint stored. previous is what the resume read as stored before it
+    // Called holding saveLock, once the write of a resume at a position has returned. previous is what the resume read
+    // as stored before it
     void repositionStored(Checkpoint position, @Nullable Checkpoint previous) {
         repositionMayBeStored(position, previous);
         stored(position);
     }
 
-    // Called holding saveLock, once the write of a resume at a position threw. The position counts as the resume's
-    // if a read finds it stored
+    // Called holding deliveryLock and saveLock by a resume at the checkpoint stored, with the read of it. Another node
+    // can have stored it while the subscription was paused, so it is what this registration compares with from now on,
+    // whatever the wrapped model does with it. It covers the deliveries read before the resume, while it stays stored,
+    // only when the wrapped model restarts there, since one that goes on from its own position delivers none of those
+    // again
+    void resumedAtStored(Checkpoint stored, boolean restartsThere) {
+        repositioning();
+        if (restartsThere) {
+            repositionMayBeStored(stored, stored);
+        } else if (!storedKnown || !stored.asString().equals(storedPosition)) {
+            // Maybe stored by another node, so no quiet position is saved over it before a delivery stores its checkpoint
+            storedBeforeAnyDelivery = false;
+        }
+        stored(stored);
+    }
+
+    // Called holding saveLock, once the write of a resume at a position threw, and by a resume at the checkpoint stored
+    // that the wrapped model restarts at. The position counts as the resume's if a read finds it stored
     void repositionMayBeStored(Checkpoint position, @Nullable Checkpoint previous) {
         repositionOfPrevious = previous == null ? Reposition.NONE : repositionAt(previous.asString());
         latestReposition = new Reposition(repositions, position.asString());
@@ -227,7 +249,7 @@ final class CheckpointRegistration {
         repositions++;
     }
 
-    // Called holding saveLock once a write of this registration's own has returned
+    // Called holding saveLock once a write of this registration's own has returned, or a resume read what is stored
     void stored(Checkpoint checkpoint) {
         storedPosition = checkpoint.asString();
         storedKnown = true;

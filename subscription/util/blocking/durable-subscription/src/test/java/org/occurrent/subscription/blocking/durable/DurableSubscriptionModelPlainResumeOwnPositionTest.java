@@ -51,6 +51,8 @@ class DurableSubscriptionModelPlainResumeOwnPositionTest {
     private static final String SUBSCRIPTION_ID = "subscription";
     private static final Checkpoint STORED_GLOBAL_CHECKPOINT = new GlobalCheckpoint(5);
     private static final Checkpoint STORED_BY_ANOTHER_NODE = new StringBasedCheckpoint("stored-by-another-node");
+    private static final Checkpoint FIRST_GLOBAL_POSITION = new GlobalCheckpoint(3);
+    private static final Checkpoint FIRST_POSITION = new StringBasedCheckpoint("first-position");
     private static final Checkpoint EVENT_BEFORE_THE_PAUSE = new StringBasedCheckpoint("event-before-the-pause");
     private static final Checkpoint EVENT_AFTER_THE_RESUME = new StringBasedCheckpoint("event-after-the-resume");
     private static final Checkpoint QUIET_BEFORE_THE_RESUME = new StringBasedCheckpoint("quiet-before-the-resume");
@@ -121,10 +123,162 @@ class DurableSubscriptionModelPlainResumeOwnPositionTest {
         );
     }
 
+    @Test
+    void a_plain_resume_after_another_node_stored_a_checkpoint_the_wrapped_model_goes_on_from_its_own_position_for_does_not_store_a_quiet_position_over_it_until_a_delivery_stores_its_checkpoint() {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> {
+        });
+        wrapped.deliver(SUBSCRIPTION_ID, EVENT_BEFORE_THE_PAUSE);
+        Checkpoint storedAfterTheDelivery = storage.read(SUBSCRIPTION_ID);
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        storage.save(SUBSCRIPTION_ID, STORED_GLOBAL_CHECKPOINT);
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        Consumer<Checkpoint> saverAfterTheResume = saverWhenWanted();
+        if (saverAfterTheResume != null) {
+            saverAfterTheResume.accept(QUIET_BEFORE_THE_RESUME);
+        }
+        Checkpoint storedBeforeALaterDelivery = storage.read(SUBSCRIPTION_ID);
+        wrapped.deliver(SUBSCRIPTION_ID, EVENT_AFTER_THE_RESUME);
+        Consumer<Checkpoint> saverAfterTheLaterDelivery = saverWhenWanted();
+        if (saverAfterTheLaterDelivery != null) {
+            saverAfterTheLaterDelivery.accept(QUIET_AFTER_THE_RESUME);
+        }
+
+        // Then
+        assertAll(
+                () -> assertThat(storedAfterTheDelivery).as("checkpoint stored by the delivery before the pause").isEqualTo(EVENT_BEFORE_THE_PAUSE),
+                () -> assertThat(storedBeforeALaterDelivery).as("checkpoint stored after the resume, before a later delivery stored its own").isEqualTo(STORED_GLOBAL_CHECKPOINT),
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_GLOBAL_CHECKPOINT),
+                () -> assertThat(saverAfterTheLaterDelivery).as("quiet position wanted after a delivery stored its checkpoint").isNotNull(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored after a later delivery stored its own").isEqualTo(QUIET_AFTER_THE_RESUME)
+        );
+    }
+
+    @Test
+    void a_plain_resume_after_another_node_stored_a_checkpoint_the_wrapped_model_restarts_at_saves_the_quiet_position_that_follows() {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> {
+        });
+        wrapped.deliver(SUBSCRIPTION_ID, EVENT_BEFORE_THE_PAUSE);
+        Checkpoint storedAfterTheDelivery = storage.read(SUBSCRIPTION_ID);
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        storage.save(SUBSCRIPTION_ID, STORED_BY_ANOTHER_NODE);
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        Consumer<Checkpoint> saverAfterTheResume = saverWhenWanted();
+        if (saverAfterTheResume != null) {
+            saverAfterTheResume.accept(QUIET_AFTER_THE_RESUME);
+        }
+
+        // Then
+        assertAll(
+                () -> assertThat(storedAfterTheDelivery).as("checkpoint stored by the delivery before the pause").isEqualTo(EVENT_BEFORE_THE_PAUSE),
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_BY_ANOTHER_NODE),
+                () -> assertThat(saverAfterTheResume).as("quiet position wanted after the resume").isNotNull(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored after the quiet position of the resumed run").isEqualTo(QUIET_AFTER_THE_RESUME)
+        );
+    }
+
+    @Test
+    void a_plain_resume_after_another_node_stored_a_checkpoint_when_the_wrapped_model_keeps_the_default_restarts_at_does_not_store_a_quiet_position_over_it_until_a_delivery_stores_its_checkpoint() {
+        // Given
+        RepositionableQuietPositionReportingModel defaultRestartsAt = RepositionableQuietPositionReportingModel.keepingTheDefaultRestartsAt();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(defaultRestartsAt, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> {
+        });
+        defaultRestartsAt.deliver(SUBSCRIPTION_ID, EVENT_BEFORE_THE_PAUSE);
+        Checkpoint storedAfterTheDelivery = storage.read(SUBSCRIPTION_ID);
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        storage.save(SUBSCRIPTION_ID, STORED_GLOBAL_CHECKPOINT);
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        Consumer<Checkpoint> saverAfterTheResume = saverWhenWanted(defaultRestartsAt);
+        if (saverAfterTheResume != null) {
+            saverAfterTheResume.accept(QUIET_BEFORE_THE_RESUME);
+        }
+        Checkpoint storedBeforeALaterDelivery = storage.read(SUBSCRIPTION_ID);
+        defaultRestartsAt.deliver(SUBSCRIPTION_ID, EVENT_AFTER_THE_RESUME);
+        Consumer<Checkpoint> saverAfterTheLaterDelivery = saverWhenWanted(defaultRestartsAt);
+        if (saverAfterTheLaterDelivery != null) {
+            saverAfterTheLaterDelivery.accept(QUIET_AFTER_THE_RESUME);
+        }
+
+        // Then
+        assertAll(
+                () -> assertThat(storedAfterTheDelivery).as("checkpoint stored by the delivery before the pause").isEqualTo(EVENT_BEFORE_THE_PAUSE),
+                () -> assertThat(storedBeforeALaterDelivery).as("checkpoint stored after the resume, before a later delivery stored its own").isEqualTo(STORED_GLOBAL_CHECKPOINT),
+                () -> assertThat(defaultRestartsAt.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_GLOBAL_CHECKPOINT),
+                () -> assertThat(saverAfterTheLaterDelivery).as("quiet position wanted after a delivery stored its checkpoint").isNotNull(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored after a later delivery stored its own").isEqualTo(QUIET_AFTER_THE_RESUME)
+        );
+    }
+
+    @Test
+    void a_plain_resume_after_another_node_stored_a_checkpoint_the_wrapped_model_goes_on_from_its_own_position_for_does_not_store_a_quiet_position_over_it_when_nothing_was_delivered_since_the_start_position_was_stored() {
+        // Given
+        wrapped.globalCheckpoint = FIRST_POSITION;
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Checkpoint storedAtSubscribe = storage.read(SUBSCRIPTION_ID);
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        storage.save(SUBSCRIPTION_ID, STORED_GLOBAL_CHECKPOINT);
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        Consumer<Checkpoint> saverAfterTheResume = saverWhenWanted();
+        if (saverAfterTheResume != null) {
+            saverAfterTheResume.accept(QUIET_BEFORE_THE_RESUME);
+        }
+
+        // Then
+        assertAll(
+                () -> assertThat(storedAtSubscribe).as("first position stored by the subscribe").isEqualTo(FIRST_POSITION),
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_GLOBAL_CHECKPOINT),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored after the resume, with nothing delivered since").isEqualTo(STORED_GLOBAL_CHECKPOINT)
+        );
+    }
+
+    @Test
+    void a_plain_resume_that_finds_the_start_position_the_model_stored_still_saves_the_quiet_position_that_follows_when_nothing_was_delivered() {
+        // Given
+        wrapped.globalCheckpoint = FIRST_GLOBAL_POSITION;
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Checkpoint storedAtSubscribe = storage.read(SUBSCRIPTION_ID);
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        Consumer<Checkpoint> saverAfterTheResume = saverWhenWanted();
+        if (saverAfterTheResume != null) {
+            saverAfterTheResume.accept(QUIET_AFTER_THE_RESUME);
+        }
+
+        // Then
+        assertAll(
+                () -> assertThat(storedAtSubscribe).as("first position stored by the subscribe").isEqualTo(FIRST_GLOBAL_POSITION),
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(FIRST_GLOBAL_POSITION),
+                () -> assertThat(saverAfterTheResume).as("quiet position wanted after the resume").isNotNull(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored after the quiet position of the resumed run").isEqualTo(QUIET_AFTER_THE_RESUME)
+        );
+    }
+
     // Reads until a listener wants the quiet position, which the 1 ms interval allows after a moment. Null when none does
     private @Nullable Consumer<Checkpoint> saverWhenWanted() {
+        return saverWhenWanted(wrapped);
+    }
+
+    private static @Nullable Consumer<Checkpoint> saverWhenWanted(RepositionableQuietPositionReportingModel model) {
         try {
-            return await().atMost(2, SECONDS).until(() -> wrapped.beforeReading(SUBSCRIPTION_ID), Objects::nonNull);
+            return await().atMost(2, SECONDS).until(() -> model.beforeReading(SUBSCRIPTION_ID), Objects::nonNull);
         } catch (ConditionTimeoutException e) {
             return null;
         }

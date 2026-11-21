@@ -74,7 +74,7 @@ class CheckpointRegistrationTest {
             boolean beforeAnyPositionIsStored = registration.quietTickAllowed();
 
             // When
-            registration.startPositionStored();
+            registration.startPositionStored(at("s"));
 
             // Then
             assertThat(beforeAnyPositionIsStored).as("allowed before a position is stored").isFalse();
@@ -627,6 +627,90 @@ class CheckpointRegistrationTest {
             Delivery delivery = registration.delivering();
             save(delivery, event, Write.RETURNS);
             return delivery;
+        }
+    }
+
+    @Nested
+    @DisplayName("plain resumes at the stored checkpoint")
+    class PlainResumesAtTheStoredCheckpoint {
+
+        @Test
+        void a_checkpoint_stored_by_another_node_that_the_wrapped_model_does_not_restart_at_keeps_quiet_ticks_off_until_a_delivery_stores_its_checkpoint() {
+            // Given
+            deliverStored("e");
+            asked.clear();
+
+            // When
+            plainResumeAt("c", false);
+            quietTick("q1", Write.RETURNS);
+            deliverStored("f");
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("tick off", "save f", "save q2");
+            assertThat(stored).isEqualTo("q2");
+        }
+
+        @Test
+        void a_checkpoint_stored_by_another_node_that_the_wrapped_model_restarts_at_covers_the_delivery_read_before_the_resume() {
+            // Given
+            deliverStored("e");
+            asked.clear();
+
+            // When
+            plainResumeAt("c", true);
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q1");
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_checkpoint_stored_by_another_node_keeps_quiet_ticks_off_for_a_subscription_whose_start_position_is_stored_and_that_delivered_nothing() {
+            // Given
+            stored = "s";
+            registration.startPositionStored(at("s"));
+
+            // When
+            plainResumeAt("g", false);
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("tick off");
+            assertThat(stored).isEqualTo("g");
+        }
+
+        @Test
+        void the_start_position_found_stored_by_the_resume_still_allows_a_quiet_tick_when_nothing_was_delivered() {
+            // Given
+            stored = "s";
+            registration.startPositionStored(at("s"));
+
+            // When
+            plainResumeAt("s", false);
+            quietTick("q1", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q1");
+            assertThat(stored).isEqualTo("q1");
+        }
+
+        @Test
+        void a_quiet_position_found_stored_by_the_resume_still_allows_a_quiet_tick_when_nothing_was_delivered() {
+            // Given
+            stored = "s";
+            registration.startPositionStored(at("s"));
+            quietTick("q1", Write.RETURNS);
+            asked.clear();
+
+            // When
+            plainResumeAt("q1", false);
+            quietTick("q2", Write.RETURNS);
+
+            // Then
+            assertThat(asked).containsExactly("save q2");
+            assertThat(stored).isEqualTo("q2");
         }
     }
 
@@ -1210,6 +1294,23 @@ class CheckpointRegistrationTest {
             registration.saveLock.unlock();
         }
         registration.decideQuietTicks();
+    }
+
+    // What a plain resume at the checkpoint stored does under both locks, when the checkpoint is what the storage holds
+    private void plainResumeAt(String checkpoint, boolean restartsThere) {
+        stored = checkpoint;
+        registration.deliveryLock.lock();
+        try {
+            registration.saveLock.lock();
+            try {
+                registration.resumedAtStored(at(checkpoint), restartsThere);
+            } finally {
+                registration.saveLock.unlock();
+            }
+            registration.decideQuietTicks();
+        } finally {
+            registration.deliveryLock.unlock();
+        }
     }
 
     // What the put-back of a resume that failed does under both locks. A put-back that threw reads what is stored
