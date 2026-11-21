@@ -1672,10 +1672,18 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                     quietSaves.wrote();
                                 }), Mono.empty()).then();
                     }));
+            // Counted as ended before the completion reaches the wrapped model, which can start the next delivery from
+            // it. A cancel after the end isn't counted again.
             return Mono.defer(() -> {
+                AtomicBoolean ended = new AtomicBoolean();
+                Runnable end = () -> {
+                    if (ended.compareAndSet(false, true)) {
+                        quietSaves.deliveryEnded(stored.get());
+                    }
+                };
                 quietSaves.deliveryStarted();
-                return delivered;
-            }).doFinally(__ -> quietSaves.deliveryEnded(stored.get()));
+                return delivered.doOnTerminate(end).doOnCancel(end);
+            });
         };
     }
 

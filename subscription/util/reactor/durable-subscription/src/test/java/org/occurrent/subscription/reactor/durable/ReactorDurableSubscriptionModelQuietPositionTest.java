@@ -31,6 +31,8 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions.QuietPositionListener;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.reactivestreams.Subscription;
+import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
@@ -172,11 +174,47 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         action.apply(eventAt(1)).block(TIMEOUT);
         Function<Checkpoint, Mono<Void>> offeredAfterTheDeclinedEvent = wrapped.beforeReading(SUBSCRIPTION_ID);
         action.apply(eventAt(2)).block(TIMEOUT);
+        Function<Checkpoint, Mono<Void>> offeredAfterTheStoredEvent = wrapped.beforeReading(SUBSCRIPTION_ID);
 
         // Then
         assertThat(offeredAfterTheDeclinedEvent).as("save offered while the latest event is one the predicate declined").isNull();
-        // The delivery is marked ended in a doFinally, which can run after the Mono has completed for the caller
-        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once the latest event is stored").isNotNull());
+        assertThat(offeredAfterTheStoredEvent).as("save offered once the latest event is stored").isNotNull();
+    }
+
+    @Test
+    void a_declined_event_delivered_from_the_completion_of_a_stored_one_blocks_quiet_saves() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(2));
+        subscribeFromTheStoredStart(model, storage);
+        Function<CloudEvent, Mono<Void>> action = wrapped.actions.getFirst();
+        action.apply(eventAt(1)).block(TIMEOUT);
+
+        // When the wrapped model delivers event 3 from the completion of event 2, as concatMap does
+        action.apply(eventAt(2)).then(Mono.defer(() -> action.apply(eventAt(3)))).block(TIMEOUT);
+
+        // Then
+        // Read again for 500 ms, since a delivery counted as ended late would only show up after the block returned
+        await().atMost(TIMEOUT).during(Duration.ofMillis(500)).untilAsserted(() ->
+                assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered while the latest event is one the predicate declined").isNull());
+    }
+
+    @Test
+    void a_delivery_cancelled_by_its_subscriber_from_inside_the_completion_is_counted_as_ended_once() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
+        subscribeFromTheStoredStart(model, storage);
+
+        // When
+        CancellingOnCompleteSubscriber subscriber = new CancellingOnCompleteSubscriber();
+        wrapped.actions.getFirst().apply(eventAt(1)).subscribe(subscriber);
+        subscriber.completed.orTimeout(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).join();
+
+        // Then
+        assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once the only delivery has ended and was stored").isNotNull();
     }
 
     @Test
@@ -195,11 +233,11 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         Function<Checkpoint, Mono<Void>> offeredWhileTheFirstIsUnderWay = wrapped.beforeReading(SUBSCRIPTION_ID);
         finishFirst.tryEmitEmpty();
         first.join();
+        Function<Checkpoint, Mono<Void>> offeredOnceTheFirstIsStored = wrapped.beforeReading(SUBSCRIPTION_ID);
 
         // Then
         assertThat(offeredWhileTheFirstIsUnderWay).as("save offered while a delivery is under way").isNull();
-        // The delivery is marked ended in a doFinally, which can run after the future has completed for the caller
-        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once every delivery has ended and the latest was stored").isNotNull());
+        assertThat(offeredOnceTheFirstIsStored).as("save offered once every delivery has ended and the latest was stored").isNotNull();
     }
 
     @Test
@@ -365,6 +403,38 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         private @Nullable Function<Checkpoint, Mono<Void>> beforeReading(String subscriptionId) {
             assertThat(listeners).as("listeners registered with the wrapped model").hasSize(1);
             return listeners.getFirst().beforeReading(subscriptionId).block(TIMEOUT);
+        }
+    }
+
+    // A raw subscriber, since BaseSubscriber ignores a cancel that comes after the completion
+    private static final class CancellingOnCompleteSubscriber implements CoreSubscriber<Void> {
+        private final CompletableFuture<Void> completed = new CompletableFuture<>();
+        private volatile @Nullable Subscription subscription;
+
+        @Override
+        public void onSubscribe(Subscription subscription) {
+            this.subscription = subscription;
+            subscription.request(Long.MAX_VALUE);
+        }
+
+        @Override
+        public void onNext(Void ignored) {
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            completed.completeExceptionally(error);
+        }
+
+        @Override
+        public void onComplete() {
+            Subscription kept = subscription;
+            if (kept == null) {
+                completed.completeExceptionally(new IllegalStateException("No subscription was received in onSubscribe"));
+                return;
+            }
+            kept.cancel();
+            completed.complete(null);
         }
     }
 
