@@ -181,10 +181,19 @@ atomically, and `SagaRunner.run` calls it at startup when quarantine is on. On a
 off a saga runs on a standalone server that journals its writes, since the runner then makes none of the three
 transitions. Every saga write asks for `j: true`, which MongoDB answers with an error on a server without journaling.
 An instance quarantined earlier, such as one in data restored from a replica set, can't record the inputs it skips
-there. The delivery of every input addressed to it fails, so the input isn't acknowledged and is delivered again. Skipping it without a record would acknowledge an input that no release replays. The instance
+there. The delivery of an input it has to record as skipped fails, so the input isn't acknowledged and is delivered
+again. Skipping it without a record would acknowledge an input that no release replays. An input it needs no record
+for, such as a redelivery of one it applied before it was quarantined, is skipped and acknowledged as on a replica set.
+The instance
 holds up its inputs until its data is moved back to a replica set and it is released there, or until it is deleted by
-hand in the database. A `release` or a `delete(sagaId)` of it on the standalone server writes in a transaction, which
-the server refuses. On a replica set and through a mongos nothing changes.
+hand in the database. `SagaSubscription.release(sagaId)` throws on the standalone server before it reads or writes
+anything. The write that starts a release asks for no transaction, so without that refusal a release there would mark
+the instance releasing and dispatch the commands of the input it stopped on, and the server would then refuse the
+transaction that records that input as applied. Every timer poll would dispatch those commands again. The timer poller
+replays nothing on a store whose `requireAtomicTransitions()` throws, so an instance already marked releasing, such as
+one in data restored from a replica set, stays as it is, and the first poll that lists one logs an `ERROR` that names
+it. A `delete(sagaId)` of such an instance on the standalone server writes in a transaction, which the server refuses.
+On a replica set and through a mongos nothing changes.
 
 `InMemorySagaStateStore` keeps an instance and its records as one value and replaces it in one write, so a read
 sees the instance and its records as one write left them.

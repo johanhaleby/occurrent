@@ -178,7 +178,12 @@ public final class SagaSubscription implements AutoCloseable {
      *                               missing field. Also thrown when the store holds no record of the input the
      *                               instance was quarantined on, as for an instance restored without its records,
      *                               since a release would make it {@code ACTIVE} without ever applying that input.
-     *                               {@code SpringMongoSagaStateStore} throws a
+     *                               Also thrown, before the release reads or writes anything and even for an
+     *                               instance the store does not hold, when the store's
+     *                               {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs#requireAtomicTransitions()}
+     *                               throws, as {@code SpringMongoSagaStateStore} on a standalone server, since the
+     *                               store would refuse the write that applies a replayed input after the release
+     *                               dispatched its commands. {@code SpringMongoSagaStateStore} throws a
      *                               {@link org.occurrent.dsl.saga.SagaReadRefusedException} inside a MongoDB
      *                               transaction of the caller's, and the release throws it as it is, before it reads or
      *                               writes anything

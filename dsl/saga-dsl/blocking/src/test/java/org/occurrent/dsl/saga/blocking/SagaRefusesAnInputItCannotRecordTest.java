@@ -17,9 +17,15 @@
 package org.occurrent.dsl.saga.blocking;
 
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -37,7 +43,9 @@ import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
@@ -57,7 +65,9 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * A quarantined instance in a store that cannot write a skip and its record in one atomic write, such as
  * SpringMongoSagaStateStore on a standalone server holding data restored from a replica set. With quarantine off the
  * delivery of an input addressed to that instance must fail rather than return, since returning acknowledges an input
- * that was neither applied nor recorded for a release to replay.
+ * that was neither applied nor recorded for a release to replay. A release of it, and the timer poller's going on with a
+ * release marked in that data, must not start either, since a release dispatches the commands of the first record before
+ * the write that applies it, which the store refuses, so every poll would dispatch them again.
  */
 @DisplayName("A quarantined saga instance in a store that cannot write atomically, with quarantine off")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -103,6 +113,26 @@ class SagaRefusesAnInputItCannotRecordTest {
     private final InMemorySagaStateStore<Order> inMemory = new InMemorySagaStateStore<>();
     private final StoreThatCannotWriteAtomically store = new StoreThatCannotWriteAtomically();
     private final SagaEnvelopes<Order> envelopes = SagaEnvelopes.of(inMemory, null);
+    private ListAppender<ILoggingEvent> appender;
+    private Logger executionLog;
+
+    @BeforeEach
+    void captureErrors() {
+        appender = new ListAppender<>();
+        appender.start();
+        executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+        executionLog.addAppender(appender);
+    }
+
+    @AfterEach
+    void stopCapturing() {
+        executionLog.detachAppender(appender);
+        appender.stop();
+    }
+
+    private List<String> errors() {
+        return appender.list.stream().filter(e -> e.getLevel() == Level.ERROR).map(ILoggingEvent::getFormattedMessage).toList();
+    }
 
     private Saga<OrderEvent, Order, Object> saga() {
         return Saga.<OrderEvent, Order, Object>builder(null)
@@ -146,6 +176,7 @@ class SagaRefusesAnInputItCannotRecordTest {
         assertThat(quarantined.status()).as("control: quarantined").isEqualTo(SagaStatus.QUARANTINED);
         assertThat(quarantined.quarantineId()).as("control: with a quarantine id").isNotNull();
         dispatched.clear();
+        appender.list.clear();
         return quarantined;
     }
 
@@ -222,6 +253,87 @@ class SagaRefusesAnInputItCannotRecordTest {
         );
     }
 
+    @Test
+    void a_release_of_it_throws_naming_the_instance_before_it_reads_or_writes_anything_and_dispatches_nothing() {
+        SagaEnvelope<Order> before = quarantinedEarlier();
+        StoredSaga storedBefore = inMemory.find(ORDER).orElseThrow();
+        List<SkippedInput> recordsBefore = inMemory.findSkippedInputs(ORDER, before.quarantineId(), Integer.MAX_VALUE);
+        assertThat(recordsBefore).as("control: the instance holds the record of the input it stopped on").isNotEmpty();
+        SagaExecution<OrderEvent, Order, Object> execution = executionWithQuarantineOff();
+
+        Throwable thrown = catchThrowable(() -> execution.release(ORDER));
+
+        assertAll(
+                () -> assertThat(thrown).as("the release is refused instead of dispatching the first record's commands and then failing to apply it")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("cannot release instance '" + ORDER + "'")
+                        .hasMessageContaining("one atomic write")
+                        .hasMessageContaining("Nothing was read or written"),
+                () -> assertThat(store.reads).as("nothing is read").hasValue(0),
+                () -> assertThat(store.writes).as("nothing is written").hasValue(0),
+                () -> assertThat(dispatched).as("no command is dispatched").isEmpty(),
+                () -> assertThat(inMemory.find(ORDER)).as("the stored instance is unchanged").contains(storedBefore),
+                () -> assertThat(instance(ORDER).isReleasing()).as("the instance is not marked releasing").isFalse(),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, before.quarantineId(), Integer.MAX_VALUE)).as("the records are unchanged").isEqualTo(recordsBefore)
+        );
+    }
+
+    @Test
+    void a_release_of_an_instance_the_store_does_not_hold_is_refused_the_same_way_without_a_read() {
+        SagaExecution<OrderEvent, Order, Object> execution = executionWithQuarantineOff();
+
+        Throwable thrown = catchThrowable(() -> execution.release("unknown"));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("cannot release instance 'unknown'").hasMessageContaining("one atomic write"),
+                () -> assertThat(store.reads).as("nothing is read").hasValue(0),
+                () -> assertThat(store.writes).as("nothing is written").hasValue(0)
+        );
+    }
+
+    @Test
+    void the_timer_poller_dispatches_and_writes_nothing_for_an_instance_marked_releasing_and_logs_one_error_naming_it() {
+        SagaEnvelope<Order> quarantined = quarantinedEarlier();
+        SagaEnvelope<Order> releasing = SagaExecutionSupport.startRelease(quarantined, now.get());
+        assertThat(envelopes.compareAndSaveWithoutState(ORDER, releasing, quarantined.version())).as("control: the release is marked").isTrue();
+        assertThat(instance(ORDER).isReleasing()).as("control: releasing").isTrue();
+        StoredSaga storedBefore = inMemory.find(ORDER).orElseThrow();
+        List<SkippedInput> recordsBefore = inMemory.findSkippedInputs(ORDER, quarantined.quarantineId(), Integer.MAX_VALUE);
+        assertThat(recordsBefore).as("control: the held record is there").isNotEmpty();
+        SagaExecution<OrderEvent, Order, Object> execution = executionWithQuarantineOff();
+
+        for (int poll = 0; poll < 3; poll++) {
+            now.set(now.get().plusSeconds(15));
+            execution.pollTimers();
+        }
+
+        assertAll(
+                () -> assertThat(dispatched).as("no command is dispatched").isEmpty(),
+                () -> assertThat(store.writes).as("nothing is written").hasValue(0),
+                () -> assertThat(inMemory.find(ORDER)).as("the stored instance is unchanged").contains(storedBefore),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantined.quarantineId(), Integer.MAX_VALUE)).as("the records are unchanged").isEqualTo(recordsBefore),
+                () -> assertThat(errors()).as("one ERROR across the polls, naming the instance").singleElement().asString()
+                        .contains("does not go on with the release of instances").contains(ORDER),
+                () -> assertThat(store.releasingListings).as("the poller stops listing once it has said so").hasValue(1)
+        );
+    }
+
+    @Test
+    void the_timer_poller_logs_no_error_when_no_instance_is_marked_releasing() {
+        quarantinedEarlier();
+        SagaExecution<OrderEvent, Order, Object> execution = executionWithQuarantineOff();
+
+        execution.pollTimers();
+        execution.pollTimers();
+
+        assertAll(
+                () -> assertThat(errors()).as("nothing to say").isEmpty(),
+                () -> assertThat(store.releasingListings).as("it still looks on every poll").hasValue(2),
+                () -> assertThat(store.writes).hasValue(0),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
     private static String inputKey(CloudEvent event) {
         return ORDER + "@" + event.getExtension("streamversion");
     }
@@ -230,6 +342,9 @@ class SagaRefusesAnInputItCannotRecordTest {
     // as the refused transaction is
     private final class StoreThatCannotWriteAtomically implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
         final AtomicInteger skipWrites = new AtomicInteger();
+        final AtomicInteger reads = new AtomicInteger();
+        final AtomicInteger writes = new AtomicInteger();
+        final AtomicInteger releasingListings = new AtomicInteger();
 
         @Override
         public void requireAtomicTransitions() {
@@ -243,21 +358,25 @@ class SagaRefusesAnInputItCannotRecordTest {
 
         @Override
         public Optional<StoredSaga> find(String sagaId) {
+            reads.incrementAndGet();
             return inMemory.find(sagaId);
         }
 
         @Override
         public Optional<StoredSaga> findWithoutState(String sagaId) {
+            reads.incrementAndGet();
             return inMemory.findWithoutState(sagaId);
         }
 
         @Override
         public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            writes.incrementAndGet();
             return inMemory.compareAndSave(saga, expectedVersion);
         }
 
         @Override
         public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            writes.incrementAndGet();
             return inMemory.compareAndSaveWithoutState(saga, expectedVersion);
         }
 
@@ -268,12 +387,14 @@ class SagaRefusesAnInputItCannotRecordTest {
 
         @Override
         public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+            releasingListings.incrementAndGet();
             return inMemory.findReleasingSagaIds(after, limit);
         }
 
         @Override
         public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
             skipWrites.incrementAndGet();
+            writes.incrementAndGet();
             throw new IllegalStateException("the server refuses the transaction");
         }
 
@@ -284,16 +405,19 @@ class SagaRefusesAnInputItCannotRecordTest {
 
         @Override
         public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            reads.incrementAndGet();
             return inMemory.findWithFirstSkippedInput(sagaId);
         }
 
         @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            writes.incrementAndGet();
             throw new IllegalStateException("the server refuses the transaction");
         }
 
         @Override
         public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            writes.incrementAndGet();
             throw new IllegalStateException("the server refuses the transaction");
         }
 

@@ -400,25 +400,6 @@ class SagaReleaseTooLargeTest {
     }
 
     @Test
-    void a_store_that_cannot_write_atomically_stops_a_release_on_a_write_it_cannot_take_and_dispatches_nothing() {
-        quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
-        seedVersionsAndLimitStoreToThem();
-        SagaExecution<OrderEvent, Order, Object> onTheNonAtomicStore = execution(new StoreThatCannotWriteAtomically(), CONFIG_WITHOUT_QUARANTINE);
-
-        ReleaseResult stopped = onTheNonAtomicStore.release(ORDER);
-        List<Object> dispatchedAtTheStop = List.copyOf(dispatched);
-        ReleaseResult further = onTheNonAtomicStore.release(ORDER);
-
-        assertAll(
-                () -> assertThat(stopped).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
-                () -> assertThat(dispatchedAtTheStop).isEmpty(),
-                () -> assertThat(errors()).first().asString().contains(RELEASE_AGAIN),
-                () -> assertThat(further).isEqualTo(ReleaseResult.RELEASED),
-                () -> assertThat(dispatched).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"))
-        );
-    }
-
-    @Test
     void the_timer_poller_that_goes_on_with_a_release_stops_it_on_a_write_the_store_cannot_take_and_a_later_release_goes_on_from_that_record() {
         SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
         keepSeededVersions();
@@ -536,14 +517,6 @@ class SagaReleaseTooLargeTest {
         public boolean fits(StoredSaga candidate) {
             asked.add(candidate);
             return fits.test(codec.decode(candidate));
-        }
-    }
-
-    // Cannot write atomically, so a saga on it runs with quarantine turned off
-    private final class StoreThatCannotWriteAtomically extends PredicateStore {
-        @Override
-        public void requireAtomicTransitions() {
-            throw new IllegalStateException("this store cannot write atomically");
         }
     }
 }

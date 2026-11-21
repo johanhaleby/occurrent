@@ -169,8 +169,9 @@ class SpringMongoSagaStateStoreHeldEventTest {
         eventStore.write(STREAM, converter.toCloudEvents(List.of(event)));
     }
 
+    // An absent instance is a failed assertion, so an await that polls before the saga has stored it retries
     private SagaEnvelope<String> instance() {
-        return SagaEnvelopes.of(stateStore, null).find(ORDER).orElseThrow();
+        return instance(ORDER);
     }
 
     private List<CloudEvent> stored() {
@@ -363,7 +364,7 @@ class SpringMongoSagaStateStoreHeldEventTest {
     }
 
     private SagaEnvelope<String> instance(String sagaId) {
-        return SagaEnvelopes.of(stateStore, null).find(sagaId).orElseThrow();
+        return SagaEnvelopes.of(stateStore, null).find(sagaId).orElseThrow(() -> new AssertionError("instance '" + sagaId + "' is not stored"));
     }
 
     @Test

@@ -16,10 +16,17 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.format.EventFormat;
+import io.cloudevents.core.provider.EventFormatProvider;
+import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -38,9 +45,11 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
+import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -48,8 +57,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -59,6 +70,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -114,9 +126,15 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
     private MongoTemplate mongoTemplate;
     private SpringMongoSagaStateStore<String> stateStore;
     private @Nullable SagaSubscription subscription;
+    private ListAppender<ILoggingEvent> appender;
+    private Logger executionLog;
 
     @BeforeEach
     void createTheStore() {
+        appender = new ListAppender<>();
+        appender.start();
+        executionLog = (Logger) LoggerFactory.getLogger("org.occurrent.dsl.saga.blocking.SagaExecution");
+        executionLog.addAppender(appender);
         ConnectionString connectionString = new ConnectionString("mongodb://" + standaloneMongo.getHost() + ":" + standaloneMongo.getMappedPort(27017) + "/saga-standalone-" + UUID.randomUUID());
         mongoTemplate = new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
         stateStore = new SpringMongoSagaStateStore<>(mongoTemplate, COLLECTION, String.class);
@@ -128,6 +146,12 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
             subscription.close();
         }
         subscriptionModel.shutdown();
+        executionLog.detachAppender(appender);
+        appender.stop();
+    }
+
+    private List<String> errors() {
+        return appender.list.stream().filter(e -> e.getLevel() == Level.ERROR).map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     private Saga<OrderEvent, String, OrderCommand> saga() {
@@ -257,6 +281,71 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
                 () -> assertThat(dispatched).as("the refused input issued no Pack").isEmpty(),
                 () -> assertThat(handled).as("no OrderPlaced is handled, including the one for order-2").hasValue(0)
         );
+    }
+
+    // Data restored from a replica set, an instance quarantined on the ItemAdded it holds as its first record. A release
+    // marks it by setting releasedAt, as one that was running when the data was copied. The record is written straight into
+    // its collection, since the standalone server refuses the transaction that records one. The events are written before
+    // the runner subscribes, so it does not deliver them
+    private void restoredQuarantinedOnItemAdded(@Nullable Instant releasedAt) {
+        write(new OrderPlaced(ORDER));
+        write(new ItemAdded(ORDER, "book"));
+        CloudEvent held = eventStore.read(ORDER).eventList().getLast();
+        String key = ORDER + "@" + held.getExtension("streamversion");
+        Instant now = Instant.parse("2026-03-04T05:06:07Z");
+        SagaFailure failure = new SagaFailure(key, null, now.minusSeconds(300), IllegalStateException.class.getName(), "boom", releasedAt, "quarantine-restored");
+        assertThat(envelopes().compareAndSave(ORDER, new SagaEnvelope<>(ORDER, "placed", SagaStatus.QUARANTINED, 3L, List.of(), Map.of(), null,
+                now.minusSeconds(600), now, null, null, true, failure, Map.of(), 1L), 0)).as("control: the instance is written").isTrue();
+        EventFormat json = requireNonNull(EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE));
+        mongoTemplate.getCollection(COLLECTION + "_skipped_inputs").insertOne(new Document("sagaId", ORDER).append("quarantineId", "quarantine-restored").append("seq", 1L).append("key", key)
+                .append("event", new String(json.serialize(held), StandardCharsets.UTF_8)));
+        Document stored = requireNonNull(mongoTemplate.findById(ORDER, Document.class, COLLECTION));
+        assertThat(stored.get(SagaCodec.FAILURE_RELEASED_AT) != null).as("control: marked releasing as asked").isEqualTo(releasedAt != null);
+        assertThat(heldRecords()).as("control: the first record is held").hasSize(1);
+    }
+
+    private List<Document> heldRecords() {
+        return mongoTemplate.getCollection(COLLECTION + "_skipped_inputs").find().into(new ArrayList<>());
+    }
+
+    @Test
+    void a_release_of_a_quarantined_instance_on_a_standalone_server_throws_dispatches_nothing_and_leaves_the_instance_and_its_record_as_they_were() {
+        restoredQuarantinedOnItemAdded(null);
+        Document instanceBefore = requireNonNull(mongoTemplate.findById(ORDER, Document.class, COLLECTION));
+        List<Document> recordsBefore = heldRecords();
+        SagaSubscription running = runWithQuarantineOff();
+        running.waitUntilStarted();
+
+        Throwable thrown = catchThrowable(() -> running.release(ORDER));
+
+        Document instanceAfter = requireNonNull(mongoTemplate.findById(ORDER, Document.class, COLLECTION));
+        assertAll(
+                () -> assertThat(thrown).as("the release is refused before it dispatches the first record's commands and fails on the write that applies it")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("cannot release instance '" + ORDER + "'")
+                        .hasMessageContaining("one atomic write"),
+                () -> assertThat(dispatched).as("no command is dispatched").isEmpty(),
+                () -> assertThat(instanceAfter).as("the stored instance document is unchanged").isEqualTo(instanceBefore),
+                () -> assertThat(instanceAfter.get(SagaCodec.FAILURE_RELEASED_AT)).as("the instance is not marked releasing").isNull(),
+                () -> assertThat(heldRecords()).as("the skipped-input collection is unchanged").isEqualTo(recordsBefore)
+        );
+    }
+
+    @Test
+    void the_timer_poller_dispatches_and_writes_nothing_for_an_instance_marked_releasing_on_a_standalone_server_and_logs_one_error() {
+        restoredQuarantinedOnItemAdded(Instant.parse("2026-03-04T05:20:00Z"));
+        Document instanceBefore = requireNonNull(mongoTemplate.findById(ORDER, Document.class, COLLECTION));
+        List<Document> recordsBefore = heldRecords();
+
+        runWithQuarantineOff().waitUntilStarted();
+
+        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertAll(
+                () -> assertThat(dispatched).as("no command is dispatched by any poll").isEmpty(),
+                () -> assertThat(mongoTemplate.findById(ORDER, Document.class, COLLECTION)).as("the stored instance document is unchanged").isEqualTo(instanceBefore),
+                () -> assertThat(heldRecords()).as("the skipped-input collection is unchanged").isEqualTo(recordsBefore)
+        ));
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(errors()).as("one ERROR across the 20 or so polls of the second above")
+                .singleElement().asString().contains("does not go on with the release of instances").contains(ORDER));
     }
 
     // Counts a conversion of an ItemAdded to a domain event, which each delivery attempt of the input does before it is handled

@@ -149,11 +149,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private final @Nullable SagaStateStoreSkippedInputs skippedInputs;
     // True when the store has skip records but cannot write a skip and its record in one atomic write, as
     // SpringMongoSagaStateStore on a standalone server. The runner refuses quarantine on there, yet an instance quarantined
-    // earlier can still be in its data, such as data restored from a replica set. Every input addressed to such an
-    // instance is refused, since skipping it unrecorded would acknowledge an input no release replays
+    // earlier can still be in its data, such as data restored from a replica set. An input such an instance has to record
+    // as skipped is refused, since skipping it unrecorded would acknowledge an input no release replays
     private final boolean cannotRecordSkips;
     // The last id the previous release poll listed, null when that poll reached the end
     private final AtomicReference<@Nullable String> releasingCursor = new AtomicReference<>();
+    // True once the poller has said that a store with cannotRecordSkips holds releasing instances it does not go on with
+    private final AtomicBoolean releasingStaySaid = new AtomicBoolean();
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config) {
@@ -550,6 +552,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * while that input keeps failing, every node that polls retries it. A store that does not implement
      * {@link SagaStateStoreSkippedInputs} has no releasing instances to list, so it does not ask.
      * <p>
+     * A store whose {@link SagaStateStoreSkippedInputs#requireAtomicTransitions()} throws, as
+     * {@code SpringMongoSagaStateStore} on a standalone server, refuses the writes that apply a replayed record, so the
+     * poll replays nothing there and dispatches nothing. An instance marked releasing in such a store, such as one in data
+     * restored from a replica set, stays as it is, and the first poll that lists one logs an {@code ERROR} naming the
+     * instances it listed, once per runner.
+     * <p>
      * One poll replays at most {@code timerBatchLimit} records, shared evenly among the instances it lists and at least
      * one each, and the next poll goes on where this poll stopped. It lists at most {@code timerBatchLimit} instances,
      * in id order, and the next poll lists the ones after the last of them. A poll that lists fewer reached the end, so
@@ -559,6 +567,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private void continueReleases() {
         SagaStateStoreSkippedInputs records = skippedInputs;
         if (records == null) {
+            return;
+        }
+        if (cannotRecordSkips) {
+            sayReleasingInstancesStay(records);
             return;
         }
         List<String> releasing;
@@ -585,12 +597,34 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
+    // Lists the releasing instances without going on with them, and says the first time it finds one. Listing stops once
+    // it has said so, since nothing on this store changes what it would say
+    private void sayReleasingInstancesStay(SagaStateStoreSkippedInputs records) {
+        if (releasingStaySaid.get()) {
+            return;
+        }
+        List<String> releasing;
+        try {
+            releasing = records.findReleasingSagaIds(null, config.timerBatchLimit());
+        } catch (Throwable t) {
+            log.warn("Saga '{}' could not list the instances it is releasing", subscriptionId, t);
+            return;
+        }
+        if (!releasing.isEmpty() && releasingStaySaid.compareAndSet(false, true)) {
+            log.error("Saga '{}' does not go on with the release of instances {}, because its state store {} cannot write a replayed input and the removal of its record in one atomic write. "
+                      + "They stay releasing, and the delivery of an input they would record as skipped fails, so the input is delivered again. "
+                      + "Move the saga's data back to a store that records skips, such as MongoDB on a replica set, where the timer poller goes on with them, or resolve them by hand, such as by deleting them from the database.",
+                    subscriptionId, releasing, stateStore.getClass().getName());
+        }
+    }
+
     /**
      * Release the quarantined instance {@code sagaId}, as {@link SagaSubscription#release(String)} describes.
      */
     SagaSubscription.ReleaseResult release(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         SagaStateStoreSkippedInputs records = skippedInputs(sagaId);
+        requireReleasable(sagaId);
         for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
             SagaEnvelopes.WithFirstSkippedInput<S> read = findToRelease(records, sagaId);
             if (read == null) {
@@ -628,6 +662,19 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return continueReleaseToTheEnd(sagaId, records);
         }
         throw new SagaConcurrencyException("Failed to start the release of saga '" + sagaId + "' after " + config.maxCasAttempts() + " attempts due to concurrent modification");
+    }
+
+    // A store that cannot write a transition atomically refuses the writes that apply a replayed record, while the write
+    // that starts a release asks for no transaction. So a release there would mark the instance releasing and dispatch the
+    // first record's commands before the write that applies it failed, and every poll would send them again. Refused
+    // before anything is read, even for an instance the store does not hold, as skippedInputs refuses
+    private void requireReleasable(String sagaId) {
+        if (cannotRecordSkips) {
+            throw new IllegalStateException(("Saga '%s' cannot release instance '%s', because its state store %s cannot write a replayed input and the removal of its record in one atomic write, "
+                                             + "so a release would dispatch the commands of an input it then fails to record as applied. Nothing was read or written. "
+                                             + "Move the saga's data back to a store that records skips, such as MongoDB on a replica set, and release the instance there, or resolve the instance by hand, such as by deleting it from the database.")
+                    .formatted(subscriptionId, sagaId, stateStore.getClass().getName()));
+        }
     }
 
     // The quarantining write records the input the instance stopped on as its first record, in the write that sets the

@@ -1464,11 +1464,16 @@ on Spring Boot or `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner`. With
 standalone server that journals its writes, since the runner then makes none of the three transactional writes.
 
 An instance 0.35.0 quarantined while the data was on a replica set, such as data restored from one onto the standalone
-server, can't record the inputs it skips there. The delivery of every input addressed to it fails, so
-the input isn't acknowledged and is delivered again. The instance holds up its inputs
+server, can't record the inputs it skips there. The delivery of an input it has to record as skipped fails, so
+the input isn't acknowledged and is delivered again. An input it needs no record for, such as a redelivery of one it
+applied before it was quarantined, is skipped and acknowledged as on a replica set. The instance holds up its inputs
 until you move the data back to a replica set and release it there, or delete it by hand in the database, as the
-[quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes. A release or a `delete` of
-such an instance on the standalone server writes in a transaction. The server refuses it, and the store throws an
+[quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes.
+
+`SagaSubscription.release(sagaId)` throws an `IllegalStateException` on the standalone server before it reads or writes
+anything, so it dispatches none of the held inputs' commands there. The timer poller doesn't replay an instance marked
+releasing there either, and the first poll that lists one logs an `ERROR` that names it. A `delete` of such an instance
+on the standalone server writes in a transaction. The server refuses it, and the store throws an
 `IllegalStateException` that says it needs a replica set.
 
 Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction

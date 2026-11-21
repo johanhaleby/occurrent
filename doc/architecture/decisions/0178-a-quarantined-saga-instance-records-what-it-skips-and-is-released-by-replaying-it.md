@@ -466,9 +466,10 @@ refusals happen at startup, so a saga fails before it receives its first input r
 quarantined.
 
 An instance quarantined while its data was on a store that records skips, and then moved to one that can't, isn't
-refused at startup, since quarantine is off there. It can't record the inputs it skips, so the delivery of every input
-addressed to it fails and the input isn't acknowledged, since skipping it without a record
-would leave an input that no release replays. The instance holds up its inputs until its data is moved back to a store
+refused at startup, since quarantine is off there. It can't record the inputs it skips, so the delivery of an input it
+has to record as skipped fails and the input isn't acknowledged, since skipping it without a record would leave an
+input that no release replays. An input it needs no record for, such as a redelivery of one it applied before it was
+quarantined, is skipped and acknowledged as on a store that records skips. The instance holds up its inputs until its data is moved back to a store
 that records skips and it is released there, or until it is deleted by hand.
 
 `disableQuarantine()` turns it off. In Spring Boot, `occurrent.saga.quarantine-enabled=false` does. A blank
