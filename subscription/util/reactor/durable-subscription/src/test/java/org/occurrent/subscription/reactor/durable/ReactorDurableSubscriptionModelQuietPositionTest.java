@@ -166,6 +166,25 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_quiet_save_is_offered_after_a_failed_delivery_once_a_later_event_is_stored() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
+        subscribeFromTheStoredStart(model, storage);
+        Function<CloudEvent, Mono<Void>> action = wrapped.actions.getFirst();
+        RuntimeException failure = new IllegalStateException("The storage cannot save right now");
+        storage.failNextSave = failure;
+        StepVerifier.create(action.apply(eventAt(1))).expectErrorMatches(error -> error == failure).verify(TIMEOUT);
+
+        // When
+        action.apply(eventAt(2)).block(TIMEOUT);
+
+        // Then
+        assertThat(wrapped.beforeReading(SUBSCRIPTION_ID)).as("save offered once an event is stored after a delivery that failed").isNotNull();
+    }
+
+    @Test
     void an_event_the_predicate_declined_blocks_quiet_saves_until_a_later_event_is_stored() {
         // Given
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
