@@ -797,7 +797,8 @@ public class OccurrentProperties {
          * application with at least one {@code @Saga} from starting while quarantine is enabled, since it kept
          * quarantine off in 0.34.0. Set
          * {@code occurrent.saga.quarantine-enabled=false} to turn quarantine off. A quarantined instance records the
-         * inputs it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying them.
+         * events it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying them, with no event
+         * store needed.
          * <p>
          * Each failing event keeps its own clock, so a second event that starts failing is measured from its own first
          * failure, and an event that fails again after it was parked is measured from when it first failed.
@@ -809,13 +810,12 @@ public class OccurrentProperties {
          * lose it. It is refused on every redelivery, and this only sets how often that is logged.
          * <p>
          * Zero and negative values stop the application from starting when it has at least one {@code @Saga} and
-         * quarantine is enabled, because a reader can take zero to mean "never" or "immediately". Even when quarantine
-         * is on, it is switched off on its own unless the subscription model guarantees that it holds every event it
-         * delivers, because a quarantined instance skips everything addressed to it afterwards and skipping
-         * acknowledges. The startup line that says so is a {@code WARN} when you set this property and a
-         * {@code DEBUG} when it has the default. A model that can answer for one event but cannot make that guarantee
-         * gets no quarantine either. The event an instance stops on is checked as well, so a guarantee made wrongly is
-         * caught before that event is dropped.
+         * quarantine is enabled, because a reader can take zero to mean "never" or "immediately".
+         * <p>
+         * Every saga quarantines, whichever subscription model feeds it and whether or not an event store is around,
+         * because a quarantined instance holds the events it skips itself. Deleting a quarantined instance deletes the
+         * only copy the saga keeps of them. A saga whose state store does not implement
+         * {@code SagaStateStoreSkippedInputs} stops the application from starting while quarantine is enabled.
          */
         private @Nullable Duration quarantineAfter;
 

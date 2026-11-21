@@ -159,7 +159,7 @@ class SpringMongoSagaStateStoreRefusalRetryTest {
         FailingMongoTemplate template = FailingMongoTemplate.inTransactions(client, database, serverAnswer(BAD_VALUE, NO_JOURNALING));
         SpringMongoSagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, severalFastAttempts());
 
-        Throwable thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-5@7")));
+        Throwable thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-5@7", heldEvent("order-5@7"))));
 
         assertAll(
                 () -> assertThat(thrown).as("a refusal of j: true").isInstanceOf(IllegalStateException.class).hasMessage(SpringMongoSagaStateStore.JOURNALING_REQUIRED_MESSAGE),
@@ -290,7 +290,7 @@ class SpringMongoSagaStateStoreRefusalRetryTest {
         FailingMongoTemplate template = FailingMongoTemplate.inTransactions(client, database, serverAnswer(BAD_VALUE, NO_JOURNALING));
         SpringMongoSagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(template, COLLECTION, Payment.class, null, new RetryingEveryFailure());
 
-        Throwable thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-10@7")));
+        Throwable thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-10@7", heldEvent("order-10@7"))));
 
         assertAll(
                 () -> assertThat(thrown).as("a refusal of j: true").isInstanceOf(IllegalStateException.class).hasMessage(SpringMongoSagaStateStore.JOURNALING_REQUIRED_MESSAGE),
@@ -417,5 +417,9 @@ class SpringMongoSagaStateStoreRefusalRetryTest {
                 return new FailingDatabaseFactory(delegate.withSession(session));
             }
         }
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

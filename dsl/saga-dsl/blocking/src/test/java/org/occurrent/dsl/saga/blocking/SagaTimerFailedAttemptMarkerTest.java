@@ -408,7 +408,7 @@ class SagaTimerFailedAttemptMarkerTest {
         return new SagaExecution<>("saga-timer-marker", saga, store, command -> {
             onDispatch.run();
             dispatched.add(command);
-        }, converter, config, event -> true, clock);
+        }, converter, config, clock);
     }
 
     /** Delegates to a real store and counts the without-state writes, which only the marker write uses. Can lose or fail them on demand. */

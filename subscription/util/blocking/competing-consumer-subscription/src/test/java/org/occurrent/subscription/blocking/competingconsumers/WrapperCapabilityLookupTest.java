@@ -34,7 +34,6 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.DcbSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Pushable;
@@ -85,13 +84,13 @@ class WrapperCapabilityLookupTest {
             Subscribable.class, CancellableSubscriptions.class, SubscriptionModelLifeCycle.class, SubscriptionModel.class,
             CheckpointAwareSubscriptionModel.class, StreamSubscriptionModel.class, DcbSubscriptionModel.class,
             SubscriptionModelWrapper.class, RepositionableSubscriptions.class, IntrospectableSubscriptions.class,
-            ReplayAwareSubscriptions.class, HistoryRetainingSubscriptions.class, QuietPositionReportingSubscriptions.class,
+            ReplayAwareSubscriptions.class, QuietPositionReportingSubscriptions.class,
             Pushable.class, HistoryLossReportingSubscriptions.class, StartRefusalReportingSubscriptions.class,
             CommitOrderedSubscriptions.class);
 
     // The capabilities a wrapper is looked past for when it doesn't implement them
     private static final Set<Class<?>> UNWRAPPED = Set.of(
-            IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class, HistoryRetainingSubscriptions.class,
+            IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class,
             QuietPositionReportingSubscriptions.class, Pushable.class, HistoryLossReportingSubscriptions.class,
             StartRefusalReportingSubscriptions.class);
 
@@ -172,7 +171,7 @@ class WrapperCapabilityLookupTest {
     private static CheckpointAwareSubscriptionModel modelThatImplementsEveryCapability() {
         return unused(CheckpointAwareSubscriptionModel.class, StreamSubscriptionModel.class, DcbSubscriptionModel.class,
                 RepositionableSubscriptions.class, IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class,
-                HistoryRetainingSubscriptions.class, QuietPositionReportingSubscriptions.class, Pushable.class,
+                QuietPositionReportingSubscriptions.class, Pushable.class,
                 HistoryLossReportingSubscriptions.class, StartRefusalReportingSubscriptions.class, CommitOrderedSubscriptions.class);
     }
 

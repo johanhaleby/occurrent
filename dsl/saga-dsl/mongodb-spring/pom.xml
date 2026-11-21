@@ -45,6 +45,11 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-common-mongodb-deployment</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>
@@ -70,6 +75,12 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-cloudevent-converter-jackson</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-mongodb-common</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

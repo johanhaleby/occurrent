@@ -192,7 +192,7 @@ class SagaTimerErrorIsolationTest {
                 })
                 .build();
         SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), 10, 50);
-        return new SagaExecution<>("saga-timer-error-isolation", saga, store, dispatcher, converter, config, event -> true);
+        return new SagaExecution<>("saga-timer-error-isolation", saga, store, dispatcher, converter, config);
     }
 
     @FunctionalInterface

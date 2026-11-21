@@ -89,7 +89,7 @@ class SubscriptionModelCapabilityTest {
     }
 
     static Stream<Named<Class<? extends SubscriptionModelCapability>>> observingCapabilities() {
-        return Stream.of(IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class, HistoryRetainingSubscriptions.class,
+        return Stream.of(IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class,
                 QuietPositionReportingSubscriptions.class, StartRefusalReportingSubscriptions.class, Pushable.class, HistoryLossReportingSubscriptions.class).map(type -> Named.of(type.getSimpleName(), type));
     }
 
@@ -211,7 +211,7 @@ class SubscriptionModelCapabilityTest {
     private static CheckpointAwareSubscriptionModel modelThatImplementsEveryCapability() {
         Class<?>[] interfaces = {CheckpointAwareSubscriptionModel.class, StreamSubscriptionModel.class, DcbSubscriptionModel.class,
                 RepositionableSubscriptions.class, IntrospectableSubscriptions.class, ReplayAwareSubscriptions.class,
-                HistoryRetainingSubscriptions.class, QuietPositionReportingSubscriptions.class, Pushable.class,
+                QuietPositionReportingSubscriptions.class, Pushable.class,
                 HistoryLossReportingSubscriptions.class, StartRefusalReportingSubscriptions.class};
         return (CheckpointAwareSubscriptionModel) Proxy.newProxyInstance(CheckpointAwareSubscriptionModel.class.getClassLoader(), interfaces, (proxy, method, args) -> {
             if (method.isDefault()) {

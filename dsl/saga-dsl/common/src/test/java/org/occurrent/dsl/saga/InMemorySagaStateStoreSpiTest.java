@@ -135,7 +135,7 @@ class InMemorySagaStateStoreSpiTest {
     void a_wrong_quarantine_id_from_the_caller_does_not_decide_which_skipped_inputs_a_delete_removes() {
         StoredSaga encoded = codec.encode(active("s1", "state", 1));
         store.compareAndSave(new StoredSaga("s1", 1, encoded.encoded(), new SagaIndex("ACTIVE", null, null, false, "bogus")), 0);
-        store.compareAndSaveSkipped(codec.encodeWithoutState(active("s1", "state", 2)), 1, "bogus", new SkippedInput(1L, "k"));
+        store.compareAndSaveSkipped(codec.encodeWithoutState(active("s1", "state", 2)), 1, "bogus", new SkippedInput(1L, "k", heldEvent("k")));
 
         store.delete("s1");
 
@@ -292,5 +292,9 @@ class InMemorySagaStateStoreSpiTest {
     private static SagaEnvelope<String> withTimer(SagaEnvelope<String> e, TimerEntry timer) {
         return new SagaEnvelope<>(e.sagaId(), e.state(), e.status(), e.version(), List.of(timer), e.streamWatermarks(), e.positionWatermark(), e.createdAt(),
                 e.updatedAt(), e.completedAt(), e.currentStep(), e.started(), e.failure(), e.streamMarks(), e.quarantineSkipCount());
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

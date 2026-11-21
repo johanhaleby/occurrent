@@ -42,9 +42,9 @@ import java.util.Optional;
  * left out.
  * <p>
  * Quarantine needs a second capability. A store that also implements {@link SagaStateStoreSkippedInputs} records the
- * inputs a quarantined instance skips and lets the instance be released. On a subscription model that holds every
- * event, the runner refuses to start a saga with quarantine on when its store does not implement it, and
- * {@code SagaRunnerConfig.disableQuarantine()} runs the saga without quarantine on such a store.
+ * events a quarantined instance skips and lets the instance be released. The runner refuses to start a saga with
+ * quarantine on when its store does not implement it, and {@code SagaRunnerConfig.disableQuarantine()} runs the saga
+ * without quarantine on such a store.
  * <p>
  * Observing instances is an optional capability layered on top. A store that also implements
  * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A

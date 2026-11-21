@@ -54,12 +54,12 @@ public enum SagaStatus {
      * from then on, and either source stops for good on a record the model refuses.
      * <p>
      * This is not terminal. {@link SagaInstance#failure()} says which input the instance stopped on, when that input
-     * first failed, and what the saga threw. While quarantined, the instance records the key of every input it skips,
-     * and {@code SagaSubscription.release(sagaId)} brings it back by replaying the input it stopped on and then those
-     * inputs, in order. The instance stays quarantined while that runs, with {@link SagaFailure#releasedAt()} set, and
-     * becomes {@link #ACTIVE} in a write after the last of them, once a read finds none left. A crash between the two
-     * leaves it quarantined and releasing with nothing to replay, and the next release finishes it. An instance quarantined by 0.34.0 recorded
-     * nothing and cannot be released that way.
+     * first failed, and what the saga threw. While quarantined, the instance records the key and the event of the
+     * inputs it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying the input it stopped on
+     * and then those inputs, in order. The instance stays quarantined while that runs, with
+     * {@link SagaFailure#releasedAt()} set, and becomes {@link #ACTIVE} in a write after the last of them, once a read
+     * finds none left. A crash between the two leaves it quarantined and releasing with nothing to replay, and the next
+     * release finishes it. An instance quarantined by 0.34.0 recorded nothing and cannot be released that way.
      * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when
@@ -72,9 +72,7 @@ public enum SagaStatus {
      * <ul>
      *   <li>The saga worked out which instance the event belongs to. A failure in the converter or the id extractor is
      *       never charged to an instance.</li>
-     *   <li>Quarantine is switched off neither by {@code SagaRunnerConfig.disableQuarantine()} nor by the runner at
-     *       startup. The runner switches it off on a subscription model that cannot guarantee it holds every event it
-     *       delivers.</li>
+     *   <li>Quarantine is not switched off by {@code SagaRunnerConfig.disableQuarantine()}.</li>
      *   <li>The event carries a redelivery key, which is a stream id with its stream version. An event with only a global
      *       position has none.</li>
      *   <li>What was thrown is not an {@link OutOfMemoryError}.</li>
@@ -85,9 +83,6 @@ public enum SagaStatus {
      * An event that meets all of them is quarantined only when all of these hold as well, and any one of them can refuse
      * on its own.
      * <ul>
-     *   <li>The subscription model confirms, for that event, that acknowledging it is not what would destroy the last
-     *       copy of it. A check that throws counts as a refusal, except for an {@link OutOfMemoryError}, which
-     *       propagates instead. The runner logs a WARN for a refusal, though not for every repeat of it.</li>
      *   <li>The store read the decision is made on and the write that records it both complete. When either throws, the
      *       runner logs nothing of its own about the quarantine.</li>
      *   <li>The compare-and-set write wins within {@code maxCasAttempts} attempts. When another writer changed the

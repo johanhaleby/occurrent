@@ -47,7 +47,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
@@ -153,31 +152,19 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     }
 
     /**
-     * What the saga sees. A feed over the in-memory subscription model that also answers that it retains everything,
-     * because {@code SagaRunner} switches quarantine off for a model it cannot ask, and that can hand the events over
-     * without the stream key the event store wrote them with.
+     * What the saga sees. A feed over the in-memory subscription model that can hand the events over without the
+     * stream key the event store wrote them with.
      */
-    private record Feed(InMemorySubscriptionModel delegate, UnaryOperator<CloudEvent> deliveredAs) implements Subscribable, HistoryRetainingSubscriptions {
+    private record Feed(InMemorySubscriptionModel delegate, UnaryOperator<CloudEvent> deliveredAs) implements Subscribable {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             return delegate.subscribe(subscriptionId, filter, startAt, event -> action.accept(deliveredAs.apply(event)));
         }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
     }
 
     private void runSagaOn(UnaryOperator<CloudEvent> deliveredAs, SagaRunnerConfig config) {
         subscription = SagaRunner.<OrderEvent, String>agnostic(new Feed(subscriptionModel, deliveredAs), converter)
-                .eventStoreQueries(eventStore)
                 .run("orders", orderFulfillment(), stateStore, dispatched::add, null, config);
     }
 

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -107,7 +108,7 @@ class SagaStoreDroppingAQuarantineFieldTest {
     private final java.util.concurrent.atomic.AtomicInteger eventIds = new AtomicInteger();
     private final FieldDroppingStore store = new FieldDroppingStore(new InMemorySagaStateStore<>());
     private final SagaExecution<OrderEvent, Order, Object> execution =
-            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
     private final SagaSubscription subscription = new SagaSubscription(new NoSubscription(), Executors.newSingleThreadExecutor(), SagaInstances.of(store), null, null, null, execution::release);
 
     private ListAppender<ILoggingEvent> appender;
@@ -268,6 +269,16 @@ class SagaStoreDroppingAQuarantineFieldTest {
         }
 
         @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegate.fits(candidate);
+        }
+
+        @Override
+        public void requireAtomicTransitions() {
+            delegate.requireAtomicTransitions();
+        }
+
+        @Override
         public SagaStateCodec<Order> stateCodec() {
             return delegate.stateCodec();
         }
@@ -313,11 +324,6 @@ class SagaStoreDroppingAQuarantineFieldTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return delegate.compareAndSaveReleaseStarted(withoutTheField(saga), expectedVersion, quarantineId, head);
-        }
-
-        @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
             return delegate.compareAndSaveReplayed(withoutTheField(saga), expectedVersion, quarantineId, replayed);
         }
@@ -330,6 +336,11 @@ class SagaStoreDroppingAQuarantineFieldTest {
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
             return delegate.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return delegate.findWithFirstSkippedInput(sagaId);
         }
 
         @Override

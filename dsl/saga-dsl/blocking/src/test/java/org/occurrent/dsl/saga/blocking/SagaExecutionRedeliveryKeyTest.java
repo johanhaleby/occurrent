@@ -132,7 +132,7 @@ class SagaExecutionRedeliveryKeyTest {
 
     private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(RedeliveryDetection detection) {
         SagaRunnerConfig config = SagaRunnerConfig.defaults().withRedeliveryDetection(detection).withQuarantineAfter(BUDGET);
-        return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, config, event -> true, now::get);
+        return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, config, now::get);
     }
 
     /** An instance that exists and is waiting for its payment, started by an event that has a stream key. */

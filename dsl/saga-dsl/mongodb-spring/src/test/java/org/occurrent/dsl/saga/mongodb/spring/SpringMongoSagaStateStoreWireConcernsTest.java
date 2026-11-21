@@ -178,7 +178,7 @@ class SpringMongoSagaStateStoreWireConcernsTest {
     void every_read_of_the_store_sends_read_concern_majority() {
         envelopes.compareAndSave("order-1", envelope("order-1", SagaStatus.ACTIVE, List.of(new TimerEntry("payment", NOW.toEpochMilli())), null, 1), 0);
         envelopes.compareAndSave("order-2", envelope("order-2", SagaStatus.QUARANTINED, List.of(), releasingFailure(), 1), 0);
-        envelopes.compareAndSaveSkipped(store, envelope("order-2", SagaStatus.QUARANTINED, List.of(), releasingFailure(), 2), 1, QUARANTINE_ID, new SkippedInput(0, "order-2@8"));
+        envelopes.compareAndSaveSkipped(store, envelope("order-2", SagaStatus.QUARANTINED, List.of(), releasingFailure(), 2), 1, QUARANTINE_ID, new SkippedInput(0, "order-2@8", heldEvent("order-2@8")));
 
         List<Sent> found = sentBy(() -> assertThat(store.find("order-1")).isPresent());
         List<Sent> foundWithoutState = sentBy(() -> assertThat(store.findWithoutState("order-1")).isPresent());
@@ -210,5 +210,9 @@ class SpringMongoSagaStateStoreWireConcernsTest {
                 () -> assertThat(deletes.getFirst().writeConcern().get("j")).as("j").isEqualTo(org.bson.BsonBoolean.TRUE),
                 () -> assertThat(store.find("order-1")).as("the instance is gone").isEmpty()
         );
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

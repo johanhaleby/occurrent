@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.StoredSaga;
@@ -39,7 +40,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -214,7 +214,6 @@ class SagaQuarantineTest {
 
     private SagaSubscription run(Subscribable model, SagaRunnerConfig config) {
         SagaSubscription subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(model, converter)
-                .eventStoreQueries(eventStore)
                 .run("orders", orderFulfillment(), stateStore, dispatched::add, null, config);
         subscriptionsToClose.add(subscription);
         return subscription;
@@ -282,209 +281,6 @@ class SagaQuarantineTest {
             assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
         }
 
-        @Test
-        void blocks_them_exactly_as_before_on_a_model_that_could_never_replay_the_event_it_stopped_on() throws Exception {
-            // InMemorySubscriptionModel implements no RepositionableSubscriptions, so returning normally would
-            // acknowledge an event nothing could ever hand back. The runner switches the budget off rather than
-            // quarantine into that, which is ADR 134's ruling on a source that cannot replay.
-            SagaSubscription subscription = run(subscriptionModel, CONFIG);
-            write(POISON, new OrderPlaced("1", POISON));
-            write(HEALTHY, new OrderPlaced("2", HEALTHY));
-            write(POISON, new PaymentReserved("3", POISON));
-            write(HEALTHY, new PaymentReserved("4", HEALTHY));
-
-            TimeUnit.SECONDS.sleep(2);
-
-            assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
-                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
-            );
-        }
-
-        @Test
-        void blocks_them_exactly_as_before_on_a_wrapper_over_a_model_that_retains_nothing() throws Exception {
-            // A plain wrapper declares no retention of its own, so the lookup unwraps to the delegate and the delegate
-            // decides. The delegate here keeps nothing, which is the answer the whole chain gives.
-            SagaSubscription subscription = run(new ForwardingWrapper(subscriptionModel), CONFIG);
-            write(POISON, new OrderPlaced("1", POISON));
-            write(HEALTHY, new OrderPlaced("2", HEALTHY));
-            write(POISON, new PaymentReserved("3", POISON));
-            write(HEALTHY, new PaymentReserved("4", HEALTHY));
-
-            TimeUnit.SECONDS.sleep(2);
-
-            assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
-                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
-            );
-        }
-
-        @Test
-        void are_isolated_from_it_on_a_wrapper_whose_delegate_retains_what_it_delivered() {
-            ReplayableSubscriptionModel retaining = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new ForwardingWrapper(retaining), CONFIG);
-            retaining.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            retaining.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-            retaining.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-            retaining.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
-            ));
-        }
-
-        @Test
-        void are_isolated_from_it_on_a_model_that_guarantees_it_holds_everything_without_being_repositionable() {
-            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new RetainsWithoutRepositioning(feed), CONFIG);
-            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
-            ));
-        }
-
-        /**
-         * A model whose guarantee is wrong is caught on the event it is about to acknowledge. Quarantine was enabled
-         * on the guarantee, the check disagreed for this event, and the saga rethrows rather than acknowledging that
-         * event away. Distinct from the feed that declares nothing, since here quarantine was
-         * available and was refused on the event.
-         */
-        @Test
-        void blocks_them_exactly_as_before_when_the_event_it_stopped_on_cannot_be_obtained_again() throws Exception {
-            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new GuaranteesMoreThanItHolds(feed), CONFIG);
-            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
-
-            TimeUnit.SECONDS.sleep(2);
-
-            assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
-            );
-        }
-
-        /**
-         * A refused instance is re-offered the same event for as long as the source keeps retrying, so the refusal has
-         * to be announced once rather than at that cadence. Retention is still rechecked every time, which is what
-         * lets a store coming back be noticed.
-         */
-        @Test
-        void says_why_it_refused_once_rather_than_on_every_redelivery() throws Exception {
-            ListAppender<ILoggingEvent> appender = new ListAppender<>();
-            appender.start();
-            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
-            executionLog.addAppender(appender);
-            try {
-                ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-                SagaSubscription subscription = run(new GuaranteesMoreThanItHolds(feed), CONFIG);
-                feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-                feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-
-                TimeUnit.SECONDS.sleep(3);
-
-                long refusals = appender.list.stream()
-                        .map(ILoggingEvent::getFormattedMessage)
-                        .filter(message -> message.contains("is not quarantined"))
-                        .count();
-                assertAll(
-                        () -> assertThat(refusals).isEqualTo(1),
-                        () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
-                );
-            } finally {
-                executionLog.detachAppender(appender);
-                appender.stop();
-            }
-        }
-
-        /**
-         * A retention check can fail rather than answer, and an answer nobody got is not a yes. The refusal warning says
-         * as much already, so the throw has to reach that refusal instead of the silent one every store failure produces.
-         */
-        @Test
-        void blocks_them_and_says_why_when_the_retention_check_itself_throws() throws Exception {
-            ListAppender<ILoggingEvent> appender = new ListAppender<>();
-            appender.start();
-            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
-            executionLog.addAppender(appender);
-            try {
-                ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-                SagaSubscription subscription = run(new ThrowsWhenAskedAboutAnEvent(feed, Integer.MAX_VALUE), CONFIG);
-                feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-                feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-                feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-                feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
-
-                TimeUnit.SECONDS.sleep(2);
-
-                List<ILoggingEvent> refusals = appender.list.stream()
-                        .filter(event -> event.getFormattedMessage().contains("is not quarantined"))
-                        .toList();
-                assertAll(
-                        () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
-                        () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY)),
-                        () -> assertThat(refusals).hasSize(1),
-                        // What the saga threw is still the exception the log reports, with what the check threw under it,
-                        // so an operator reading the refusal sees both rather than only the one that stopped the instance.
-                        () -> assertThat(refusals.getFirst().getThrowableProxy().getClassName())
-                                .isEqualTo(IllegalStateException.class.getName()),
-                        () -> assertThat(refusals.getFirst().getThrowableProxy().getSuppressed())
-                                .extracting(IThrowableProxy::getMessage).contains("the retention read is broken")
-                );
-            } finally {
-                executionLog.detachAppender(appender);
-                appender.stop();
-            }
-        }
-
-        @Test
-        void are_isolated_from_it_once_the_retention_check_can_answer_again() {
-            // Retention is rechecked on every redelivery rather than remembered, which is what lets a store that was
-            // unreachable and is now back be noticed. The instance quarantines on a later attempt.
-            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new ThrowsWhenAskedAboutAnEvent(feed, 2), CONFIG);
-            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY))
-            ));
-        }
-
-        /**
-         * Every catch under the delivery's own swallows what it caught and rethrows the original failure, so an
-         * {@code OutOfMemoryError} raised by a recovery step would be absorbed and the saga's own exception reported
-         * instead. That is the carve-out defeated one level down, and it would let the instance's budget keep running
-         * while the process is out of heap.
-         */
-        @Test
-        void lets_an_out_of_memory_error_out_of_the_retention_check_rather_than_absorbing_it() throws Exception {
-            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new ThrowsWhenAskedAboutAnEvent(feed, Integer.MAX_VALUE, () -> new OutOfMemoryError("Java heap space")), CONFIG);
-            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-
-            TimeUnit.SECONDS.sleep(2);
-
-            assertAll(
-                    () -> assertThat(feed.lastDeliveryFailure).isInstanceOf(OutOfMemoryError.class),
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
-            );
-        }
-
         /**
          * One extension that cannot be read must not discard a redelivery key the event does carry. Reading the three
          * together threw on the position before either stream value reached the record, so an event with a perfectly
@@ -528,6 +324,22 @@ class SagaQuarantineTest {
                     () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().failureType()).isEqualTo(StackOverflowError.class.getName()),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
+        @Test
+        void are_isolated_from_it_on_a_feed_that_can_only_subscribe() {
+            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new SubscribeOnly(feed), CONFIG);
+            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
             ));
         }
@@ -581,23 +393,6 @@ class SagaQuarantineTest {
             ));
         }
 
-        @Test
-        void blocks_them_exactly_as_before_on_a_feed_that_retains_nothing() throws Exception {
-            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new RetainsNothing(feed), CONFIG);
-            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
-
-            TimeUnit.SECONDS.sleep(2);
-
-            assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
-                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
-            );
-        }
     }
 
     /**
@@ -716,7 +511,7 @@ class SagaQuarantineTest {
             SagaStateStore<String> store = SagaStateStore.inMemory();
             // A one-nanosecond budget, so every redelivery after the first failure is past it.
             SagaExecution<StreamEvent, String, String> execution = new SagaExecution<>("orders", saga, store, command -> {
-            }, streamConverter, CONFIG.withQuarantineAfter(Duration.ofNanos(1)), event -> true);
+            }, streamConverter, CONFIG.withQuarantineAfter(Duration.ofNanos(1)));
 
             execution.onCloudEvent(version(1));
             for (int redelivery = 0; redelivery < 3; redelivery++) {
@@ -751,7 +546,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG, event -> true, now::get);
+                        CONFIG, now::get);
                 CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
 
                 // Sixty offers at one every twenty milliseconds, and four budgets.
@@ -832,7 +627,7 @@ class SagaQuarantineTest {
         @Test
         void the_unroutable_error_interval_is_the_configured_quarantine_budget_when_one_is_set() {
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution =
-                    new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, CONFIG, event -> true);
+                    new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, CONFIG);
 
             assertThat(execution.unroutableErrorInterval()).isEqualTo(BUDGET);
         }
@@ -841,7 +636,7 @@ class SagaQuarantineTest {
         void falls_back_to_the_fixed_five_minute_interval_when_none_is_configured() {
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution =
                     new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                            CONFIG.disableQuarantine(), event -> true);
+                            CONFIG.disableQuarantine());
 
             assertThat(execution.unroutableErrorInterval()).isEqualTo(SagaExecution.UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE);
         }
@@ -865,7 +660,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.disableQuarantine(), event -> true, now::get);
+                        CONFIG.disableQuarantine(), now::get);
                 CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
 
                 assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
@@ -904,7 +699,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.disableQuarantine(), event -> true, now::get);
+                        CONFIG.disableQuarantine(), now::get);
                 CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
                 Duration interval = execution.unroutableErrorInterval();
 
@@ -931,7 +726,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.disableQuarantine(), event -> true, now::get);
+                        CONFIG.disableQuarantine(), now::get);
                 CloudEvent earlier = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
                 CloudEvent later = cloudEvent(POISON, 3, new PaymentReserved("3", POISON));
                 Duration interval = execution.unroutableErrorInterval();
@@ -969,7 +764,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.disableQuarantine(), event -> true, now::get);
+                        CONFIG.disableQuarantine(), now::get);
                 CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
 
                 assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
@@ -995,7 +790,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.disableQuarantine(), event -> true, now::get);
+                        CONFIG.disableQuarantine(), now::get);
                 CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
                 Duration slightlySlowerThanTheInterval = execution.unroutableErrorInterval().plusSeconds(1);
 
@@ -1026,7 +821,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(start);
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.disableQuarantine(), event -> true, now::get);
+                        CONFIG.disableQuarantine(), now::get);
                 CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
                 Duration interval = execution.unroutableErrorInterval();
 
@@ -1052,7 +847,7 @@ class SagaQuarantineTest {
             AtomicReference<Instant> now = new AtomicReference<>(start);
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                     "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                    CONFIG.disableQuarantine(), event -> true, now::get);
+                    CONFIG.disableQuarantine(), now::get);
             CloudEvent a = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
             CloudEvent c = cloudEvent(POISON, 3, new PaymentReserved("3", POISON));
             CloudEvent d = cloudEvent(POISON, 4, new PaymentReserved("3", POISON));
@@ -1087,7 +882,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(start);
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.disableQuarantine(), event -> true, now::get);
+                        CONFIG.disableQuarantine(), now::get);
                 CloudEvent b = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
                 CloudEvent other = cloudEvent(POISON, 3, new PaymentReserved("3", POISON));
                 Duration interval = execution.unroutableErrorInterval();
@@ -1141,18 +936,6 @@ class SagaQuarantineTest {
                     .toList();
         }
 
-        @Test
-        void blocks_them_exactly_as_before_on_a_feed_that_retains_nothing() throws Exception {
-            uncorrelatableEventId = "3";
-            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            run(new RetainsNothing(feed), CONFIG);
-            pushTheHealthyEventBehindTheUncorrelatableOne(feed);
-
-            TimeUnit.SECONDS.sleep(2);
-
-            assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
-        }
-
         /**
          * Without a stream id and version or a global position there is nothing to tell one delivery of this event from
          * the next, which is the condition an instance's quarantine turns on as well.
@@ -1186,7 +969,7 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT), event -> true, now::get);
+                        CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT), now::get);
                 CloudEvent poisonEvent = converter.toCloudEvent(new PaymentReserved("3", POISON));
 
                 // Thirty offers at one every twenty milliseconds, and two budgets.
@@ -1241,7 +1024,7 @@ class SagaQuarantineTest {
         @Test
         void keeps_rethrowing_for_five_minutes_and_quarantines_the_instance_once_they_are_up() {
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
-                    dispatched::add, converter, SagaRunnerConfig.defaults(), event -> true, now::get);
+                    dispatched::add, converter, SagaRunnerConfig.defaults(), now::get);
             execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
             assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
@@ -1264,7 +1047,7 @@ class SagaQuarantineTest {
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution() {
             return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                    SagaRunnerConfig.defaults().disableQuarantine(), event -> true, now::get);
+                    SagaRunnerConfig.defaults().disableQuarantine(), now::get);
         }
 
         @Test
@@ -1325,7 +1108,7 @@ class SagaQuarantineTest {
         void quarantines_the_instance_once_the_budget_is_used_up_even_when_every_failure_write_first_loses_to_another_write() {
             stateStore = store;
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
-                    dispatched::add, converter, CONFIG, event -> true, now::get);
+                    dispatched::add, converter, CONFIG, now::get);
             execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
 
@@ -1347,7 +1130,7 @@ class SagaQuarantineTest {
         void keeps_the_clock_of_an_event_whose_failure_could_not_be_recorded_so_a_later_delivery_past_the_budget_quarantines() {
             stateStore = store;
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
-                    dispatched::add, converter, CONFIG, event -> true, now::get);
+                    dispatched::add, converter, CONFIG, now::get);
             execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -1392,7 +1175,7 @@ class SagaQuarantineTest {
         void leaves_an_instance_another_write_completed_completed_instead_of_recording_a_failure_on_it() {
             stateStore = store;
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
-                    dispatched::add, converter, CONFIG, event -> true, now::get);
+                    dispatched::add, converter, CONFIG, now::get);
             execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             now.set(start.plus(BUDGET).plusMillis(1));
             store.nextFailureWriteLosesToAWriteThatCompletesTheInstance();
@@ -1413,7 +1196,7 @@ class SagaQuarantineTest {
         void leaves_an_instance_another_write_quarantined_with_the_record_that_write_left() {
             stateStore = store;
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>("orders", orderFulfillment(), stateStore,
-                    dispatched::add, converter, CONFIG, event -> true, now::get);
+                    dispatched::add, converter, CONFIG, now::get);
             execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             now.set(start.plus(BUDGET).plusMillis(1));
             store.nextFailureWriteLosesToAWriteThatQuarantinesTheInstance();
@@ -1433,14 +1216,12 @@ class SagaQuarantineTest {
         @Test
         void still_quarantines_on_the_delivery_where_all_but_the_last_of_maxCasAttempts_failure_writes_lose() {
             stateStore = store;
-            AtomicInteger asked = new AtomicInteger();
-            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts(asked);
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts();
             execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
             catchThrowable(() -> execution.onCloudEvent(poisonEvent));
             now.set(start.plus(BUDGET).plusMillis(1));
             store.startCountingFailureWritesAgain();
-            asked.set(0);
             store.nextFailureWritesLoseToAnotherWrite(2);
 
             Throwable rethrown = catchThrowable(() -> execution.onCloudEvent(poisonEvent));
@@ -1456,7 +1237,7 @@ class SagaQuarantineTest {
         @Test
         void makes_exactly_maxCasAttempts_failure_writes_when_every_one_loses_and_then_rethrows() {
             stateStore = store;
-            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts(new AtomicInteger());
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts();
             execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             now.set(start.plus(BUDGET).plusMillis(1));
             store.everyFailureWriteLosesToAnotherWrite();
@@ -1471,34 +1252,9 @@ class SagaQuarantineTest {
             );
         }
 
-        @Test
-        void asks_whether_the_event_is_still_obtainable_once_per_delivery_however_many_failure_writes_it_takes_to_quarantine() {
-            stateStore = store;
-            AtomicInteger asked = new AtomicInteger();
-            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = executionAllowingThreeAttempts(asked);
-            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
-            catchThrowable(() -> execution.onCloudEvent(poisonEvent));
-            now.set(start.plus(BUDGET).plusMillis(1));
-            asked.set(0);
-            store.nextFailureWritesLoseToAnotherWrite(2);
-
-            execution.onCloudEvent(poisonEvent);
-
-            assertAll(
-                    () -> assertThat(store.competingWritesThatLanded()).isNotEmpty().doesNotContain(false),
-                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(asked).hasValue(1)
-            );
-        }
-
-        private SagaExecution<OrderEvent, OrderState, OrderCommand> executionAllowingThreeAttempts(AtomicInteger asked) {
+        private SagaExecution<OrderEvent, OrderState, OrderCommand> executionAllowingThreeAttempts() {
             SagaRunnerConfig threeAttempts = new SagaRunnerConfig(Duration.ofMillis(50), 100, 3).withQuarantineAfter(BUDGET);
-            return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, threeAttempts,
-                    event -> {
-                        asked.incrementAndGet();
-                        return true;
-                    }, now::get);
+            return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, threeAttempts, now::get);
         }
     }
 
@@ -1759,9 +1515,9 @@ class SagaQuarantineTest {
      * Makes the first failure write of a delivery lose by really changing the instance first, which is what a timer
      * firing between the read and the write does, so a retry has to read the instance again to get anywhere.
      */
-    private static final class LosesItsFirstFailureWriteToAnotherWrite implements SagaStateStore<OrderState> {
+    private static final class LosesItsFirstFailureWriteToAnotherWrite implements SagaStateStore<OrderState>, SagaStateStoreSkippedInputs {
 
-        private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final InMemorySagaStateStore<OrderState> delegate = new InMemorySagaStateStore<>();
         private final SagaCodec<OrderState> codec = SagaCodec.of(delegate.stateCodec(), null);
         private final AtomicInteger writesStillToLose = new AtomicInteger();
         private final AtomicBoolean losesEveryFailureWrite = new AtomicBoolean();
@@ -1817,6 +1573,11 @@ class SagaQuarantineTest {
         }
 
         @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegate.fits(candidate);
+        }
+
+        @Override
         public SagaStateCodec<OrderState> stateCodec() {
             return delegate.stateCodec();
         }
@@ -1838,6 +1599,18 @@ class SagaQuarantineTest {
 
         @Override
         public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            loseToAnotherWriteWhenItIsTheNextOneToLose(saga);
+            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
+        }
+
+        // The write that quarantines an instance is a skip, so it is the failure write that reaches the budget
+        @Override
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            loseToAnotherWriteWhenItIsTheNextOneToLose(saga);
+            return delegate.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
+        }
+
+        private void loseToAnotherWriteWhenItIsTheNextOneToLose(StoredSaga saga) {
             if (codec.decodeWithoutState(saga).failure() != null) {
                 failureWriteAttempts.incrementAndGet();
             }
@@ -1851,7 +1624,36 @@ class SagaQuarantineTest {
                         completedAt, current.currentStep(), current.started(), failure, current.streamMarks(), null);
                 competingWritesThatLanded.add(delegate.compareAndSave(codec.encode(bumped), current.version()));
             }
-            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
+        }
+
+        @Override
+        public void requireAtomicTransitions() {
+            delegate.requireAtomicTransitions();
+        }
+
+        @Override
+        public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+            return delegate.findReleasingSagaIds(after, limit);
+        }
+
+        @Override
+        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+            return delegate.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return delegate.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            return delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            return delegate.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId);
         }
 
         @Override
@@ -1890,6 +1692,16 @@ class SagaQuarantineTest {
 
         @Nullable OrderState theStoredStateOf(String sagaId) {
             return delegate.find(sagaId).map(codec::decode).map(SagaEnvelope::state).orElse(null);
+        }
+
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return delegate.fits(candidate);
+        }
+
+        @Override
+        public void requireAtomicTransitions() {
+            delegate.requireAtomicTransitions();
         }
 
         @Override
@@ -1951,11 +1763,6 @@ class SagaQuarantineTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return delegate.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
-        }
-
-        @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
             return delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
         }
@@ -1970,130 +1777,18 @@ class SagaQuarantineTest {
             return delegate.findSkippedInputs(sagaId, quarantineId, limit);
         }
 
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return delegate.findWithFirstSkippedInput(sagaId);
+        }
+
     }
 
     /**
-     * A wrapper that declares no retention of its own, so a lookup for it unwraps to the delegate and the delegate
-     * answers. It does declare {@link RepositionableSubscriptions}, which is what the wrappers a saga actually runs
-     * behind do, meaning {@code CompetingConsumerSubscriptionModel} and {@code DurableSubscriptionModel}.
+     * Delivers and re-offers exactly as {@link ReplayableSubscriptionModel} does and offers nothing else, which is what a
+     * push feed is.
      */
-    private record ForwardingWrapper(SubscriptionModel delegate)
-            implements Subscribable, SubscriptionModelWrapper, RepositionableSubscriptions {
-
-        @Override
-        public SubscriptionModel getWrappedSubscriptionModel() {
-            return delegate;
-        }
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-            return RepositionableSubscriptions.findIn(delegate)
-                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
-                    .resumeSubscription(subscriptionId, startAt);
-        }
-    }
-
-    /**
-     * Retains what it delivers while refusing to resume at a chosen position, which is the combination the old gate
-     * turned away. Deliberately not a {@link SubscriptionModelWrapper}, so the lookup answers from here and never
-     * reaches the delegate's repositioning.
-     */
-    private record RetainsWithoutRepositioning(ReplayableSubscriptionModel delegate)
-            implements Subscribable, HistoryRetainingSubscriptions {
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
-    /**
-     * Claims to hold everything and then answers no for the event it is asked about, which is a model whose guarantee
-     * is wrong. The runner only enables quarantine on the guarantee, so this is the one way the per-event check is
-     * still reached, and it is why that check is made rather than trusted.
-     */
-    private record GuaranteesMoreThanItHolds(ReplayableSubscriptionModel delegate)
-            implements Subscribable, HistoryRetainingSubscriptions {
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return false;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
-    /**
-     * Guarantees it holds everything and then throws when asked about an event, which is a model whose retention read is
-     * broken rather than one whose answer is no. It throws for the first {@code throwForTheFirst} questions and answers
-     * yes after that, so one test can watch the refusal and another can watch the recovery.
-     */
-    private static final class ThrowsWhenAskedAboutAnEvent implements Subscribable, HistoryRetainingSubscriptions {
-
-        private final ReplayableSubscriptionModel delegate;
-        private final int throwForTheFirst;
-        private final AtomicInteger asked = new AtomicInteger();
-
-        private final Supplier<? extends Throwable> checkFailure;
-
-        private ThrowsWhenAskedAboutAnEvent(ReplayableSubscriptionModel delegate, int throwForTheFirst) {
-            this(delegate, throwForTheFirst, () -> new IllegalStateException("the retention read is broken"));
-        }
-
-        private ThrowsWhenAskedAboutAnEvent(ReplayableSubscriptionModel delegate, int throwForTheFirst, Supplier<? extends Throwable> checkFailure) {
-            this.delegate = delegate;
-            this.throwForTheFirst = throwForTheFirst;
-            this.checkFailure = checkFailure;
-        }
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            if (asked.incrementAndGet() <= throwForTheFirst) {
-                throw raise(checkFailure.get());
-            }
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
-    /**
-     * Delivers and re-offers exactly as {@link RetainsWithoutRepositioning} does and keeps nothing, which is what a
-     * push feed is. Paired with that one deliberately, since the two differ in retention and in nothing else, so a
-     * difference in outcome can only be retention.
-     */
-    private record RetainsNothing(ReplayableSubscriptionModel delegate) implements Subscribable {
+    private record SubscribeOnly(ReplayableSubscriptionModel delegate) implements Subscribable {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -2166,24 +1861,12 @@ class SagaQuarantineTest {
     private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong();
 
     /**
-     * A subscription model that keeps every event it is handed, which is what the runner requires before it turns
-     * quarantine on and which {@link InMemorySubscriptionModel} does not do. Deliberately minimal, meaning one
+     * A subscription model that keeps every event it is handed, so a test can replay them, which
+     * {@link InMemorySubscriptionModel} does not do. Deliberately minimal, meaning one
      * subscription, one delivery thread, and a retry loop that keeps re-offering an event whose handler threw, which is
      * what makes a time budget reachable at all.
      */
-    private final class ReplayableSubscriptionModel implements SubscriptionModel, RepositionableSubscriptions, HistoryRetainingSubscriptions {
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-
-
+    private final class ReplayableSubscriptionModel implements SubscriptionModel, RepositionableSubscriptions {
         // What the handler last threw back at the feed, which is what the transport sees and decides on.
         private volatile @Nullable Throwable lastDeliveryFailure;
 

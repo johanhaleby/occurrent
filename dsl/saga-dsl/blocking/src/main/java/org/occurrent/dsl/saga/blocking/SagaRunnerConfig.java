@@ -68,23 +68,11 @@ import static java.util.Objects.requireNonNull;
  *                             it belongs to is never let past, because acknowledging it would lose it, so it is
  *                             refused on every redelivery regardless of this setting, and the repeated ERROR that
  *                             refusal logs is paced on this budget when it is set and on a fixed five-minute interval
- *                             when it is not, so that ERROR still fires on a subscription model this switches
- *                             quarantine off for, while that model keeps offering the event. A runner
- *                             ignores this and never quarantines unless its subscription model guarantees that it holds
- *                             every event it delivers, since a quarantined instance skips everything addressed to it
- *                             afterwards and skipping acknowledges. Being able to answer for one event is not enough on
- *                             its own, though the event an instance stops on is checked as well before it is
- *                             acknowledged
- * @param quarantineAfterDefaulted whether {@code quarantineAfter} is the budget {@link #defaults()} sets and nothing
- *                             configured it. {@link #withQuarantineAfter(Duration)} and the constructors that take
- *                             {@code quarantineAfter} without this make it {@code false}, so the same five minutes set
- *                             explicitly counts as configured. {@link SagaRunner} logs at {@code WARN} that it turns a configured
- *                             budget off on a subscription model that doesn't retain every event, and at {@code DEBUG}
- *                             for a defaulted one
+ *                             when it is not
  */
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
                                RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter,
-                               int reorderWindow, boolean quarantineAfterDefaulted) {
+                               int reorderWindow) {
 
     /** How long one event keeps failing before {@link #defaults()} quarantines its instance. */
     public static final Duration DEFAULT_QUARANTINE_AFTER = Duration.ofMinutes(5);
@@ -110,14 +98,6 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
         if (reorderWindow < 1) {
             throw new IllegalArgumentException("reorderWindow must be at least 1");
         }
-        // A configuration that never quarantines has no budget to have defaulted
-        quarantineAfterDefaulted = quarantineAfterDefaulted && quarantineAfter.isPresent();
-    }
-
-    /** A configuration whose {@code quarantineAfter}, when present, counts as configured. */
-    public SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
-                            RedeliveryDetection redeliveryDetection, Optional<Duration> quarantineAfter, int reorderWindow) {
-        this(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow, false);
     }
 
     /** A configuration with the default reorder window. */
@@ -144,32 +124,30 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
     /**
      * The default configuration: poll every 15 seconds, fire up to 100 due instances per poll, retry a lost save up to 50
      * times, require redelivery detection, and quarantine an instance whose event has kept failing for five minutes,
-     * recording every input it skips meanwhile. The poll interval only bounds how late a due timer fires, and saga
+     * recording the inputs it skips meanwhile. The poll interval only bounds how late a due timer fires, and saga
      * timeouts run at a minutes-to-days timescale, so 15 seconds (the same default as JobRunr) keeps the store query
      * load low while firing well within tolerance. Lower it only when you rely on short timeouts firing promptly.
      */
     public static SagaRunnerConfig defaults() {
         return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50, RedeliveryDetection.REQUIRED, Optional.of(DEFAULT_QUARANTINE_AFTER),
-                SagaExecutionSupport.DEFAULT_REORDER_WINDOW, true);
+                SagaExecutionSupport.DEFAULT_REORDER_WINDOW);
     }
 
     /** A copy of this configuration with a different poll interval. */
     public SagaRunnerConfig withTimerPollInterval(Duration interval) {
-        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow, quarantineAfterDefaulted);
+        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow);
     }
 
     /** A copy of this configuration with a different redelivery-detection posture. */
     public SagaRunnerConfig withRedeliveryDetection(RedeliveryDetection detection) {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, detection, quarantineAfter, reorderWindow, quarantineAfterDefaulted);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, detection, quarantineAfter, reorderWindow);
     }
 
     /**
      * A copy of this configuration that quarantines an instance once it has kept failing for {@code quarantineAfter}.
-     * {@link #defaults()} quarantines after five minutes. It applies only on a subscription model that holds every
-     * event it delivers, and {@link SagaRunner} turns it off on any other. On such a model, a runner with quarantine on
-     * and no {@link SagaRunner#eventStoreQueries(org.occurrent.eventstore.api.blocking.EventStoreQueries)}, or a state
-     * store that does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}, refuses to start, since
-     * it could not release a quarantined instance.
+     * {@link #defaults()} quarantines after five minutes. It applies on every subscription model. A runner with
+     * quarantine on and a state store that does not implement {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs}
+     * refuses to start, since it could not record the inputs a quarantined instance skips or release it.
      * <p>
      * Five minutes is a reasonable budget. Once a MongoDB subscription model's backoff saturates it retries every two
      * seconds, so five minutes is about a hundred and fifty attempts. A replica-set election takes seconds and a
@@ -180,11 +158,12 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * fails again. Replaying a parked event, turning quarantine on for an event that failed while it was off, and
      * moving a MongoDB subscription back by hand to before a failed event all produce such an event.
      * <p>
-     * A quarantined instance skips every input addressed to it and records the key of each.
-     * {@link SagaSubscription#release(String)} brings it back by replaying the input it stopped on and then the inputs it
-     * recorded, in order. A timer that came due meanwhile fires after all of them, so a recorded input from after a
-     * deadline can cancel or re-arm the timer before it fires. "A quarantined saga instance can be released, and
-     * quarantine is on by default" in the 0.35.0 upgrade guide says more.
+     * A quarantined instance records the events of the inputs it skips, and of the input it stopped on.
+     * {@link SagaSubscription#release(String)} brings it back by replaying those events, the one it stopped on first.
+     * Deleting a quarantined instance deletes the only copy the saga keeps of the events it skipped. A timer that came
+     * due meanwhile fires after all of them, so a recorded input from after a deadline can cancel or re-arm the timer
+     * before it fires. "A quarantined saga instance can be released, and quarantine is on by default" in the 0.35.0
+     * upgrade guide says more.
      * <p>
      * Use {@link #disableQuarantine()} to turn quarantine off.
      *
@@ -193,7 +172,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      */
     public SagaRunnerConfig withQuarantineAfter(Duration quarantineAfter) {
         requireNonNull(quarantineAfter, "quarantineAfter cannot be null, use disableQuarantine() to never quarantine");
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.of(quarantineAfter), reorderWindow, false);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.of(quarantineAfter), reorderWindow);
     }
 
     /**
@@ -205,7 +184,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be.
      */
     public SagaRunnerConfig disableQuarantine() {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.empty(), reorderWindow, false);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, Optional.empty(), reorderWindow);
     }
 
     /**
@@ -214,6 +193,6 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * @throws IllegalArgumentException if {@code reorderWindow} is less than 1
      */
     public SagaRunnerConfig withReorderWindow(int reorderWindow) {
-        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow, quarantineAfterDefaulted);
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter, reorderWindow);
     }
 }

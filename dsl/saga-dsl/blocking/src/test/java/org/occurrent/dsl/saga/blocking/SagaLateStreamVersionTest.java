@@ -393,7 +393,7 @@ class SagaLateStreamVersionTest {
                     throw new IllegalStateException("cannot reserve two");
                 }
                 issued.add(command);
-            }, converter, SagaRunnerConfig.defaults().withReorderWindow(2).withQuarantineAfter(budget), event -> true, now::get);
+            }, converter, SagaRunnerConfig.defaults().withReorderWindow(2).withQuarantineAfter(budget), now::get);
         }
 
         private CloudEvent itemAddedAt(long streamVersion, String item) {
@@ -812,7 +812,7 @@ class SagaLateStreamVersionTest {
         private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionsOneAndTenApplied() {
             refusing = new RefusesToLoadTheState(store);
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = new SagaExecution<>("baskets", basketSaga(), refusing,
-                    command -> issued.add(command), converter, FAST_POLL_CONFIG.disableQuarantine().withReorderWindow(2), event -> true);
+                    command -> issued.add(command), converter, FAST_POLL_CONFIG.disableQuarantine().withReorderWindow(2));
             execution.onCloudEvent(streamKeyed(STREAM, 1, added("one")));
             execution.onCloudEvent(streamKeyed(STREAM, 10, added("ten")));
             refusing.refuseFullLoads();
