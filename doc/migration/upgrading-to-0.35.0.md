@@ -2978,6 +2978,14 @@ switch it to `BEGINNING`, or to resume it from a checkpoint the application kept
 has the history back to. Outside Spring Boot, on a blocking catch-up subscription model you call directly, the second
 can be a `resumeSubscription(id, StartAt)` at that checkpoint, as described below.
 
+The blocking starter runs every subscription through a `CompetingConsumerSubscriptionModel`. Its
+`cancelSubscription(id)` gives up the lease only on the instance you call it on, and the checkpoint it deletes is the
+one every instance shares. When more than one instance runs the application, another instance waiting for the lease
+can take it after the delete and start from its own annotation, at the present for `NOW` or `DEFAULT`. It can store a
+checkpoint before the instance you recover registers the subscription again. So with more than one instance, every
+step below that cancels the subscription has to delete the stored checkpoint with every instance stopped instead, as
+the next paragraph describes. Give every instance the same start attribute before you start them again.
+
 When the application doesn't start, or you would rather not call `cancelSubscription`, delete the stored checkpoint
 instead, with every instance of the application stopped. Spring Boot stores it in the collection
 `occurrent.subscription.mongodb.collection` names, `subscriptions` by default, as the document whose `_id` is the
@@ -3022,7 +3030,7 @@ replays, so a checkpoint from a replayed event doesn't work here. When the catch
 
 The blocking Spring Boot starter puts a `CompetingConsumerSubscriptionModel` around the catch-up model, and that model
 has no resume at a position, see [#1304](https://github.com/johanhaleby/occurrent/issues/1304). So in Spring Boot,
-cancel the subscription as above.
+recover as above, with every instance stopped when more than one runs the application.
 
 To continue from now, when skipping the events since the lost token is acceptable:
 
@@ -3535,8 +3543,9 @@ longer than the oplog window to start, from the event store bean to the handler'
 the starter runs through a catch-up subscription, which both starters do by default, then refuses to start instead of
 skipping the events since that position. The blocking starter throws `CatchupCannotResumeException` and the
 application doesn't start. With `startupMode = BACKGROUND`, and on the reactor starter, the handler is paused with an
-error in the log that names it. Delete its stored checkpoint, or replace it with a checkpoint the application kept that
-the subscription model still has the history back to, and restart the application, as
+error in the log that names it. With every instance of the application stopped, delete its stored checkpoint, or
+replace it with a checkpoint the application kept that the subscription model still has the history back to, and start
+the application again, as
 [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
 describes. A handler at `NOW` with `resumeBehavior = SAME_AS_START_AT` stores no checkpoint, so it is paused with an
 error in the log, and the next start of the application reads a new position. Without a catch-up subscription, the

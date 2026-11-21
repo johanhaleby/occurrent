@@ -261,13 +261,22 @@ model opens at the model's default with no error. A live checkpoint resumes only
 
 ### A paused subscription is recovered by hand
 
-A paused subscription delivers nothing until someone recovers it. They cancel it and subscribe it again from one of
-two starts:
+A paused subscription delivers nothing until someone recovers it.
+
+The blocking Spring Boot starter runs every subscription through a `CompetingConsumerSubscriptionModel` over a
+`DurableSubscriptionModel`. A `cancelSubscription(id)` there gives up the lease on the one instance it's called on, and
+deletes the checkpoint every instance shares. Another instance waiting for the lease can then take it and start from
+its own annotation, at the present for `NOW` or `DEFAULT`, and store a checkpoint before the instance being recovered
+subscribes again. So when more than one instance runs the application, someone stops every instance, deletes the
+stored checkpoint or replaces it with one the application kept, gives every instance the same one of the two starts
+below, and starts them again.
+
+With one instance, or on a subscription model the application calls directly without competing consumers, someone
+cancels the subscription and subscribes it again from one of two starts:
 
 - The beginning, when the handler can take every event again, or once the application has deleted what the handler
-  built. Cancelling a subscription under `DurableSubscriptionModel`, which the blocking Spring Boot starter builds,
-  deletes its stored checkpoint, so a subscription registered again with `startAt = BEGINNING` replays from the
-  beginning.
+  built. Cancelling a subscription under `DurableSubscriptionModel` deletes its stored checkpoint, so a subscribe
+  again from the beginning replays every event.
 - A checkpoint the application stored with its own state, as
   [the resume point the application stores](#the-application-can-store-the-resume-point-itself) describes, passed
   back with `StartAt.checkpoint` or `DcbStartAt.checkpoint`, or answered from `SubscriptionResumePoints`. The
@@ -283,8 +292,8 @@ Where this section says a start is refused, a blocking Spring Boot subscription 
 
 On a blocking catch-up model the application calls directly, `resumeSubscription(id, startAt)` at a resume token the
 application stored with its own state, while the oplog still has it, resumes the paused subscription without a cancel.
-At a token newer than the one the application stored, it skips the events between the two. Cancelling the subscription and
-subscribing again from now skips every event since the lost token.
+At a token newer than the one the application stored, it skips the events between the two. Cancelling the
+subscription and subscribing again from now skips every event since the lost token.
 
 ## Alternatives considered
 

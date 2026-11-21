@@ -35,6 +35,7 @@ public final class HistoryLossMessages {
      */
     public static final String TERMINAL_FAILURE_LOG = "The subscription model no longer has the history to resume catch-up subscription {} from {}, so the subscription is paused and delivers nothing more."
             + " Resuming it throws CatchupCannotResumeException until it is cancelled, or on the blocking stack resumed at a position. To get every event, cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+            + " When more than one instance competes for the subscription, stop every instance and delete its stored checkpoint, or replace it with such a checkpoint, instead of cancelling it on one."
             + " Cancelling and subscribing again from now skips the events since {}.";
 
     /**
@@ -45,6 +46,7 @@ public final class HistoryLossMessages {
      */
     public static final String LIVE_START_LOST_LOG = "The subscription model no longer has the history to resume catch-up subscription {} from {}, the live start its replay would go live from, so the subscription is paused and delivers nothing more."
             + " Resuming it throws CatchupCannotResumeException until it is cancelled, or on the blocking stack resumed at a position. To get every event, cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+            + " When more than one instance competes for the subscription, stop every instance and delete its stored checkpoint, or replace it with such a checkpoint, instead of cancelling it on one."
             + " Cancelling and subscribing again from now skips the events its replay hadn't delivered, which can start before {}.";
 
     /**
@@ -85,7 +87,8 @@ public final class HistoryLossMessages {
      */
     public static CatchupCannotResumeException historyLost(@Nullable String subscriptionId, Checkpoint lostFrom) {
         return new HistoryLost(lostFrom, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
-                + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to.");
+                + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + " When more than one instance competes for the subscription, stop every instance and delete its stored checkpoint, or replace it with such a checkpoint, instead of cancelling it on one.");
     }
 
     /**
@@ -97,7 +100,8 @@ public final class HistoryLossMessages {
     public static CatchupCannotResumeException liveStartLostOnResume(@Nullable String subscriptionId, Checkpoint liveStart) {
         return new HistoryLost(liveStart, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + liveStart.asString()
                 + "\", the live start its replay would go live from, and resuming from anywhere later would skip the events its replay hadn't delivered, which can start before that live start."
-                + " Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to.");
+                + " Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + " When more than one instance competes for the subscription, stop every instance and delete its stored checkpoint, or replace it with such a checkpoint, instead of cancelling it on one.");
     }
 
     /**
