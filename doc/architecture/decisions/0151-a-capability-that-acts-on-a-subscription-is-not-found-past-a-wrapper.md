@@ -131,16 +131,30 @@ and skip the events written between its replay position and the new one. The Mon
 again before they throw, so no event was delivered from the new position when the old checkpoint goes back. A failure
 to put the checkpoint back is added to the thrown exception as a suppressed exception.
 
-After a failed resume, the model saves quiet positions again only when the checkpoint left stored covers the latest
-delivery that ended. It compares that checkpoint with the checkpoint the delivery stored, a quiet position saved after
-the delivery, and the position of a resume made after the delivery read its event. When the put-back wrote, the
-checkpoint left stored is the one read before the resume. A put-back that threw may have written or not, so the model
-reads the stored checkpoint again, and a read that throws holds quiet saves until a delivery stores its checkpoint.
-The model holds the deliveries' lock from the put-back to that decision, so no delivery ends in between. Counting the
-deliveries that started and ended around the resume can't decide this, since a delivery that stores its checkpoint
-while the resume reads the previous one gives the same counts whether the read saw that checkpoint or not. A quiet
-save that throws doesn't count as stored, so when it wrote anyway and a later put-back writes that position back, quiet
-saves wait for the next event that stores its checkpoint.
+After a failed resume, the model saves a quiet position only when it knows the checkpoint left stored is at or after
+the position of the latest delivery that ended. It knows that when the checkpoint left stored is one of these:
+
+* the checkpoint that delivery stored
+* a quiet position saved after the delivery, also one whose save threw, since that save may have written
+* the position of a resume made after the delivery read its event
+
+Otherwise quiet saves wait until a delivery stores its checkpoint.
+
+When the put-back wrote, the checkpoint left stored is the one read before the resume. A put-back that threw may have
+written or not, so the model reads the stored checkpoint again, and a read that throws holds quiet saves until a
+delivery stores its checkpoint. The model holds the deliveries' lock from the put-back to that decision, so no delivery
+ends in between.
+
+Counting the deliveries that started and ended around the resume can't decide this, since a delivery that stores its
+checkpoint while the resume reads the previous one gives the same counts whether the read saw that checkpoint or not.
+Instead, a delivery that stored its checkpoint before the put-back and ends after it doesn't count as stored, because
+the put-back may have written an older checkpoint over it. That holds even when the put-back wrote the delivery's own
+checkpoint again, and quiet saves then wait for the next event that stores its checkpoint.
+
+The model remembers every quiet position whose save threw since the latest delivery ended or a quiet save last wrote.
+A quiet save of Q1 can write and then throw, and a later save of Q2 throw without writing, so the resume reads Q1 and
+puts it back. In the other order the resume puts Q2 back. The latest delivery ending, or a quiet save that writes,
+makes the model forget them.
 
 When nothing was stored before, the new checkpoint stays. Deleting it could remove a checkpoint that another node, or
 the resumed subscription's own events, wrote in the meantime. With nothing stored, a restart subscribes the wrapped
