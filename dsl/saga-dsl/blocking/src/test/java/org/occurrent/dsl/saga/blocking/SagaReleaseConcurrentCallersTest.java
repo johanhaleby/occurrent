@@ -184,7 +184,7 @@ class SagaReleaseConcurrentCallersTest {
     }
 
     @Test
-    void a_second_release_call_starting_the_release_while_the_first_has_not_read_the_records_loses_and_the_input_is_applied_once_and_before_every_later_record() throws Exception {
+    void a_second_release_call_starting_the_release_while_the_first_has_not_replayed_its_first_record_loses_and_the_input_is_applied_once_and_before_every_later_record() throws Exception {
         HeldReadStore store = new HeldReadStore();
         SagaExecution<OrderEvent, Order, Object> execution = execution(store);
         execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
@@ -245,8 +245,8 @@ class SagaReleaseConcurrentCallersTest {
         assertAll(
                 () -> assertThat(rResult).as("R. " + evidence).isEqualTo(ReleaseResult.RELEASED),
                 () -> assertThat(pResult).as("P. " + evidence).isEqualTo(ReleaseResult.RELEASED),
-                () -> assertThat(after.state().items()).as("the input recorded after the start event is applied. " + evidence).containsExactly("r1"),
-                () -> assertThat(dispatched).as("the commands it produced. " + evidence).containsExactly(new Pack(ORDER, "r1"))
+                () -> assertThat(after.state().items()).as("the input recorded after the start event is applied once. " + evidence).containsExactly("r1"),
+                () -> assertThat(dispatched).as("its command is dispatched at least once, and by a call whose write then loses once more. " + evidence).isNotEmpty().containsOnly(new Pack(ORDER, "r1"))
         );
     }
 
@@ -469,6 +469,11 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return inMemory.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
         public void delete(String sagaId) {
             inMemory.delete(sagaId);
         }
@@ -488,8 +493,8 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public Optional<StoredSaga> find(String sagaId) {
-            Optional<StoredSaga> found = super.find(sagaId);
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            Optional<StoredSagaWithFirstSkippedInput> found = super.findWithFirstSkippedInput(sagaId);
             if (isB() && bReads.incrementAndGet() == 1) {
                 bHasRead.countDown();
             }
@@ -508,45 +513,43 @@ class SagaReleaseConcurrentCallersTest {
         }
     }
 
-    // Call order: B reads the instance, A starts the release and pauses before it reads the records, B tries to start the
-    // release it read the instance for and pauses, A reads the records and finishes the release, B resumes
+    // Call order: B reads the instance, A starts the release and pauses before its first read of the replay, B tries to start the
+    // release it read the instance for and pauses, A reads and finishes the release, B resumes
     private final class HeldReadStore extends DelegatingStore {
         volatile @Nullable Thread b;
         final CountDownLatch bHasRead = new CountDownLatch(1);
-        final CountDownLatch aIsAboutToReadTheRecords = new CountDownLatch(1);
+        final CountDownLatch aIsAboutToRead = new CountDownLatch(1);
         final CountDownLatch bTriedToStart = new CountDownLatch(1);
         final CountDownLatch aFinished = new CountDownLatch(1);
         final AtomicBoolean bStartWon = new AtomicBoolean(true);
         private final AtomicInteger bReads = new AtomicInteger();
-        private final AtomicInteger aRecordReads = new AtomicInteger();
+        private final AtomicInteger aReads = new AtomicInteger();
 
         private boolean isB() {
             return Thread.currentThread() == b;
         }
 
         @Override
-        public Optional<StoredSaga> find(String sagaId) {
-            Optional<StoredSaga> found = super.find(sagaId);
-            if (isB() && bReads.incrementAndGet() == 1) {
-                bHasRead.countDown();
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            if (isB()) {
+                Optional<StoredSagaWithFirstSkippedInput> found = super.findWithFirstSkippedInput(sagaId);
+                if (bReads.incrementAndGet() == 1) {
+                    bHasRead.countDown();
+                }
+                return found;
             }
-            return found;
-        }
-
-        @Override
-        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-            // The first read is the check that the instance holds its stopped-on input, before the release starts. The second is the replay's, after A has started it
-            if (!isB() && aRecordReads.incrementAndGet() == 2) {
-                aIsAboutToReadTheRecords.countDown();
+            // The first read starts the release, the second is the replay's, after A has started it
+            if (aReads.incrementAndGet() == 2) {
+                aIsAboutToRead.countDown();
                 await(bTriedToStart);
             }
-            return super.findSkippedInputs(sagaId, quarantineId, limit);
+            return super.findWithFirstSkippedInput(sagaId);
         }
 
         @Override
         public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
             if (isB()) {
-                await(aIsAboutToReadTheRecords);
+                await(aIsAboutToRead);
                 boolean saved = super.compareAndSaveWithoutState(saga, expectedVersion);
                 bStartWon.set(saved);
                 bTriedToStart.countDown();
@@ -557,9 +560,9 @@ class SagaReleaseConcurrentCallersTest {
         }
     }
 
-    // Call order: R starts the release and waits, P reads the instance that has not started and waits before it reads the
-    // records, R replays the start event, deletes its record and waits before it reads the records again, P reads the
-    // record after it and replays it against what it read, deletes it, and the two finish
+    // Call order: R starts the release and waits, P reads the releasing instance with its start record and waits before it
+    // uses it, R replays the start event, deletes its record and reads the record after it and waits, P replays the start
+    // record it read, loses, reads again, replays the record after it, deletes it, and the two finish
     private final class PollerRacingStore extends DelegatingStore {
         volatile @Nullable Thread r;
         volatile @Nullable Thread p;
@@ -569,7 +572,7 @@ class SagaReleaseConcurrentCallersTest {
         final CountDownLatch pDeletedItsRecord = new CountDownLatch(1);
         private final AtomicInteger rWrites = new AtomicInteger();
         private final AtomicBoolean rPaused = new AtomicBoolean();
-        private final AtomicInteger pRecordReads = new AtomicInteger();
+        private final AtomicInteger pReads = new AtomicInteger();
 
         private boolean isR() {
             return Thread.currentThread() == r;
@@ -590,19 +593,19 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-            if (isP() && pRecordReads.incrementAndGet() == 1) {
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            Optional<StoredSagaWithFirstSkippedInput> found = super.findWithFirstSkippedInput(sagaId);
+            // P's first read finds the instance releasing, its second is the replay's, and P keeps that one until R deleted the start record
+            if (isP() && pReads.incrementAndGet() == 2) {
                 pHasReadTheInstance.countDown();
                 await(rDeletedTheStartRecord);
             }
-            // R waits once, on its first read that finds a record after the start record
-            if (isR() && !rPaused.get()) {
-                List<SkippedInput> peek = super.findSkippedInputs(sagaId, quarantineId, limit);
-                if (!peek.isEmpty() && peek.getFirst().seq() > 0 && rPaused.compareAndSet(false, true)) {
-                    await(pDeletedItsRecord);
-                }
+            // R waits once, on its first read that finds a record after the start record, and keeps what it read
+            if (isR() && !rPaused.get() && found.map(StoredSagaWithFirstSkippedInput::firstSkippedInput).filter(first -> first.seq() > 0).isPresent()
+                && rPaused.compareAndSet(false, true)) {
+                await(pDeletedItsRecord);
             }
-            return super.findSkippedInputs(sagaId, quarantineId, limit);
+            return found;
         }
 
         @Override
@@ -619,7 +622,7 @@ class SagaReleaseConcurrentCallersTest {
     }
 
     // Call order: A replays the first record, reads the one with no stream and pauses, B applies that record and pauses
-    // with a record left, A reads the instance B wrote and replays the record it read against it, and the two finish
+    // with a record left, A replays the record it read, loses to B's write, reads again, and the two finish
     private class StaleRecordStore extends DelegatingStore {
         volatile @Nullable Thread a;
         final CountDownLatch aHasReadTheRecordWithNoStream = new CountDownLatch(1);
@@ -640,10 +643,11 @@ class SagaReleaseConcurrentCallersTest {
         }
 
         @Override
-        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-            List<SkippedInput> found = super.findSkippedInputs(sagaId, quarantineId, limit);
-            // A waits once, on its first read that returns the record with no stream first
-            if (isA() && !found.isEmpty() && found.getFirst().event().getId().equals(staleEventId) && aPaused.compareAndSet(false, true)) {
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            Optional<StoredSagaWithFirstSkippedInput> found = super.findWithFirstSkippedInput(sagaId);
+            // A waits once, on its first read that returns the record with no stream first, and keeps what it read
+            if (isA() && found.map(StoredSagaWithFirstSkippedInput::firstSkippedInput).filter(first -> first.event().getId().equals(staleEventId)).isPresent()
+                && aPaused.compareAndSet(false, true)) {
                 aHasReadTheRecordWithNoStream.countDown();
                 await(bAppliedThatRecord);
             }

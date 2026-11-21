@@ -28,7 +28,9 @@ event back can't have both instance isolation and no lost events. A record now h
 and the write that quarantines an instance records the input it was quarantined on as the first record. So a release
 replays the held events in order and reads nothing from the event store, and every push saga quarantines and releases
 like any other saga. The runner refuses quarantine only for a store that doesn't implement
-`SagaStateStoreSkippedInputs`, or one that can't write a transition atomically. Points 1 to 5 and 7 to 9, the
+`SagaStateStoreSkippedInputs`, or one that can't write a transition atomically. A release reads the instance and its
+first record with `findWithFirstSkippedInput`, as one write left them, instead of reading the instance and then its
+records. Points 1 to 5 and 7 to 9, the
 consequences and the rejected alternatives are corrected in place. Point 6 points at
 [ADR 185](0185-saga-timers-run-on-processing-time.md) for how timers are ordered against held inputs.
 
@@ -112,7 +114,8 @@ Each recorded input is a record of its own in the state store, holding the saga 
 the key and the event. A quarantine can record any number of inputs without growing the instance's document toward
 MongoDB's 16 MB limit, so there is no limit on how many it records.
 
-A store keeps a record's event and returns it from `findSkippedInputs`. The saga keeps no other copy of a skipped
+A store keeps a record's event and returns it from `findSkippedInputs` and `findWithFirstSkippedInput`. The saga
+keeps no other copy of a skipped
 event. A release converts the event again, so `SpringMongoSagaStateStore` records an event only when a release hands
 the converter the event exactly as it was delivered. That means the same attributes, the same `CloudEventData` class,
 the same data values with the same Java classes at any depth, the same bytes, and the extensions with the same values
@@ -134,8 +137,8 @@ converter the MongoDB event store's JSON of it, where a date is `{"$date": ...}`
 delivery.
 
 `compareAndSaveSkipped` checks the record with a round trip before it writes anything. It encodes the record to BSON
-the way MongoDB stores it, decodes it, and reads the event back with the method `findSkippedInputs` reads a record
-with, so the check and a release read the record the same way. It throws an `IllegalStateException`, and the instance
+the way MongoDB stores it, decodes it, and reads the event back with the method `findSkippedInputs` and
+`findWithFirstSkippedInput` read a record with, so the check and a release read the record the same way. It throws an `IllegalStateException`, and the instance
 and its records stay as they were, when:
 
 - The event read back differs from the delivered one in an attribute, an extension or a data value at any depth, in
@@ -154,7 +157,8 @@ that retries the event stops on it.
 
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
-parameter, since none of its methods reads the state, and none of them has a default. The in-memory store and
+parameter, since its methods take and return an instance as a `StoredSaga`, with the state encoded already, and only
+`fits` has a default. The in-memory store and
 `SpringMongoSagaStateStore` implement it. Point 7 says what the runner does with a store that doesn't.
 
 The write that quarantines an `ACTIVE` instance gives its failure record a new quarantine id, records K with the
@@ -184,8 +188,10 @@ unused in the same way.
 Release deletes a record it replayed in the write that applies its input, `compareAndSaveReplayed`, which writes
 only while the record of that key still has the sequence number release read. So a release never removes another record
 written under the same key in the meantime. Two releases that read the same record apply it once, since the second
-finds it gone and writes nothing, and then reads the instance again. Without that check an event with no stream id and
-version would be applied twice, because nothing on the instance says it was applied. No write moves a record. A release starts in a write to the instance alone,
+finds it gone and writes nothing, and then reads the instance and its first record again. The check holds whatever the
+read before it returned, so an event with no stream id and version is applied once even on a store whose
+`findWithFirstSkippedInput` returns an instance with a record of an earlier version of it. Nothing on the instance says
+such an event was applied. No write moves a record. A release starts in a write to the instance alone,
 see point 3 step 1.
 
 `SagaStateStore.delete(sagaId)` deletes the instance and the records under the quarantine id it had in one atomic
@@ -196,9 +202,11 @@ another release applied already can't complete the instance and delete records n
 under its quarantine id, until the downgrade in point 8 takes the quarantine id off the instances that stay
 quarantined, and nothing reads their records after that.
 
-`SpringMongoSagaStateStore` reads the instance and its records from the primary at read concern `majority`, whatever
-read preference the `MongoOperations` it is given has. A read from a secondary that lags can find no record while one
-is written, and a release turns the instance `ACTIVE` once its read of the records finds none. The write that does that
+`SpringMongoSagaStateStore` reads the instance and its records from the primary, whatever read preference the
+`MongoOperations` it is given has. A release reads the instance and its first record with `findWithFirstSkippedInput`,
+in one transaction at read concern `snapshot`, as ADR 182 point 3 says, and every other read is at read concern
+`majority`. A read from a secondary that lags can find no record while one is written, and a release turns the instance
+`ACTIVE` once its read finds no record. The write that does that
 also checks inside its transaction that no record is under the quarantine id, as ADR 182 point 3 says, so a release
 whose read missed a record writes nothing and replays the record on its next attempt.
 
@@ -244,16 +252,16 @@ one its failure record names.
    the marks, so when the instance applied the same event before the quarantine, the release applies it again. A
    redelivery of it that arrives after a release applied and deleted its record is recorded and applied again too.
    That is what `BEST_EFFORT` already does with any redelivery. Two releases that overlap on such a record, two
-   `release` calls or a call and the timer poller, can each apply it as well. The second one reads the records before
-   the first one's write and the instance after it, and the marks don't list the input, so it replays the record onto
-   a state that took it already and dispatches the commands computed from that state. Its write then finds the record
-   gone and writes nothing, so the stored state takes the input once. Dispatch stays before the write, as ADR 63 has
-   it, and reading the record again before the replay would only make the gap between the two reads smaller.
+   `release` calls or a call and the timer poller, don't apply it twice. A release reads the instance and its first
+   record with `findWithFirstSkippedInput`, which returns both as one write left them, so a release that reads after
+   another one applied the record finds it gone. Two releases that both read before that write each dispatch the
+   record's commands, as for any record, see the paragraph on a lost compare-and-set below. The second one's write
+   loses on the version, so the stored state takes the input once. Dispatch stays before the write, as ADR 63 has it.
 3. The instance becomes `ACTIVE`, with the failure record and the skip counter cleared, only in a compare-and-set that
-   expects the version release read before it found no records left. Release reads the instance first and the records
-   after it, so a skip that records an input between the two reads has changed the version, and the write loses. The
+   expects the version of the read that found no record left. That read returns the instance and its first record as
+   one write left them, so a skip that records an input after it has changed the version, and the write loses. The
    write also takes place only while no record is under the quarantine id, which the store checks inside the write, so
-   a record the release's read missed stays and is replayed. A skip that loses its compare-and-set to this write reads
+   a record written after the read stays and is replayed. A skip that loses its compare-and-set to this write reads
    the instance again and applies its input, which was never acknowledged, to the `ACTIVE` instance like any live
    input.
 
@@ -261,28 +269,29 @@ Release counts a held event's failure under the key the event was recorded under
 input, and on the stream marks when the event has a stream id and version. A failure while releasing replaces the
 failure record differently from a live one, see point 5.
 
-Before release writes that failure, it checks that the record it replayed is still the first record of the quarantine.
-It compares the quarantine id, the `seq` and the key, and never the event. `InMemorySagaStateStore` and
+Before release writes that failure, it reads the instance and its first record again, in one read, and checks that
+the record it replayed is still the first record of the quarantine. It compares the quarantine id, the `seq` and the key, and never the event. `InMemorySagaStateStore` and
 `SpringMongoSagaStateStore` both read a record back as a new event, and a byte array in an extension or in the data
 equals no byte array of an earlier read. Comparing events would find the record changed on every attempt, so release
 would never write the failure, the input's budget would never run out, and the instance would stay releasing for good.
 
 An input that arrives live while the instance is releasing reaches the quarantined skip and is recorded. The skip's
-write changes the instance's version together with the record, so a release that read the records before the record
-existed loses its `ACTIVE` write, reads again, and finds the new record. When the skip's write loses instead, because
+write changes the instance's version together with the record, so a release that read before the record existed
+loses its `ACTIVE` write, reads again, and finds the new record. When the skip's write loses instead, because
 the instance went `ACTIVE` first, it has written nothing, and the input is processed again against the `ACTIVE`
 instance and applied like any live input. Either way no input is skipped without a record that a release reads.
 
 A lost compare-and-set while releasing is either such a skip or another node's release of the same instance. Release
 follows the at-least-once dispatch contract of live inputs. A reaction is dispatched before the write that applies its
 input, so a node whose write loses has dispatched it too, and two nodes releasing the same instance at once can each
-dispatch a record's reaction. After a lost write, release reads the instance again. Only skips happened when the
+dispatch a record's reaction. After a lost write, release reads the instance and its first record again. Only skips
+happened when the
 first record is still the one it replayed and the instance read again matches the one it read before in the state,
 the status, the timers, the stream watermarks and marks, `createdAt`, `updatedAt`, `completedAt`, whether it started
 and the whole failure record. Release then writes the result it computed onto the instance it read again, with that
 instance's skip counter and version, and doesn't dispatch the reaction again. It tries that write up to
-`maxCasAttempts` times. When anything else changed, or those attempts all lose, it reads the instance and the records
-again and computes again, which dispatches the reaction again. After `maxCasAttempts` rounds in a row that end in a
+`maxCasAttempts` times. When anything else changed, or those attempts all lose, it reads the instance and its first
+record again and computes again, which dispatches the reaction again. After `maxCasAttempts` rounds in a row that end in a
 lost write, release throws a `SagaConcurrencyException`, as live processing does. The state is compared with
 `equals`, so for a state type that doesn't override it, release always computes again and dispatches the reaction
 again.
@@ -322,9 +331,9 @@ tries again, so the release goes on once the state decodes.
 Release takes no lease and pauses nothing. Every step that changes the instance is a compare-and-set on its document,
 so release can run on any node, including a node that doesn't hold the saga's subscription lease. Two nodes releasing
 the same instance at once compete for each record. The write that applies a record deletes it, so the node that loses
-reads again and finds the next record first. A node that read the record before that write and the instance after it
-finds that the stream marks show the record's input as applied, and writes the instance one version up without
-applying it. The failure record plays no part in that, as point 3 step 2 says.
+reads again and finds the next record first. Each node reads the instance and its first record in one read, so no node
+replays a record against an instance that applied it already. The failure record plays no part in that, as point 3
+step 2 says.
 
 When a recorded input fails again while releasing, its failure replaces the failure record, its version is pending on
 the stream marks, and the instance stays releasing. A live failure that replaces a failure record keeps the input the

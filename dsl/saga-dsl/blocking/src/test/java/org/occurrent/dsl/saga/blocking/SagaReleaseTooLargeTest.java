@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -512,6 +513,11 @@ class SagaReleaseTooLargeTest {
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
             return delegate.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return delegate.findWithFirstSkippedInput(sagaId);
         }
 
         @Override

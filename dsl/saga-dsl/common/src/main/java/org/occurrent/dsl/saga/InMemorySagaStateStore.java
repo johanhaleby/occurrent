@@ -262,6 +262,23 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 .toList();
     }
 
+    @Override
+    public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        // One get, so the instance and its records are the ones a single compute left
+        Instance instance = instances.get(sagaId);
+        StoredSaga saga = instance == null ? null : instance.saga();
+        if (saga == null) {
+            return Optional.empty();
+        }
+        String quarantineId = saga.index().quarantineId();
+        SkippedInput first = quarantineId == null ? null : instance.records().getOrDefault(quarantineId, Map.of()).values().stream()
+                .min(SkippedInput.ORDER)
+                .map(record -> copyOf(sagaId, record))
+                .orElse(null);
+        return Optional.of(new StoredSagaWithFirstSkippedInput(saga, first));
+    }
+
     private static final Set<Class<?>> UNCHANGEABLE = Set.of(String.class, Boolean.class, Character.class, Byte.class, Short.class,
             Integer.class, Long.class, Float.class, Double.class, BigInteger.class, BigDecimal.class);
 

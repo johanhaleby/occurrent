@@ -19,8 +19,10 @@ Amended in place for [#918](https://github.com/johanhaleby/occurrent/issues/918)
 holds the event of the input it records, and the write that quarantines an instance records that input as the first
 record. So a release has no head record to write, and `compareAndSaveReleaseStarted` is gone. Three
 transitions are left. Every push saga now quarantines too, and a push saga needs no replica set, so a saga with quarantine on
-can meet a standalone MongoDB server, which a saga on Occurrent's MongoDB subscription models never did. Points 1, 2
-and 3 and the consequences are corrected in place, and point 3 says what the store does on a standalone server.
+can meet a standalone MongoDB server, which a saga on Occurrent's MongoDB subscription models never did. A release
+reads the instance and its first record with `findWithFirstSkippedInput`, which returns both as one write left them,
+instead of reading the instance and then its records. Points 1, 2 and 3 and the consequences are corrected in place,
+and point 3 says what the store does on a standalone server.
 
 ## Context
 
@@ -62,12 +64,16 @@ inserts the instance at version 0 when that input is its first. A release starts
 the first record already.
 
 `SagaStateStore.delete(sagaId)` deletes the instance and the records under its quarantine id in one atomic write too.
-Each transition returns `false` on a version conflict and has then written nothing. The reads,
-`findSkippedInputs` and `findReleasingSagaIds`, stay as they were.
+Each transition returns `false` on a version conflict and has then written nothing. The reads
+`findSkippedInputs` and `findReleasingSagaIds` stay as they were. A release reads with a third,
+`findWithFirstSkippedInput`, which returns the instance and the first record under its quarantine id as one write left
+them.
 
-So records under a quarantine id change only in a write that also changes the instance's version. A release that reads
-the instance, then its records, and wins a compare-and-set on the version it read, saw the records as they were at that
-version. The release's last write relies on that. It turns the instance `ACTIVE` only when no record was there.
+So records under a quarantine id change only in a write that also changes the instance's version. Every write a
+release makes for the instance and record it read expects the version that read returned, so a write that wins was
+made on the records as they were at that version. A read of the instance and a separate read of its records don't give
+that, since each can miss a different write, see point 3. The release's last write turns the instance `ACTIVE` only
+when no record was there, and checks that again inside its atomic write.
 
 ### 2. What this removes
 
@@ -78,9 +84,9 @@ version. The release's last write relies on that. It turns the instance `ACTIVE`
   transition or neither, a release writes no record when it starts, a completion deletes the records with
   the write that completes the instance, and a delete removes the instance and its records together.
 
-A release still reads the instance again after it reads the first record, and replays that record against the second
-read. The compare-and-set would refuse a write based on the first read once another release has applied a record in
-between, but the commands of the replay go out before that write.
+A release reads the instance and its first record once for every record it replays, and replays the record against
+that instance. The commands of the replay go out before the write that applies the record. A release that read before
+another release applied the record sends them again, and its write then loses on the version.
 
 A record whose input the stream marks show as applied is deleted in a write that raises only the instance's version and
 leaves its `updatedAt` as it is. So the fourth case in ADR 178 point 5 stays. The timer poller goes on beside a release
@@ -88,7 +94,8 @@ that spends longer than `timerPollInterval` on such records, and neither dispatc
 
 The skip counter stays the source of each record's sequence number, and a redelivered input whose key is recorded
 already still takes a number that goes unused. `SkippedInput` is a value of a sequence number, a key and the input's
-event, and a store keeps the event with the record and returns it from `findSkippedInputs`, so a release replays the
+event, and a store keeps the event with the record and returns it from `findSkippedInputs` and
+`findWithFirstSkippedInput`, so a release replays the
 record without reading the event store.
 
 ### 3. A transition that returns normally survives a failover
@@ -122,9 +129,20 @@ something a read did not find, and each reads again where nothing is missed:
   read there already returns every write it acknowledged. The store asks the server once, with `hello` when it is
   created, and skips the second read on a standalone server.
 - `compareAndSaveQuarantineEnded` reads the records again inside its transaction and writes nothing while one is
-  there. A release ends the quarantine after a read of the records finds none, and the write deletes every record
-  under the quarantine id, so a record the read missed would be deleted before it was replayed. The transaction reads everything the primary has, and a new primary has every write a
-  majority acknowledged.
+  there. A release ends the quarantine after `findWithFirstSkippedInput` returns no record, and the write deletes every
+  record under the quarantine id, so a record the read missed would be deleted before it was replayed. The transaction
+  reads everything the primary has, and a new primary has every write a majority acknowledged.
+
+Two reads at `majority`, one of the instance and one of its records, can each go to a different primary across a
+failover, and each can miss a different write. A record read after the instance can then be one a later version of the
+instance deleted, and a release that acts on it sends the commands of a record another release applied already. When
+that replay fails, the release quarantines the instance again on a record that is gone, and its compare-and-set on
+the version it read wins. So `findWithFirstSkippedInput` reads the instance and its first record in one transaction of
+the store's at read concern `snapshot`, and both are what the primary had at the same moment. An instance that
+transaction doesn't find is read again at `linearizable`, as `find` does, and read in a new transaction when that read
+finds it. A standalone server refuses the transaction, and every write of a record with it, so its records don't change
+between two reads, and the store reads the instance and then its first record at `majority`. Inside a caller's
+transaction both reads run in it, see point 4.
 
 A transaction aborted with the `TransientTransactionError` label runs again through the store's `RetryStrategy`. A
 commit that ends with `UnknownTransactionCommitResult` is committed again through the same strategy. The transaction
@@ -194,7 +212,7 @@ In a Spring transaction of another resource where no MongoDB transaction has sta
 does outside a transaction. It reads through the driver rather than the template there, since a template with
 `SessionSynchronization.ALWAYS` would start a MongoDB transaction for the read, and the read would see its snapshot.
 
-Inside a transaction the store joins, `find` and `findWithoutState` read at the transaction's snapshot, which misses an instance written after the snapshot began. A
+Inside a transaction the store joins, `find`, `findWithoutState` and `findWithFirstSkippedInput` read at the transaction's snapshot, which misses an instance written after the snapshot began. A
 found instance needs nothing more, since the executor writes it back through a compare-and-set, and a write inside the
 transaction to an instance changed after its snapshot fails with a write conflict. An absence has no such write, and no
 read in the transaction can see past its snapshot. So on an absence the store inserts a document with the
@@ -242,7 +260,8 @@ the concern is. The SPI and the store's javadoc say that the caller's commit dec
   that read waits for a majority as a write does. The first input of a new instance waits for it, and a found
   instance costs one read as before. A standalone server gets one read.
 - A transition costs a transaction, a few more round trips than a single-document write. Only a quarantined instance and
-  a release run them. The live path of an `ACTIVE` instance stays one write.
+  a release run them. The live path of an `ACTIVE` instance stays one write. A release also reads in a transaction, once
+  for every record it replays.
 - A `SpringMongoSagaStateStore` built on a `MongoOperations` that isn't a `MongoTemplate`, such as a wrapper or a mock,
   fails at construction.
 - A custom store that implements `SagaStateStoreSkippedInputs` has to write the instance and its records atomically. One

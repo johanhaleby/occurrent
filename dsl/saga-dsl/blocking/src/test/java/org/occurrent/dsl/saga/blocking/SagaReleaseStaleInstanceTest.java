@@ -48,12 +48,12 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * A release reads the instance, then the records. Another release can apply the first record in between, in a write
- * that changes the version and deletes the record, so the records read no longer holds the record the instance read was
- * taken before. The release must read the instance again before it replays what the records read gave it, or it computes
- * and dispatches the next record's commands from a state that lacks the first record's effect.
+ * A release replays the first record of the pair it read, and the pair can be older than the store when another release
+ * applied that record since. The write that applies the record then loses, and the release reads the pair again before
+ * it replays the next record, so it never computes and dispatches that record's commands from a state that lacks the
+ * first record's effect.
  */
-@DisplayName("A release that another release overtakes between its instance read and its records read")
+@DisplayName("A release whose read of the instance and its first record another release overtakes")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaReleaseStaleInstanceTest {
 
@@ -129,7 +129,7 @@ class SagaReleaseStaleInstanceTest {
     }
 
     @Test
-    void does_not_dispatch_the_commands_of_the_next_record_from_the_state_it_read_before_the_first_record_was_applied() {
+    void does_not_dispatch_the_commands_of_the_next_record_from_the_pair_it_read_before_the_first_record_was_applied() {
         OvertakenStore overtaken = new OvertakenStore();
         SagaExecution<OrderEvent, Order, Object> execution = execution(overtaken);
         execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
@@ -150,7 +150,7 @@ class SagaReleaseStaleInstanceTest {
         SagaEnvelope<Order> after = envelopes.find(ORDER).orElseThrow();
         String evidence = "released " + result + ", the other release ran " + overtaken.otherReleaseRan + ", items " + after.state().items() + ", dispatched " + dispatched;
         assertAll(
-                () -> assertThat(overtaken.otherReleaseRan).as("the other release applied the first record between the two reads. " + evidence).isTrue(),
+                () -> assertThat(overtaken.otherReleaseRan).as("the other release applied the first record after the pair was read. " + evidence).isTrue(),
                 () -> assertThat(dispatched).as("no command is dispatched from the state that lacks the first record's effect. " + evidence)
                         .noneMatch(command -> command instanceof Pack pack && pack.item().endsWith(STALE)),
                 () -> assertThat(result).as(evidence).isEqualTo(ReleaseResult.RELEASED),
@@ -220,27 +220,32 @@ class SagaReleaseStaleInstanceTest {
         }
 
         @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return inMemory.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
         public void delete(String sagaId) {
             inMemory.delete(sagaId);
         }
     }
 
-    // The first read of the records is the one that comes after the release read the instance, since starting the release
-    // reads no records. Another release runs to its first replay write just before it, so the records it gives back have
-    // lost their first record while the instance that was read has not
+    // The second pair read is the first one of the replay, since starting the release reads one first. Another release
+    // runs to its first replay write just after that read, and this release gets the pair as it was before
     private final class OvertakenStore extends Delegating {
         volatile Runnable otherRelease = () -> {
         };
         volatile boolean otherReleaseRan = false;
-        private final AtomicBoolean overtaken = new AtomicBoolean();
+        private final AtomicInteger pairReads = new AtomicInteger();
 
         @Override
-        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-            if (overtaken.compareAndSet(false, true)) {
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            Optional<StoredSagaWithFirstSkippedInput> read = super.findWithFirstSkippedInput(sagaId);
+            if (pairReads.incrementAndGet() == 2) {
                 otherRelease.run();
                 otherReleaseRan = true;
             }
-            return super.findSkippedInputs(sagaId, quarantineId, limit);
+            return read;
         }
     }
 

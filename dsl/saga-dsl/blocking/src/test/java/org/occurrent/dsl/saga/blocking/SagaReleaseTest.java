@@ -576,7 +576,7 @@ class SagaReleaseTest {
                     () -> assertThat(thrown).isInstanceOf(IllegalStateException.class)
                             .hasMessageContaining("'" + streamKey(stopped) + "'")
                             .hasMessageContaining("returned no record of the input")
-                            .hasMessageContaining("in " + CONFIG.maxCasAttempts() + " reads"),
+                            .hasMessageContaining("findWithFirstSkippedInput"),
                     () -> assertThat(after.status()).as("still quarantined").isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(after.isReleasing()).as("the release did not start").isFalse(),
                     () -> assertThat(after.version()).as("nothing was written").isEqualTo(before.version()),
@@ -599,40 +599,6 @@ class SagaReleaseTest {
                     () -> assertThat(after.isReleasing()).as("the release did not start").isFalse(),
                     () -> assertThat(after.version()).as("nothing was written").isEqualTo(before.version()),
                     () -> assertThat(recordedKeys()).as("the record is left").containsExactly("o1@99")
-            );
-        }
-
-        @Test
-        void an_instance_whose_record_of_the_input_it_stopped_on_is_written_after_a_read_that_missed_it_is_released_by_the_next_attempt_and_applies_it_once() {
-            CloudEvent stopped = quarantinedWithoutItsRecords();
-            failing.clear();
-            store.afterNextEmptyRead(() -> recordUnder(ORDER, instance().quarantineId(), new SkippedInput(0, streamKey(stopped), stopped)));
-
-            AtomicReference<@Nullable ReleaseResult> result = new AtomicReference<>();
-            Throwable thrown = catchThrowable(() -> result.set(execution.release(ORDER)));
-
-            assertAll(
-                    () -> assertThat(thrown).as("the release is not refused, since the next read finds the record").isNull(),
-                    () -> assertThat(result.get()).isEqualTo(ReleaseResult.RELEASED),
-                    () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
-                    () -> assertThat(items()).as("the input it stopped on is applied").containsExactly("poison"),
-                    () -> assertThat(packed()).as("once").containsExactly(new Pack(ORDER, "poison"))
-            );
-        }
-
-        @Test
-        void a_record_written_after_the_only_attempt_read_none_ends_in_a_concurrency_exception_and_not_in_a_refusal() {
-            CloudEvent stopped = quarantinedWithoutItsRecords();
-            failing.clear();
-            store.afterNextEmptyRead(() -> recordUnder(ORDER, instance().quarantineId(), new SkippedInput(0, streamKey(stopped), stopped)));
-            SagaExecution<OrderEvent, Order, OrderCommand> oneAttempt = execution(new SagaRunnerConfig(CONFIG.timerPollInterval(), CONFIG.timerBatchLimit(), 1,
-                    CONFIG.redeliveryDetection(), CONFIG.quarantineAfter(), CONFIG.reorderWindow()));
-
-            Throwable thrown = catchThrowable(() -> oneAttempt.release(ORDER));
-
-            assertAll(
-                    () -> assertThat(thrown).as("the instance changed after the records were read, so the records read may be old").isInstanceOf(SagaConcurrencyException.class),
-                    () -> assertThat(instance().isReleasing()).isFalse()
             );
         }
 
@@ -1244,7 +1210,7 @@ class SagaReleaseTest {
             assertAll(
                     () -> assertThat(thrown.get()).as("what the release threw").isNull(),
                     () -> assertThat(result).isEqualTo(ReleaseResult.NOT_FOUND),
-                    () -> assertThat(dispatched).as("the commands dispatched").isEmpty()
+                    () -> assertThat(dispatched).as("the commands dispatched, the record it read is dispatched before the write that finds the instance gone").containsExactly(new Pack(ORDER, "poison"))
             );
         }
 
@@ -1278,7 +1244,7 @@ class SagaReleaseTest {
         }
 
         @Test
-        void a_release_whose_instance_another_call_released_after_it_read_the_record_returns_released_and_does_not_replay_the_record() {
+        void a_release_whose_instance_another_call_released_after_it_read_the_record_returns_released_and_does_not_apply_the_record_again() {
             quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             failing.clear();
             now.set(start.plus(Duration.ofHours(1)));
@@ -1298,12 +1264,12 @@ class SagaReleaseTest {
                     () -> assertThat(store.deletedRecords.subList(deletesWhenOtherCallEnded.get(), store.deletedRecords.size()))
                             .as("the records the release deleted after the other call released the instance").isEmpty(),
                     () -> assertThat(items()).containsExactly("poison", "a", "b"),
-                    () -> assertThat(packed()).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"))
+                    () -> assertThat(packed()).as("the record it read is dispatched once more before its write loses").containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"), new Pack(ORDER, "poison"))
             );
         }
 
         @Test
-        void a_release_whose_instance_another_call_released_and_quarantined_again_under_a_new_quarantine_id_after_it_read_the_record_does_not_replay_the_record_of_the_old_id() {
+        void a_release_whose_instance_another_call_released_and_quarantined_again_under_a_new_quarantine_id_after_it_read_the_record_does_not_apply_the_record_of_the_old_id_again() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             failing.clear();
             now.set(start.plus(Duration.ofHours(1)));
@@ -1336,7 +1302,7 @@ class SagaReleaseTest {
                             .as("the records the release deleted after the other call quarantined the instance under the new id")
                             .noneMatch(deleted -> deleted.startsWith(oldQuarantineId + "/")),
                     () -> assertThat(items()).containsExactly("poison", "a", "b", "c"),
-                    () -> assertThat(packed()).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"), new Pack(ORDER, "c"))
+                    () -> assertThat(packed()).as("the record it read is dispatched once more before its write loses").containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"), new Pack(ORDER, "poison"), new Pack(ORDER, "c"))
             );
         }
     }
@@ -2542,18 +2508,6 @@ class SagaReleaseTest {
         }
 
         @Test
-        void the_release_is_still_releasing_and_the_failure_of_the_instance_read_is_suppressed_on_the_failure_of_the_input() {
-            Throwable thrown = releaseWhoseFailureCannotBeRecordedBecause(() -> store.findWithoutStateFailure = new IllegalStateException("cannot read without state"));
-
-            assertAll(
-                    () -> assertThat(thrown).isNull(),
-                    () -> assertThat(result).hasValue(ReleaseResult.STILL_RELEASING),
-                    () -> assertThat(suppressedOnTheFailureOfTheReleasedInput()).containsExactly("cannot read without state"),
-                    () -> assertThat(instance().isReleasing()).isTrue()
-            );
-        }
-
-        @Test
         void the_release_is_still_releasing_and_the_failure_of_the_record_read_is_suppressed_on_the_failure_of_the_input() {
             Throwable thrown = releaseWhoseFailureCannotBeRecordedBecause(() -> store.findSkippedInputsFailure = new IllegalStateException("cannot read the records"));
 
@@ -2933,6 +2887,11 @@ class SagaReleaseTest {
 
         @Override
         public Optional<StoredSaga> find(String sagaId) {
+            failsTheInstanceReadIfAsked(sagaId);
+            return delegate.find(sagaId);
+        }
+
+        private void failsTheInstanceReadIfAsked(String sagaId) {
             RuntimeException failure = findFailure;
             if (failure != null) {
                 throw failure;
@@ -2946,7 +2905,6 @@ class SagaReleaseTest {
             if (sagaId.equals(findRunsOutOfMemoryFor)) {
                 throw new OutOfMemoryError("Java heap space");
             }
-            return delegate.find(sagaId);
         }
 
         @Override
@@ -3055,6 +3013,12 @@ class SagaReleaseTest {
 
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+            return delegate.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            failsTheInstanceReadIfAsked(sagaId);
             RuntimeException failure = findSkippedInputsFailure;
             if (failure != null) {
                 throw failure;
@@ -3063,8 +3027,9 @@ class SagaReleaseTest {
                 // A release that reads a record it cannot delete reads it again, and a test that waits for that never ends
                 throw new AssertionError("The release read the records more than " + MAX_RECORD_READS + " times, so it is not getting anywhere");
             }
-            List<SkippedInput> found = delegate.findSkippedInputs(sagaId, quarantineId, limit);
-            if (found.isEmpty()) {
+            Optional<StoredSagaWithFirstSkippedInput> found = delegate.findWithFirstSkippedInput(sagaId);
+            boolean noRecord = found.map(read -> read.firstSkippedInput() == null).orElse(true);
+            if (noRecord) {
                 run(afterNextEmptyRead);
             } else if (nonEmptyReadsToLetPass.get() > 0 && afterNextNonEmptyRead.get() != null) {
                 nonEmptyReadsToLetPass.decrementAndGet();

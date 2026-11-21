@@ -26,6 +26,7 @@ import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.FindOneAndDeleteOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
@@ -56,6 +57,7 @@ import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
@@ -120,7 +122,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * {@code timeoutMS} of 0 a single write still fails after 10 seconds, and a commit waits without limit. A server without
  * journaling refuses {@code j: true}, and the store throws an {@link IllegalStateException}.
  * <p>
- * Every read the saga acts on ({@link #find}, {@link #findWithoutState}, {@link #findWithDueTimers},
+ * Every other read the saga acts on ({@link #find}, {@link #findWithoutState}, {@link #findWithDueTimers},
  * {@link #findByStatus}, {@link #findReleasingSagaIds} and {@link #findSkippedInputs}) goes to the primary at read
  * concern {@code majority}, so it returns only writes a majority of the replica set has. A write that reached the primary
  * but not a majority reads as absent until it reaches a majority or a failover rolls it back, so the saga never
@@ -133,6 +135,14 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * The transactions below read at read concern {@code snapshot}, everything the primary has when the transaction
  * starts, and their commit at {@code majority} returns only once a majority has all of it. A release ends the
  * quarantine of an instance only in such a transaction, one that finds no skipped input left or completes the instance.
+ * <p>
+ * A release reads with {@link #findWithFirstSkippedInput}, which reads the instance and its first skipped input in one
+ * transaction of the store's at read concern {@code snapshot}, so both are what the primary had at the same moment. An
+ * instance that read doesn't find is read again at read concern {@code linearizable}, as {@link #find} does, and when
+ * that read finds it the store reads both again in a new transaction. A standalone server refuses transactions, and so
+ * every write of a skipped input there, so the store reads the instance and then its first skipped input at read
+ * concern {@code majority}. Inside a transaction of the caller's both reads run in it, and an absent instance is decided
+ * as for {@link #find}, see below.
  * <p>
  * The three writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
@@ -167,7 +177,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * outside a {@code MongoTransactionManager} transaction, and the store doesn't retry them there either, whatever a
  * {@code RetryStrategy} you implement yourself retries.
  * <p>
- * Inside a transaction of the caller's, {@link #find} and {@link #findWithoutState} read at the transaction's snapshot,
+ * Inside a transaction of the caller's, {@link #find}, {@link #findWithoutState} and {@link #findWithFirstSkippedInput}
+ * read at the transaction's snapshot,
  * which misses an instance written after the snapshot began. When the read finds no instance, the store inserts a
  * document that holds only the saga's id and deletes it again in the same transaction, and the server decides whether
  * that insert conflicts. An instance another writer wrote after the snapshot began makes the insert fail with a
@@ -176,7 +187,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * leave no document behind when the transaction commits, and a change stream on the collection may see them. The
  * collection must accept a document that holds only {@code _id}, so a validator that requires other fields makes such a
  * read of an absent instance fail. In a Spring transaction of another resource where no MongoDB transaction has started,
- * the two methods read as they do outside a transaction.
+ * the three methods read as they do outside a transaction.
  * <p>
  * {@link #findReleasingSagaIds(String, int)} finds the instances that have {@code failureReleasedAt} set. The inputs a
  * quarantined instance skips are stored one document each, in a collection next to the instances named after it with
@@ -673,6 +684,71 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         });
     }
 
+    // On a replica set or a mongos both reads run in one transaction of the store's, at read concern snapshot, so they
+    // see the instance and its records as one write left them. Two reads at read concern majority can each go to
+    // another primary across a failover. Inside a transaction of the caller's both reads run in it. A standalone server
+    // refuses the transactions every write of a record takes, so its records don't change and two plain reads do
+    @Override
+    public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(sagaId, "sagaId cannot be null");
+            Query byId = Query.query(where(ID).is(sagaId));
+            if (joinsCallersTransaction()) {
+                MongoDatabase database = MongoDatabaseUtils.getDatabase(databaseFactory);
+                return withFirstSkippedInput(findInCallersTransaction(sagaId, byId), document -> firstSkippedInput(database, sagaId, document));
+            }
+            if (deployment == MongoDeployment.OTHER) {
+                Document found = retried(() -> readInstance(byId, ReadConcern.MAJORITY));
+                return withFirstSkippedInput(found, document -> retried(() -> firstSkippedInput(
+                        MongoDatabaseUtils.getDatabase(databaseFactory).withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary()), sagaId, document)));
+            }
+            Optional<StoredSagaWithFirstSkippedInput> found = inSnapshot(sagaId, byId);
+            // An absence in the snapshot is read again at read concern linearizable, as find does. An instance found then
+            // is read in a new snapshot, which begins after that read and so has it
+            if (found.isPresent() || retried(() -> readInstance(byId, ReadConcern.LINEARIZABLE)) == null) {
+                return found;
+            }
+            return inSnapshot(sagaId, byId);
+        });
+    }
+
+    private Optional<StoredSagaWithFirstSkippedInput> inSnapshot(String sagaId, Query byId) {
+        // Decoded after the transaction, so a stored instance that no longer reads back throws once instead of being retried
+        Document[] read = retried(() -> {
+            try {
+                return Objects.requireNonNull(transactions.execute(status -> {
+                    MongoDatabase database = MongoDatabaseUtils.getDatabase(databaseFactory);
+                    Document found = instances(database).find(byId.getQueryObject()).first();
+                    return new Document[]{found, found == null ? null : firstSkippedInput(database, sagaId, found)};
+                }));
+            } catch (RuntimeException e) {
+                throw translated(e);
+            }
+        });
+        return withFirstSkippedInput(read[0], document -> read[1]);
+    }
+
+    private Optional<StoredSagaWithFirstSkippedInput> withFirstSkippedInput(@Nullable Document instance, Function<Document, @Nullable Document> firstSkippedInput) {
+        if (instance == null) {
+            return Optional.empty();
+        }
+        Document first = firstSkippedInput.apply(instance);
+        return Optional.of(new StoredSagaWithFirstSkippedInput(toStoredSaga(instance), first == null ? null : toSkippedInput(first)));
+    }
+
+    private @Nullable Document firstSkippedInput(MongoDatabase database, String sagaId, Document instance) {
+        String quarantineId = instance.getString(FAILURE_QUARANTINE_ID);
+        if (quarantineId == null) {
+            return null;
+        }
+        try {
+            return skippedInputs(database).find(Filters.and(Filters.eq(SKIPPED_SAGA_ID, sagaId), Filters.eq(SKIPPED_QUARANTINE_ID, quarantineId)))
+                    .sort(Sorts.ascending(SKIPPED_SEQ, SKIPPED_KEY)).limit(1).first();
+        } catch (RuntimeException e) {
+            throw translated(e);
+        }
+    }
+
     private static SkippedInput toSkippedInput(Document document) {
         CloudEventBuilder event = CloudEventBuilder.from(CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8)));
         Document extensions = document.get(SKIPPED_EXTENSIONS, Document.class);
@@ -856,10 +932,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             Objects.requireNonNull(saga, "saga cannot be null");
             Document document = toDocument(saga);
             Document filter = quarantineFilter(saga.sagaId(), quarantineId);
-            // A release ends the quarantine once its read of the records found none. That read can miss a record right
-            // after a failover, so the transaction reads the records again. It reads everything the primary has, which
-            // includes every write a majority acknowledged. A record written after that read changes the instance too, so
-            // the replaceOne then conflicts and the transaction runs again
+            // The quarantine ends only with no record left, checked in the transaction against everything the primary
+            // has, whatever the release read before. A record written after that check changes the instance too, so the
+            // replaceOne then conflicts and the transaction runs again
             return transition(database -> skippedInputs(database).find(filter).first() == null
                                           && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
                     database -> skippedInputs(database).deleteMany(filter));

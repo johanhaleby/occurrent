@@ -77,6 +77,32 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
         return store.findWithoutState(sagaId).map(codec::decodeWithoutState);
     }
 
+    /**
+     * The instance and its first skipped input as one write left them, see
+     * {@link SagaStateStoreSkippedInputs#findWithFirstSkippedInput(String)}, with the instance decoded whole.
+     */
+    public Optional<WithFirstSkippedInput<S>> findWithFirstSkippedInput(SagaStateStoreSkippedInputs records, String sagaId) {
+        requireNonNull(records, "records cannot be null");
+        requireNonNull(sagaId, "sagaId cannot be null");
+        return records.findWithFirstSkippedInput(sagaId).map(read -> new WithFirstSkippedInput<>(codec.decode(read.saga()), read.firstSkippedInput()));
+    }
+
+    /** As {@link #findWithFirstSkippedInput}, with the instance decoded without reading its state. */
+    public Optional<WithFirstSkippedInput<S>> findWithFirstSkippedInputWithoutState(SagaStateStoreSkippedInputs records, String sagaId) {
+        requireNonNull(records, "records cannot be null");
+        requireNonNull(sagaId, "sagaId cannot be null");
+        return records.findWithFirstSkippedInput(sagaId).map(read -> new WithFirstSkippedInput<>(codec.decodeWithoutState(read.saga()), read.firstSkippedInput()));
+    }
+
+    /**
+     * An instance and the first record under its quarantine id, read together.
+     *
+     * @param envelope the instance
+     * @param first    the first record under the quarantine id of {@code envelope}, or {@code null} when there is none
+     */
+    public record WithFirstSkippedInput<S extends @Nullable Object>(SagaEnvelope<S> envelope, @Nullable SkippedInput first) {
+    }
+
     public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
         sameInstance(sagaId, envelope);
         forgetOnInsert(sagaId, expectedVersion);

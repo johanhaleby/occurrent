@@ -1024,7 +1024,7 @@ quarantine on whose `SagaStateStore` bean doesn't implement it fails at startup 
 interface and `occurrent.saga.quarantine-enabled=false`.
 
 A store that implements it keeps the skipped inputs, each with its event, and returns the event from
-`findSkippedInputs`. A release converts the event again, so a store returns the event as it was delivered, with the
+`findSkippedInputs` and `findWithFirstSkippedInput`. A release converts the event again, so a store returns the event as it was delivered, with the
 same attributes, the same data class, the same values of the same Java classes at any depth and the same extension
 classes. A map or a list inside the data may come back as another implementation of `Map` or `List`. A store that
 can't hold an event that way throws an `IllegalStateException` from `compareAndSaveSkipped` before it writes anything.
@@ -1039,13 +1039,17 @@ returns `false` and writes neither while a record is under the quarantine id. Th
 and with an expected version of 0 it inserts an instance the store doesn't hold yet. In `delete(sagaId)` it deletes the records under
 the quarantine id of the instance it removes, in the same atomic write as the instance. A call that returns normally
 has to have made its write survive a failover, since the runner acknowledges the input right after it. It implements
-`findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
+`findWithFirstSkippedInput(sagaId)`, which a release reads with. It returns the instance and the first record under
+its quarantine id, by `seq` and then by `key`, as one write left them, so a read of the instance followed by a read of
+its records doesn't do, since each can miss a different write. A store that keeps both in one table can read them in
+one transaction that sees both as they were at the same moment. An empty result has to hold every write acknowledged before the call started, as for
+`find`. It implements `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
 set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
 poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
 one listed and from the first id again once a poll lists fewer than `limit`. It implements `requireAtomicTransitions()`,
 which `SagaRunner.run` calls when quarantine is on, before the saga gets its first input. It throws an
 `IllegalStateException` when the store can't make those writes atomic in the database it's connected to, and does
-nothing otherwise. None of the six methods has a default.
+nothing otherwise. None of the seven methods has a default.
 
 A store that keeps the `StoredSaga` it's given as it is keeps the quarantine id and the skip count with it. A store
 that maps each field to a column of its own has to persist both, or reading an instance it quarantined throws an

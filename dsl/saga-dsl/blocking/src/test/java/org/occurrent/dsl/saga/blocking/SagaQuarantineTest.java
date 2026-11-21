@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.StoredSaga;
@@ -1636,6 +1637,11 @@ class SagaQuarantineTest {
         }
 
         @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return delegate.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
             return delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
         }
@@ -1759,6 +1765,11 @@ class SagaQuarantineTest {
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
             return delegate.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return delegate.findWithFirstSkippedInput(sagaId);
         }
 
     }
