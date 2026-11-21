@@ -778,6 +778,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
     }
 
+    // The downgrade in the upgrade guide and the runbook writes this down as the way to rebuild an event from a dump of the
+    // records, and SkippedInputExportTest checks that the two give the same event, so a change here is made there too
     private static SkippedInput toSkippedInput(Document document) {
         CloudEventBuilder event = CloudEventBuilder.from(CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8)));
         Document extensions = document.get(SKIPPED_EXTENSIONS, Document.class);
