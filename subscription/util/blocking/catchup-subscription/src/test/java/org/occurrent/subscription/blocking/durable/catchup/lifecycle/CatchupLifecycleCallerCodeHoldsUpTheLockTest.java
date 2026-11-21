@@ -55,6 +55,7 @@ class CatchupLifecycleCallerCodeHoldsUpTheLockTest {
     private static final String X = "x";
     private static final String Y = "y";
     private static final String Z = "z";
+    private static final String W = "w";
     // The fix answers in about LIFECYCLE_WAIT (10 s), so a call that has not ended after this is a hang
     private static final Duration BOUND = Duration.ofSeconds(30);
     private static final Duration WAIT = Duration.ofSeconds(10);
@@ -68,6 +69,11 @@ class CatchupLifecycleCallerCodeHoldsUpTheLockTest {
     private volatile CountDownLatch functionMayReturn = new CountDownLatch(0);
     private final CountDownLatch wrappedShutdownEntered = new CountDownLatch(1);
     private final CountDownLatch wrappedShutdownMayReturn = new CountDownLatch(1);
+    private final CountDownLatch functionHoldsTheLock = new CountDownLatch(1);
+    private final CountDownLatch liveActionHandedACallOver = new CountDownLatch(1);
+    private final CountDownLatch liveActionReturned = new CountDownLatch(1);
+    private final AtomicBoolean liveActionSawTheWrappedShutdown = new AtomicBoolean();
+    private final AtomicReference<@Nullable Throwable> thrownByTheLiveAction = new AtomicReference<>();
     private final AtomicBoolean functionAsked = new AtomicBoolean();
     private final AtomicBoolean callEndedWhileTheFunctionWaited = new AtomicBoolean();
     private final AtomicReference<@Nullable Throwable> thrownByTheAction = new AtomicReference<>();
@@ -79,6 +85,7 @@ class CatchupLifecycleCallerCodeHoldsUpTheLockTest {
     void shut_down() throws Exception {
         functionMayReturn.countDown();
         wrappedShutdownMayReturn.countDown();
+        liveActionHandedACallOver.countDown();
         CompletableFuture.runAsync(model::shutdown, daemonExecutor("shutdown-of-the-model")).get(30, TimeUnit.SECONDS);
     }
 
@@ -220,6 +227,77 @@ class CatchupLifecycleCallerCodeHoldsUpTheLockTest {
         assertThat(second.endedWithin(BOUND)).as("whether the second shutdown returned once the handed one had shut the wrapped model down").isTrue();
         assertThat(second.thrown()).as("what the second shutdown threw").isNull();
         assertTheWrappedModelIsShutDownOnce();
+    }
+
+    @Test
+    void a_stop_handed_over_from_a_live_action_does_not_keep_a_held_up_shutdown_from_shutting_the_wrapped_model_down_when_the_function_returns() throws Exception {
+        // Given a function that holds the model lock on the lifecycle thread, and waits for a shutdown once a live action of w has handed a stop over
+        model.subscribe(X, null, StartAt.now(), event -> {
+        });
+        model.pauseSubscription(X);
+        live.beforeShutdown = wrappedShutdownEntered::countDown;
+        functionMayReturn = new CountDownLatch(1);
+        model.subscribe(W, null, StartAt.now(), event -> {
+            if (!event.getId().equals("live-2")) {
+                return;
+            }
+            try {
+                model.stop();
+                liveActionHandedACallOver.countDown();
+                liveActionSawTheWrappedShutdown.set(wrappedShutdownEntered.await(30, TimeUnit.SECONDS));
+            } catch (Throwable e) {
+                thrownByTheLiveAction.set(e);
+            } finally {
+                liveActionReturned.countDown();
+            }
+        });
+        StartAt waits = StartAt.dynamic(() -> {
+            if (functionAsked.compareAndSet(false, true)) {
+                functionHoldsTheLock.countDown();
+                awaitLatch(liveActionHandedACallOver);
+                Call started = new Call("call-the-function-waits-for", model::shutdown);
+                callOfTheFunction.set(started);
+                callEndedWhileTheFunctionWaited.set(started.endedWithin(BOUND));
+                functionReturned.countDown();
+                awaitLatch(functionMayReturn);
+            }
+            return StartAt.now();
+        });
+        model.subscribe(Y, null, StartAt.now(), event -> {
+            if (!event.getId().equals("live-1")) {
+                return;
+            }
+            try {
+                // The resume is handed over, so the subscribe of z runs behind it on the lifecycle thread and not on this one
+                handleOfX.set(model.resumeSubscription(X));
+                handleOfZ.set(model.subscribePaused(Z, null, waits, e -> {
+                }));
+            } catch (Throwable e) {
+                thrownByTheAction.set(e);
+            } finally {
+                actionReturned.countDown();
+            }
+        });
+        daemonExecutor("live-delivery-1").execute(() -> live.publish(cloudEvent("live-1")));
+        assertThat(functionHoldsTheLock.await(10, TimeUnit.SECONDS)).as("whether the function of z holds the model lock on the lifecycle thread").isTrue();
+        // Delivered to w alone and without the monitor of the live model, which publish holds while the action runs, since the
+        // subscribe of z the lifecycle thread runs once the function returns needs it
+        daemonExecutor("live-delivery-2").execute(() -> live.subscriptions.get(W).receive(cloudEvent("live-2")));
+
+        // When the shutdown has thrown after the wait, and then the function returns
+        awaitTheFunction();
+        assertTheShutdownThrewAfterTheWait(callOfTheFunction.get());
+        assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got while the function held the lock").isZero();
+        assertThat(liveActionReturned.getCount()).as("whether the live action of w still waits for the wrapped model's shutdown").isEqualTo(1);
+        functionMayReturn.countDown();
+
+        // Then the wrapped model is shut down once, with no further call, and the live action returns
+        await().atMost(Duration.ofSeconds(8)).untilAsserted(() -> assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got once the function returned, while the live action still waited for it").isEqualTo(1));
+        assertTheWrappedModelIsShutDownOnce();
+        assertThat(liveActionReturned.await(10, TimeUnit.SECONDS)).as("whether the live action of w returned once the wrapped model was shut down").isTrue();
+        assertThat(liveActionSawTheWrappedShutdown.get()).as("whether the live action of w saw the wrapped model shut down before it gave up waiting").isTrue();
+        assertThat(thrownByTheLiveAction.get()).as("what the live action of w threw").isNull();
+        assertThat(thrownByTheAction.get()).as("what the action of y threw").isNull();
     }
 
     // The action of y, a live action, hands the resume of x over and then subscribes z paused behind it, so z subscribes on

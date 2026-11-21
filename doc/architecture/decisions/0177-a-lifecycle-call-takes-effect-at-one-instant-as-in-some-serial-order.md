@@ -217,21 +217,28 @@ marks the model as shutting down before it waits for the lock, as described belo
 but the wrapped model isn't shut down yet. A `shutdown()` that found a `start(..)` inside the wrapped model's `start(..)`
 has also shut the wrapped model down without the lock to end that start.
 
-Before it throws, the `shutdown()` hands the lifecycle thread a shutdown of the wrapped model under the model lock. That
-one waits for the lock with no deadline, so it runs once the marked code has returned, and no further call is needed.
-The exception says so. This matters when the Spring context closes. The Spring Boot starter builds the MongoDB,
-durable, catch-up and competing consumer models inside one bean method, and the bean's destroy method is the competing
-consumer model's `shutdown()`, which calls the catch-up model's `shutdown()`. No other destroy method reaches the
-models inside, so nothing calls `shutdown()` again. When the marked code never returns,
-the handed shutdown waits for good, and so does every call handed to the lifecycle thread after it, so the wrapped
-model goes on running. A second `shutdown()` held up the same way before the handed one has run hands over no second
-one. A `shutdown()` that gets the lock before the handed one shuts the wrapped model down itself, and the handed one
-then doesn't call it again. One that gets the lock after the handed one returns without calling the wrapped model again, so the wrapped model is shut
-down once either way. A `start(..)`, `stop()` or `resumeSubscription(id)` from another thread made before the handed one
-has run waits behind it as behind every handed call, and then changes nothing, since a `shutdown()` has begun. A
-`start(..)` on a thread that holds the lock meanwhile doesn't call the wrapped model's `start(..)`, as with any
-`shutdown()` under way. The lifecycle thread logs an `ERROR` for what the handed shutdown throws, and the next
-`shutdown()` calls the wrapped model's `shutdown()` again.
+Before it throws, the `shutdown()` starts a thread of its own that shuts the wrapped model down under the model lock.
+That thread waits for the lock with no deadline and for nothing else, so it runs once the marked code has returned, and
+no further call is needed. The exception says so. This matters when the Spring context closes. The Spring Boot starter
+builds the MongoDB, durable, catch-up and competing consumer models inside one bean method, and the bean's destroy
+method is the competing consumer model's `shutdown()`, which calls the catch-up model's `shutdown()`. No other destroy
+method reaches the models inside, so nothing calls `shutdown()` again.
+
+The handed shutdown doesn't run on the lifecycle thread, because a call queued there ahead of it can wait for something
+that waits for this shutdown. Each call an action hands over waits on the lifecycle thread for that action to return,
+whether it is a `start(..)`, `stop()`, `stopReplay()`, `resumeReplay()`, `pauseSubscription(id)` or
+`cancelSubscription(id)`, a resume or a subscribe, or a `shutdown()`. An action that hands over a `stop()` and then waits
+for the wrapped model to be shut down would keep a handed shutdown queued behind that `stop()` from ever running.
+
+When the marked code never returns, the handed shutdown waits for good, so the wrapped model goes on running. A second
+`shutdown()` held up the same way before the handed one has run hands over no second one. A `shutdown()` that gets the
+lock before the handed one shuts the wrapped model down itself, and the handed one then doesn't call it again. One that
+gets the lock after the handed one returns without calling the wrapped model again, so the wrapped model is shut down
+once either way. A `start(..)`, `stop()` or `resumeSubscription(id)` from another thread made before the handed one has
+returned runs on the lifecycle thread behind the calls queued there, and then changes nothing, since a `shutdown()` has
+begun. A `start(..)` on a thread that holds the lock meanwhile doesn't call the wrapped model's `start(..)`, as with any
+`shutdown()` under way. The handed shutdown's thread logs an `ERROR` for what it throws, and the next `shutdown()` calls
+the wrapped model's `shutdown()` again.
 
 A `shutdown()` held up by the marked code doesn't shut the wrapped model down without the lock. The marked code can
 be inside the wrapped model, which can ask the function again in its own `subscribe(..)` and register the subscription
@@ -334,16 +341,16 @@ catch-up model isn't meant to be started again.
 
 No thread waits for itself under these rules. A replay thread and a thread holding a claim of these children never take
 the model lock, since they throw or hand the call to the lifecycle thread. A thread running an action of these children
-doesn't take it for a call made in that action. So only a caller's own thread and the lifecycle thread take it. The
+doesn't take it for a call made in that action. So only a caller's own thread, the lifecycle thread and the thread of a handed shutdown take it. The
 actions a caller's thread waits for while it holds the lock run on other threads. The lifecycle thread takes the lock
 only after the action it waits for has returned, and no thread holding the lock waits for the lifecycle thread. A
 caller's thread that waits for the lifecycle thread holds neither the model lock nor a claim and runs no action of the
 children, so the actions the calls ahead of it wait for run on other threads. Only an action that waits for that
 caller's thread, after it handed a call over, never returns. A `shutdown()` that calls the wrapped model's `shutdown()`
-without the lock waits for nothing the start holds. The shutdown a held-up `shutdown()` hands over waits on the
-lifecycle thread for the model lock with no deadline. The marked code then holds the lock on another thread, or ran on
-the lifecycle thread ahead of it and has returned. A call from another thread queued behind it gives up after 10
-seconds while the marked code runs, as above.
+without the lock waits for nothing the start holds. The shutdown a held-up `shutdown()` hands over waits on
+its own thread for the model lock with no deadline, and for nothing else. The marked code holds the lock on another
+thread, the lifecycle thread included, so the handed shutdown runs once that code returns. A call from another thread
+queued on the lifecycle thread meanwhile gives up after 10 seconds while the marked code runs, as above.
 
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).

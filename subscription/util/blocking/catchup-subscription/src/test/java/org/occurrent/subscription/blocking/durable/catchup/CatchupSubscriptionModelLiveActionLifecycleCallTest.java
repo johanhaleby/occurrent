@@ -323,7 +323,7 @@ class CatchupSubscriptionModelLiveActionLifecycleCallTest {
     private List<ILoggingEvent> loggedForTheLeftCall() {
         return logged.list.stream()
                 .filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
-                .filter(event -> event.getFormattedMessage().contains("run on the lifecycle thread"))
+                .filter(event -> event.getFormattedMessage().contains("run on another thread"))
                 .toList();
     }
 

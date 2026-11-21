@@ -383,7 +383,7 @@ class StreamCatchupLiveActionLifecycleCallTest {
     private List<ILoggingEvent> errorsLoggedForTheLeftCall() {
         return logged.list.stream()
                 .filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
-                .filter(event -> event.getFormattedMessage().contains("run on the lifecycle thread"))
+                .filter(event -> event.getFormattedMessage().contains("run on another thread"))
                 .toList();
     }
 

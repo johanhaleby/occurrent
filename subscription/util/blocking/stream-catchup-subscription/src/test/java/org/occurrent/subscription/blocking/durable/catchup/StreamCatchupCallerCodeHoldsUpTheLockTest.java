@@ -72,6 +72,9 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     private volatile CountDownLatch functionMayReturn = new CountDownLatch(0);
     private final CountDownLatch wrappedShutdownEntered = new CountDownLatch(1);
     private final CountDownLatch wrappedShutdownMayReturn = new CountDownLatch(1);
+    private final CountDownLatch listenerHoldsTheLock = new CountDownLatch(1);
+    private final CountDownLatch actionHandedACallOver = new CountDownLatch(1);
+    private final AtomicBoolean actionSawTheWrappedShutdown = new AtomicBoolean();
     private final AtomicBoolean functionAsked = new AtomicBoolean();
     private final AtomicBoolean callEndedWhileTheFunctionWaited = new AtomicBoolean();
     private final AtomicReference<@Nullable Throwable> thrownByTheAction = new AtomicReference<>();
@@ -95,6 +98,7 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     void shut_down() throws Exception {
         functionMayReturn.countDown();
         wrappedShutdownMayReturn.countDown();
+        actionHandedACallOver.countDown();
         CompletableFuture.runAsync(() -> {
             model.shutdown();
             inMemory.shutdown();
@@ -273,6 +277,128 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
         assertThat(handleOfZ.get()).as("the handle the resume of z returned").isNotNull();
         assertThat(CompletableFuture.runAsync(model::stop, daemonExecutor("later-stop"))).as("a later stop").succeedsWithin(BOUND);
         assertThat(model.isRunning()).as("whether the model runs after the later stop").isFalse();
+    }
+
+    @Test
+    void a_stop_handed_over_from_a_live_action_does_not_keep_a_held_up_shutdown_from_shutting_the_wrapped_model_down_when_the_listener_returns() throws Exception {
+        // Given a listener that holds the model lock and waits for a shutdown, and a live action that hands a stop over and then waits for the wrapped model to be shut down
+        givenAListenerHoldsTheLockWhileALiveActionHandsACallOverAndWaitsForTheWrappedShutdown(model::stop);
+
+        // When the shutdown has thrown after the wait, and then the listener returns
+        // Then the wrapped model is shut down once, with no further call, and the action returns
+        assertTheWrappedModelIsShutDownOnceTheListenerReturnsAlthoughTheActionWaitsForIt();
+    }
+
+    // Picks the resume of a subscription, not a pause or a cancel, since x can be held paused and resumed from the action
+    @Test
+    void a_resume_handed_over_from_a_live_action_does_not_keep_a_held_up_shutdown_from_shutting_the_wrapped_model_down_when_the_listener_returns() throws Exception {
+        // Given x held paused, a listener that holds the model lock and waits for a shutdown, and a live action that hands a resume of x over and then waits for the wrapped model to be shut down
+        givenXPaused();
+        givenAListenerHoldsTheLockWhileALiveActionHandsACallOverAndWaitsForTheWrappedShutdown(() -> handleOfX.set(model.resumeSubscription(X)));
+
+        // When the shutdown has thrown after the wait, and then the listener returns
+        // Then the wrapped model is shut down once, with no further call, the action returns, and the resume it handed over left x held
+        assertTheWrappedModelIsShutDownOnceTheListenerReturnsAlthoughTheActionWaitsForIt();
+        assertThat(model.isRunning(X)).as("whether x runs, which it does not as the resume the action handed over ran after a shutdown had begun").isFalse();
+    }
+
+    @Test
+    void a_shutdown_handed_over_from_a_live_action_does_not_keep_a_held_up_shutdown_from_shutting_the_wrapped_model_down_when_the_listener_returns() throws Exception {
+        // Given a listener that holds the model lock and waits for a shutdown, and a live action that hands a shutdown over and then waits for the wrapped model to be shut down
+        givenAListenerHoldsTheLockWhileALiveActionHandsACallOverAndWaitsForTheWrappedShutdown(model::shutdown);
+
+        // When the shutdown has thrown after the wait, and then the listener returns
+        // Then the wrapped model is shut down once, with no further call, and the action returns
+        assertTheWrappedModelIsShutDownOnceTheListenerReturnsAlthoughTheActionWaitsForIt();
+    }
+
+    @Test
+    void a_stop_made_from_another_thread_while_the_handed_shutdown_is_in_the_wrapped_model_does_not_stop_the_wrapped_model() throws Exception {
+        // Given a wrapped model whose shutdown waits to be let go, and a shutdown that threw because a listener under the model lock waited for it
+        live.beforeShutdown = () -> {
+            wrappedShutdownEntered.countDown();
+            HookedSubscriptionModel.awaitLatch(wrappedShutdownMayReturn);
+        };
+        functionMayReturn = new CountDownLatch(1);
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        aListenerOfZHoldsTheLockAndWaitsForAShutdown(() -> {
+        });
+        awaitTheFunction();
+        assertTheShutdownThrewAfterTheWait(callOfTheFunction.get());
+
+        // When the listener returns and, with the handed shutdown inside the wrapped model under the model lock, a stop is made from another thread
+        functionMayReturn.countDown();
+        assertThat(wrappedShutdownEntered.await(20, TimeUnit.SECONDS)).as("whether the handed shutdown reached the wrapped model once the listener returned").isTrue();
+        Call stop = new Call("stop-during-the-handed-shutdown", model::stop);
+        await().atMost(BOUND).untilAsserted(() -> assertThat(stop.state()).as("the state of the thread of the stop, which waits for the handed shutdown").isIn(Thread.State.WAITING, Thread.State.TIMED_WAITING));
+        wrappedShutdownMayReturn.countDown();
+
+        // Then the stop returns without error once the handed shutdown has returned, and the wrapped model got no stop
+        assertThat(stop.endedWithin(BOUND)).as("whether the stop returned once the handed shutdown had shut the wrapped model down").isTrue();
+        assertThat(stop.thrown()).as("what the stop threw").isNull();
+        assertThat(live.stops.get()).as("the stops the wrapped model got from the stop made while the handed shutdown was in it").isZero();
+    }
+
+    // A listener of z holds the model lock on the thread that resumes z, and asks a shutdown from another thread, which
+    // throws after LIFECYCLE_WAIT, once beforeTheShutdown has run. Returns once the listener holds the lock. z has history
+    // by then
+    private void aListenerOfZHoldsTheLockAndWaitsForAShutdown(Runnable beforeTheShutdown) throws InterruptedException {
+        model.listenForCatchup(Z, new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                if (functionAsked.compareAndSet(false, true)) {
+                    listenerHoldsTheLock.countDown();
+                    beforeTheShutdown.run();
+                    waitForTheCall(model::shutdown);
+                }
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+        model.subscribePaused(Z, null, StartAtTime.beginningOfTime(), event -> {
+        });
+        new Call("resume-of-z", () -> handleOfZ.set(model.resumeSubscription(Z)));
+        assertThat(listenerHoldsTheLock.await(20, TimeUnit.SECONDS)).as("whether the listener of z holds the model lock").isTrue();
+    }
+
+    // The action of y, a live action, runs once the listener holds the lock. It hands handOver over, which a thread that
+    // runs no action of the model can't have queued ahead of the shutdown the listener waits for, and then waits for the
+    // wrapped model's shutdown. Only that shutdown can end the wait, as what the action handed over waits for the action
+    private void givenAListenerHoldsTheLockWhileALiveActionHandsACallOverAndWaitsForTheWrappedShutdown(Runnable handOver) throws Exception {
+        live.beforeShutdown = wrappedShutdownEntered::countDown;
+        functionMayReturn = new CountDownLatch(1);
+        // The history of z, written before y subscribes, so no live call of y runs before the listener holds the lock
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        model.subscribe(Y, null, StartAt.now(), event -> {
+            try {
+                handOver.run();
+                actionHandedACallOver.countDown();
+                actionSawTheWrappedShutdown.set(wrappedShutdownEntered.await(30, TimeUnit.SECONDS));
+            } catch (Throwable e) {
+                thrownByTheAction.set(e);
+            } finally {
+                actionReturned.countDown();
+            }
+        });
+        aListenerOfZHoldsTheLockAndWaitsForAShutdown(() -> HookedSubscriptionModel.awaitLatch(actionHandedACallOver));
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+    }
+
+    // The action still waits when the shutdown that threw hands the wrapped model's shutdown over, which waits only for the lock
+    private void assertTheWrappedModelIsShutDownOnceTheListenerReturnsAlthoughTheActionWaitsForIt() throws Exception {
+        awaitTheFunction();
+        assertTheShutdownThrewAfterTheWait(callOfTheFunction.get());
+        assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got while the listener held the lock").isZero();
+        assertThat(actionReturned.getCount()).as("whether the action of y still waits for the wrapped model's shutdown").isEqualTo(1);
+
+        functionMayReturn.countDown();
+        await().atMost(Duration.ofSeconds(8)).untilAsserted(() -> assertThat(live.shutdowns.get()).as("the shutdowns the wrapped model got once the listener returned, while the action still waited for it").isEqualTo(1));
+        assertTheWrappedModelIsShutDownOnce();
+        assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned once the wrapped model was shut down").isTrue();
+        assertThat(actionSawTheWrappedShutdown.get()).as("whether the action of y saw the wrapped model shut down before it gave up waiting").isTrue();
+        assertThat(thrownByTheAction.get()).as("what the action of y threw").isNull();
     }
 
     // The action of y, a live action, hands the resume of x over and then subscribes z paused behind it, so z subscribes on
