@@ -140,6 +140,12 @@ public class DurableSubscriptionModelConfig {
      * predicate that declines some events, such as {@link EveryN} with {@code n} above 1, a subscription that goes
      * quiet right after a declined event gets no position saved until the predicate stores one.
      * <p>
+     * After a checkpoint write throws, the next quiet save reads the stored checkpoint first, since the write may have
+     * gone through. Once the subscription has delivered an event, it saves the position only when the read returns the
+     * checkpoint of the last event delivered, a position stored after it, or the quiet position whose save threw, and
+     * otherwise no position is saved until an event's checkpoint is stored. When the read throws, the save after the
+     * next interval reads again.
+     * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
      * is the oplog window.
      *

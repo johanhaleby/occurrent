@@ -34,6 +34,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -632,6 +634,280 @@ class DurableSubscriptionModelQuietPositionTest {
             assertThat(storage.read("id")).as("checkpoint").isEqualTo(QUIET);
         } finally {
             closedRun.shutdownNow();
+        }
+    }
+
+    @Test
+    void the_save_of_a_closed_run_that_started_before_the_resumed_run_is_refused_once_the_resumed_run_has_stored_a_later_event_and_the_quiet_position_is_still_saved() throws InterruptedException {
+        // Given a closed run whose action for e1 returns only after a resumed run has delivered e1 again and then e2
+        CountDownLatch e1Started = new CountDownLatch(1);
+        CountDownLatch e1MayReturn = new CountDownLatch(1);
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+            if (firstCall.compareAndSet(true, false)) {
+                e1Started.countDown();
+                awaitQuietly(e1MayReturn);
+            }
+        });
+        Thread closedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e1")));
+        assertThat(e1Started.await(5, SECONDS)).isTrue();
+        wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+        wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+
+        // When the closed run's action returns, and the resumed run then reads nothing for longer than the interval
+        e1MayReturn.countDown();
+        closedRun.join(5000);
+        Checkpoint afterTheLateSave = storage.read("id");
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean saved = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(afterTheLateSave).as("checkpoint once the closed run's action has returned").isEqualTo(new StringBasedCheckpoint("e2"));
+        assertThat(saved).as("quiet save wanted").isTrue();
+        assertThat(storage.read("id")).as("checkpoint").isEqualTo(QUIET);
+    }
+
+    @Test
+    void the_save_of_a_closed_run_whose_action_is_called_only_after_the_resumed_run_has_stored_a_later_event_is_refused_and_the_quiet_position_is_still_saved() throws Exception {
+        // Given a closed run that read e1 before the pause, and a resumed run that reads and delivers e1 again and then e2
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        ExecutorService closedRun = Executors.newSingleThreadExecutor();
+        try {
+            on(closedRun, () -> wrapped.beforeReading("id"));
+            wrapped.beforeReading("id");
+            wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+            wrapped.beforeReading("id");
+            wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+
+            // When the closed run's action is called with e1 only now, and the resumed run then reads nothing
+            on(closedRun, () -> wrapped.deliver("id", new StringBasedCheckpoint("e1")));
+            Checkpoint afterTheLateSave = storage.read("id");
+            Thread.sleep(INTERVAL.toMillis() + 50);
+            boolean saved = wrapped.readNothing("id", QUIET);
+
+            // Then
+            assertThat(afterTheLateSave).as("checkpoint once the closed run's action has returned").isEqualTo(new StringBasedCheckpoint("e2"));
+            assertThat(saved).as("quiet save wanted").isTrue();
+            assertThat(storage.read("id")).as("checkpoint").isEqualTo(QUIET);
+        } finally {
+            closedRun.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_quiet_save_that_wrote_and_threw_is_recovered_through_a_read_with_no_new_event() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        DurableSubscriptionModel model = subscribedAndStoredE1(flaky);
+        flaky.writesThenThrows.add("quiet-1");
+
+        // When
+        boolean first = quietTickWhenWanted("quiet-1");
+        boolean second = quietTickWhenWanted("quiet-2");
+
+        // Then
+        assertThat(List.of(first, second)).containsExactly(true, true);
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "save quiet-2");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-2"));
+        assertThat(model.positionsRememberedForQuietSaves("id")).isLessThanOrEqualTo(2);
+    }
+
+    @Test
+    void a_quiet_save_that_threw_without_writing_is_recovered_through_a_read_with_no_new_event() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        DurableSubscriptionModel model = subscribedAndStoredE1(flaky);
+        flaky.throwsWithoutWriting.add("quiet-1");
+
+        // When
+        boolean first = quietTickWhenWanted("quiet-1");
+        boolean second = quietTickWhenWanted("quiet-2");
+
+        // Then
+        assertThat(List.of(first, second)).containsExactly(true, true);
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "save quiet-2");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-2"));
+        assertThat(model.positionsRememberedForQuietSaves("id")).isLessThanOrEqualTo(2);
+    }
+
+    @Test
+    void a_quiet_save_that_wrote_and_threw_followed_by_one_that_threw_without_writing_is_recovered_through_a_read_with_no_new_event() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        DurableSubscriptionModel model = subscribedAndStoredE1(flaky);
+        flaky.writesThenThrows.add("quiet-1");
+        flaky.throwsWithoutWriting.add("quiet-2");
+
+        // When
+        quietTickWhenWanted("quiet-1");
+        quietTickWhenWanted("quiet-2");
+        quietTickWhenWanted("quiet-3");
+
+        // Then
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "save quiet-2", "read", "save quiet-3");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-3"));
+        assertThat(model.positionsRememberedForQuietSaves("id")).isLessThanOrEqualTo(2);
+    }
+
+    @Test
+    void a_quiet_save_that_threw_without_writing_followed_by_one_that_wrote_and_threw_is_recovered_through_a_read_with_no_new_event() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        DurableSubscriptionModel model = subscribedAndStoredE1(flaky);
+        flaky.throwsWithoutWriting.add("quiet-1");
+        flaky.writesThenThrows.add("quiet-2");
+
+        // When
+        quietTickWhenWanted("quiet-1");
+        quietTickWhenWanted("quiet-2");
+        quietTickWhenWanted("quiet-3");
+
+        // Then
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "save quiet-2", "read", "save quiet-3");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-3"));
+        assertThat(model.positionsRememberedForQuietSaves("id")).isLessThanOrEqualTo(2);
+    }
+
+    @Test
+    void many_quiet_saves_that_fail_in_a_row_keep_at_most_two_positions_remembered_and_are_recovered_through_a_read() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        DurableSubscriptionModel model = subscribedAndStoredE1(flaky);
+        for (int i = 0; i < 25; i++) {
+            (i % 2 == 0 ? flaky.writesThenThrows : flaky.throwsWithoutWriting).add("quiet-" + i);
+        }
+
+        // When
+        List<Integer> remembered = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            quietTickWhenWanted("quiet-" + i);
+            remembered.add(model.positionsRememberedForQuietSaves("id"));
+        }
+        quietTickWhenWanted("recovered");
+
+        // Then
+        assertThat(remembered).as("positions remembered after each failed quiet save").allMatch(count -> count <= 2);
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("recovered"));
+    }
+
+    @Test
+    void a_read_that_throws_after_a_quiet_save_that_wrote_and_threw_keeps_the_quiet_position_unsaved_and_the_next_tick_reads_again() throws InterruptedException {
+        // Given a quiet save that wrote and threw, and a read that throws while that position is stored
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.writesThenThrows.add("quiet-1");
+        flaky.readsThrowWhileStored.add("quiet-1");
+        quietTickWhenWanted("quiet-1");
+
+        // When two ticks read and throw, and the read then works
+        quietTickWhenWanted("quiet-2");
+        quietTickWhenWanted("quiet-3");
+        flaky.readsThrowWhileStored.clear();
+        quietTickWhenWanted("quiet-4");
+
+        // Then
+        assertThat(flaky.operations).containsExactly("save quiet-1", "read", "read", "read", "save quiet-4");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-4"));
+    }
+
+    @Test
+    void a_delivery_save_that_wrote_and_threw_has_the_next_quiet_tick_read_and_save_the_quiet_position_with_no_new_event() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.writesThenThrows.add("e2");
+        assertThatThrownBy(() -> wrapped.deliver("id", new StringBasedCheckpoint("e2"))).isInstanceOf(IllegalStateException.class);
+
+        // When
+        boolean wanted = quietTickWhenWanted("quiet-1");
+
+        // Then
+        assertThat(wanted).as("quiet save wanted").isTrue();
+        assertThat(flaky.operations).containsExactly("save e2", "read", "save quiet-1");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-1"));
+    }
+
+    @Test
+    void a_delivery_save_that_threw_without_writing_keeps_the_quiet_position_unsaved_until_a_delivery_stores_its_checkpoint() throws InterruptedException {
+        // Given
+        FlakyStorage flaky = new FlakyStorage();
+        subscribedAndStoredE1(flaky);
+        flaky.throwsWithoutWriting.add("e2");
+        assertThatThrownBy(() -> wrapped.deliver("id", new StringBasedCheckpoint("e2"))).isInstanceOf(IllegalStateException.class);
+
+        // When the next tick reads what is stored, and later ticks come with no new event
+        boolean readTick = quietTickWhenWanted("quiet-1");
+        Thread.sleep(10);
+        boolean laterTick = wrapped.readNothing("id", new StringBasedCheckpoint("quiet-2"));
+        wrapped.deliver("id", new StringBasedCheckpoint("e3"));
+        boolean afterE3 = quietTickWhenWanted("quiet-3");
+
+        // Then
+        assertThat(readTick).as("tick that read what is stored").isTrue();
+        assertThat(laterTick).as("quiet save wanted after the read found e1, which does not cover e2").isFalse();
+        assertThat(afterE3).as("quiet save wanted once e3 stored its checkpoint").isTrue();
+        assertThat(flaky.operations).containsExactly("save e2", "read", "save e3", "save quiet-3");
+        assertThat(flaky.stored("id")).isEqualTo(new StringBasedCheckpoint("quiet-3"));
+    }
+
+    // A subscribe at START that then stores e1, so a quiet position covers the delivery that ended last
+    private DurableSubscriptionModel subscribedAndStoredE1(FlakyStorage flaky) {
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, flaky, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+        flaky.operations.clear();
+        return model;
+    }
+
+    // Reads until a listener wants the quiet position, which the 1 ms interval allows after a moment
+    private boolean quietTickWhenWanted(String quietPosition) throws InterruptedException {
+        long deadline = System.nanoTime() + SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline) {
+            if (wrapped.readNothing("id", new StringBasedCheckpoint(quietPosition))) {
+                return true;
+            }
+            Thread.sleep(2);
+        }
+        return false;
+    }
+
+    // Fails by the content it is asked to save or read, never by how many calls came before
+    private static final class FlakyStorage extends InMemoryCheckpointStorage {
+        final List<String> operations = new CopyOnWriteArrayList<>();
+        final Set<String> writesThenThrows = ConcurrentHashMap.newKeySet();
+        final Set<String> throwsWithoutWriting = ConcurrentHashMap.newKeySet();
+        final Set<String> readsThrowWhileStored = ConcurrentHashMap.newKeySet();
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            String position = checkpoint.asString();
+            operations.add("save " + position);
+            if (throwsWithoutWriting.contains(position)) {
+                throw new IllegalStateException("The save of " + position + " failed");
+            }
+            Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
+            if (writesThenThrows.contains(position)) {
+                throw new IllegalStateException("The reply of the save of " + position + " was lost");
+            }
+            return saved;
+        }
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            operations.add("read");
+            Checkpoint current = super.read(subscriptionId);
+            if (current != null && readsThrowWhileStored.contains(current.asString())) {
+                throw new IllegalStateException("The read failed while " + current.asString() + " is stored");
+            }
+            return current;
+        }
+
+        Checkpoint stored(String subscriptionId) {
+            return super.read(subscriptionId);
         }
     }
 

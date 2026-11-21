@@ -925,6 +925,140 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a delivery is between its save and its end while a failed resume puts back what was stored")
+    class When_a_delivery_is_between_its_save_and_its_end_while_a_failed_resume_puts_back_what_was_stored {
+
+        @Test
+        void a_quiet_position_is_saved_without_a_new_event_when_the_put_back_wrote_the_checkpoint_the_delivery_stored() throws Exception {
+            // Given an event stored before a resume at an earlier position, delivered again after that position was
+            // stored, and a wrapped resume that fails
+            HeldPutBack heldPutBack = new HeldPutBack(false);
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, heldPutBack, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, heldPutBack);
+            wrapped.deliver(SUBSCRIPTION_ID, EVENT_STORED_BEFORE_THE_RESUME);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+
+            // When the delivery ends only after the put-back has written the checkpoint it stored
+            Throwable resumeFailure = resumeWhileTheEventIsDeliveredAgain(model, heldPutBack);
+
+            // Then
+            assertThat(resumeFailure).as("failure of the resume").isInstanceOf(IllegalStateException.class).hasMessageContaining("resume failed");
+            assertThat(heldPutBack.read(SUBSCRIPTION_ID)).as("checkpoint after the put-back").isEqualTo(EVENT_STORED_BEFORE_THE_RESUME);
+            Consumer<Checkpoint> saver = aSaverIfOneIsWanted();
+            assertThat(saver).as("quiet save wanted without a new event").isNotNull();
+            saver.accept(QUIET);
+            assertThat(heldPutBack.read(SUBSCRIPTION_ID)).as("checkpoint after the quiet save").isEqualTo(QUIET);
+        }
+
+        @Test
+        void a_quiet_position_is_saved_without_a_new_event_when_the_put_back_threw_and_what_is_stored_is_the_checkpoint_the_delivery_stored() throws Exception {
+            // Given an event stored before a resume at an earlier position, delivered again after that position was
+            // stored, and a wrapped resume that fails
+            HeldPutBack heldPutBack = new HeldPutBack(true);
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, heldPutBack, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, heldPutBack);
+            wrapped.deliver(SUBSCRIPTION_ID, EVENT_STORED_BEFORE_THE_RESUME);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+
+            // When the delivery ends only after the put-back has thrown and what is stored has been read
+            Throwable resumeFailure = resumeWhileTheEventIsDeliveredAgain(model, heldPutBack);
+
+            // Then
+            assertThat(resumeFailure).as("failure of the resume").isInstanceOf(IllegalStateException.class).hasMessageContaining("resume failed");
+            assertThat(heldPutBack.read(SUBSCRIPTION_ID)).as("checkpoint after the put-back").isEqualTo(EVENT_STORED_BEFORE_THE_RESUME);
+            Consumer<Checkpoint> saver = aSaverIfOneIsWanted();
+            assertThat(saver).as("quiet save wanted without a new event").isNotNull();
+            saver.accept(QUIET);
+            assertThat(heldPutBack.read(SUBSCRIPTION_ID)).as("checkpoint after the quiet save").isEqualTo(QUIET);
+        }
+
+        // Starts the resume, which stores its position and then calls the wrapped resume. A delivery of the event that
+        // was stored before starts there, reads after the position was stored, saves the checkpoint of the event and
+        // is held in the storage until the put-back waits for the saveLock it holds. It then waits for the deliveryLock
+        // the put-back holds, and the put-back is held in the storage until it does. Answers how the resume failed
+        private Throwable resumeWhileTheEventIsDeliveredAgain(DurableSubscriptionModel model, HeldPutBack heldPutBack) throws Exception {
+            AtomicBoolean wrappedResumeStarted = new AtomicBoolean();
+            Thread delivery = Thread.ofPlatform().unstarted(() -> {
+                wrapped.beforeReading(SUBSCRIPTION_ID);
+                wrapped.deliver(SUBSCRIPTION_ID, EVENT_STORED_BEFORE_THE_RESUME);
+            });
+            heldPutBack.deliveryThread = delivery;
+            wrapped.whenResuming = () -> {
+                delivery.start();
+                awaitLatch(heldPutBack.deliverySaveWrote);
+                wrappedResumeStarted.set(true);
+            };
+            AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+            Thread resume = Thread.ofPlatform().unstarted(() -> {
+                try {
+                    model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT));
+                } catch (Throwable e) {
+                    resumeFailure.set(e);
+                }
+            });
+            heldPutBack.putBackThread = resume;
+            resume.start();
+            await().atMost(5, SECONDS).until(() -> wrappedResumeStarted.get() && resume.getState() == Thread.State.WAITING);
+
+            heldPutBack.deliverySaveMayReturn.countDown();
+            assertThat(awaitLatch(heldPutBack.putBackReached)).as("put-back reached the storage").isTrue();
+            await().atMost(5, SECONDS).until(() -> delivery.getState() == Thread.State.WAITING);
+            assertThat(delivery.isAlive()).as("delivery has not ended while the put-back holds the lock").isTrue();
+            heldPutBack.putBackMayProceed.countDown();
+            resume.join(5000);
+            delivery.join(5000);
+            assertThat(resume.isAlive() || delivery.isAlive()).as("a thread is still running").isFalse();
+            return resumeFailure.get();
+        }
+
+        // Holds the save of the event the delivery stored once it has written, and the save that puts it back until the
+        // delivery waits for the lock the put-back holds. A put-back that throws has not written
+        private static final class HeldPutBack extends InMemoryCheckpointStorage {
+            final CountDownLatch deliverySaveWrote = new CountDownLatch(1);
+            final CountDownLatch deliverySaveMayReturn = new CountDownLatch(1);
+            final CountDownLatch putBackReached = new CountDownLatch(1);
+            final CountDownLatch putBackMayProceed = new CountDownLatch(1);
+            volatile @Nullable Thread deliveryThread;
+            volatile @Nullable Thread putBackThread;
+            private final boolean putBackThrows;
+
+            HeldPutBack(boolean putBackThrows) {
+                this.putBackThrows = putBackThrows;
+            }
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                boolean isTheEvent = checkpoint.equals(EVENT_STORED_BEFORE_THE_RESUME);
+                if (isTheEvent && Thread.currentThread() == putBackThread) {
+                    putBackReached.countDown();
+                    awaitLatch(putBackMayProceed);
+                    if (putBackThrows) {
+                        throw new IllegalStateException("The put-back failed");
+                    }
+                }
+                Checkpoint saved = super.save(subscriptionId, checkpoint, condition);
+                if (isTheEvent && Thread.currentThread() == deliveryThread) {
+                    deliverySaveWrote.countDown();
+                    awaitLatch(deliverySaveMayReturn);
+                }
+                return saved;
+            }
+        }
+    }
+
+    private @Nullable Consumer<Checkpoint> aSaverIfOneIsWanted() throws InterruptedException {
+        long deadline = System.nanoTime() + MILLISECONDS.toNanos(300);
+        Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+        while (saver == null && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+            saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+        }
+        return saver;
+    }
+
     private Consumer<Checkpoint> aSaverOnceTheIntervalHasPassed() {
         AtomicReference<Consumer<Checkpoint>> saver = new AtomicReference<>();
         await().atMost(5, SECONDS).until(() -> {
