@@ -427,8 +427,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // than before every read
     private @Nullable Consumer<Checkpoint> quietPositionSaverFor(String subscriptionId) {
         Duration interval = config.quietPositionSaveInterval;
+        // Read before the tracked and untracked registrations, since a subscribe tracks its registration or keeps it
+        // untracked before it stops counting it as subscribing, so each read here finds it at least once
+        CheckpointRegistration subscribing = subscribingRegistrations.get(subscriptionId);
         CheckpointRegistration registration = registrations.get(subscriptionId);
-        numberReadOfUntrackedRegistrations(subscriptionId, registration);
+        numberReadOfUntrackedRegistrations(subscriptionId, subscribing, registration);
         if (registration == null) {
             return null;
         }
@@ -451,8 +454,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // for one a failed subscribe left writing too, and they get no quiet save. A run asks before each read and delivers
     // what it read on the same thread, so a read numbered for a registration that has no run on this thread changes
     // none of its deliveries
-    private void numberReadOfUntrackedRegistrations(String subscriptionId, @Nullable CheckpointRegistration tracked) {
-        CheckpointRegistration subscribing = subscribingRegistrations.get(subscriptionId);
+    private void numberReadOfUntrackedRegistrations(String subscriptionId, @Nullable CheckpointRegistration subscribing,
+                                                    @Nullable CheckpointRegistration tracked) {
         if (subscribing != null && subscribing != tracked) {
             subscribing.reading();
         }
@@ -1195,6 +1198,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 // somewhere else
                 return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
             }
+            // Taken before the read below, so a delivery that stores its checkpoint after this counts as one the put-back
+            // of a failed resume overwrites
+            List<CheckpointRegistration> writing = registrationsWritingFor(subscriptionId);
+            writing.forEach(CheckpointRegistration::beforeResuming);
             // Stored before the resume, since an event delivered after the resume writes a newer checkpoint that this
             // write would otherwise overwrite
             Checkpoint previous = storage.read(subscriptionId);
@@ -1203,8 +1210,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // position stored here, so that save is refused from before this write on. It stays refused when the write
             // throws, since the position may have been stored anyway, and when the resume fails, which only delivers
             // its event again
-            List<CheckpointRegistration> writing = registrationsWritingFor(subscriptionId);
-            writing.forEach(CheckpointRegistration::beforeResuming);
             underSaveLocksOf(writing, () -> {
                 writing.forEach(CheckpointRegistration::repositioning);
                 storage.save(subscriptionId, position, writeCondition);
@@ -1221,11 +1226,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (previous == null) {
                     throw e;
                 }
+                AtomicBoolean putBack = new AtomicBoolean();
                 underSaveLocksOf(writing, () -> {
                     writing.forEach(CheckpointRegistration::puttingBack);
-                    putBack(subscriptionId, previous, writeCondition, e);
+                    putBack.set(putBack(subscriptionId, previous, writeCondition, e));
                 });
-                writing.forEach(CheckpointRegistration::latestAsBeforeTheResume);
+                // A put-back that failed left the position of the resume stored, so what latestIsStored answered holds
+                if (putBack.get()) {
+                    writing.forEach(CheckpointRegistration::latestAsBeforeTheResume);
+                }
                 throw e;
             }
         });
@@ -1264,15 +1273,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // A catch-up model sharing the storage replays from what is stored, so a failed resume puts back what it found.
     // The condition of the first write is reused, so a checkpoint another lease holder wrote since then refuses the
-    // put-back
-    private void putBack(String subscriptionId, Checkpoint previous, CheckpointWriteCondition writeCondition, Throwable resumeFailure) {
+    // put-back. Answers whether it wrote
+    private boolean putBack(String subscriptionId, Checkpoint previous, CheckpointWriteCondition writeCondition, Throwable resumeFailure) {
         try {
             storage.save(subscriptionId, previous, writeCondition);
+            return true;
         } catch (Throwable putBackFailure) {
             // Throwable, since a storage written in Kotlin can throw a checked exception
             if (putBackFailure != resumeFailure) {
                 resumeFailure.addSuppressed(putBackFailure);
             }
+            return false;
         }
     }
 

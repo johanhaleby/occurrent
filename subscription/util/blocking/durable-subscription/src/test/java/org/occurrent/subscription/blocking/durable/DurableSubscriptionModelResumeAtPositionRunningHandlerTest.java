@@ -577,6 +577,82 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         }
 
         @Test
+        void a_quiet_position_is_saved_when_the_put_back_failed_and_a_delivery_that_read_before_the_resume_ended_during_it() {
+            // Given
+            AtomicBoolean putBackFails = new AtomicBoolean();
+            InMemoryCheckpointStorage failingToPutBack = new InMemoryCheckpointStorage() {
+                @Override
+                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                    if (putBackFails.get() && checkpoint.equals(START)) {
+                        throw new IllegalStateException("The put-back failed");
+                    }
+                    return super.save(subscriptionId, checkpoint, condition);
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, failingToPutBack, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, failingToPutBack);
+            wrapped.beforeReading(SUBSCRIPTION_ID);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.whenResuming = () -> {
+                wrapped.whenResuming = () -> {
+                };
+                wrapped.deliver(SUBSCRIPTION_ID, EVENT_AFTER_THE_RESUME);
+            };
+            wrapped.failsResume = true;
+            putBackFails.set(true);
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("resume failed for " + SUBSCRIPTION_ID);
+
+            // Then
+            assertThat(failingToPutBack.read(SUBSCRIPTION_ID)).isEqualTo(EARLIER_THAN_THE_EVENT);
+            await().atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(failingToPutBack.read(SUBSCRIPTION_ID)).isEqualTo(QUIET);
+            });
+        }
+
+        @Test
+        void no_quiet_position_is_saved_when_a_delivery_stored_its_checkpoint_while_the_resume_read_the_previous_one_and_the_put_back_replaced_it() {
+            // Given
+            AtomicBoolean deliversOnTheNextRead = new AtomicBoolean();
+            InMemoryCheckpointStorage deliveringOnRead = new InMemoryCheckpointStorage() {
+                @Override
+                public @Nullable Checkpoint read(String subscriptionId) {
+                    Checkpoint read = super.read(subscriptionId);
+                    if (deliversOnTheNextRead.compareAndSet(true, false)) {
+                        wrapped.deliver(subscriptionId, EVENT_STORED_BEFORE_THE_RESUME);
+                    }
+                    return read;
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, deliveringOnRead, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, deliveringOnRead);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            wrapped.failsResume = true;
+            deliversOnTheNextRead.set(true);
+
+            // When
+            assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT)))
+                    .isInstanceOf(IllegalStateException.class);
+
+            // Then
+            assertThat(deliveringOnRead.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            await().during(300, MILLISECONDS).atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(deliveringOnRead.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            });
+        }
+
+        @Test
         void no_quiet_position_is_saved_while_the_checkpoint_the_failed_resume_refused_is_the_latest_one() {
             // Given
             DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
