@@ -282,6 +282,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         static final Reposition NONE = new Reposition(0, null);
     }
 
+    // The checkpoint a delivery stored, with the count of put-backs after a failed resume at a position when it was stored
+    private record StoredCheckpoint(Checkpoint checkpoint, long putBacks) {
+    }
+
     // What a subscribe cancelled while its function was asked returns. It never started and nothing will start it
     private record CancelledWhileAsked(String id) implements Subscription {
         @Override
@@ -631,7 +635,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 // Taken before anything the delivery waits on, so no quiet position is saved until it has finished
                 long repositions = registration.repositionsForDelivery();
                 long delivery = registration.delivering();
-                @Nullable Checkpoint stored = null;
+                @Nullable StoredCheckpoint stored = null;
                 try {
                     // Read before the action runs, so the write uses the token of the lease this event was
                     // delivered under, even if this node lost that lease and won a newer one meanwhile
@@ -639,12 +643,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     action.accept(cloudEvent);
                     if (persistCheckpoint.test(cloudEvent)) {
                         Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                        if (registration.saveUnlessCancelledOrRepositioned(repositions, () -> {
+                        stored = registration.saveUnlessCancelledOrRepositioned(repositions, checkpoint, () -> {
                             storage.save(subscriptionId, checkpoint, writeCondition);
                             registration.lastWrite.set(System.nanoTime());
-                        })) {
-                            stored = checkpoint;
-                        }
+                        });
                     }
                 } finally {
                     registration.delivered(delivery, stored, repositions);
@@ -1721,6 +1723,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         private Reposition storedRepositionBeforeTheLatest = Reposition.NONE;
         // The resume the latest put-back wrote over, put back as the stored one when what is stored is its position
         private Reposition putBackOver = Reposition.NONE;
+        // Counts the put-backs after a failed resume at a position. Written holding deliveryLock and saveLock, so a delivery
+        // that stored its checkpoint before a put-back wrote over it learns that when it finishes
+        private long putBacks;
         // Set before the registration is tracked, for a subscribe that threw and failed to cancel the subscription
         private boolean keepCheckpointWhenCancelled;
 
@@ -1790,14 +1795,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
 
         // A delivery that started before a resume at a position whose position is still stored counts as stored, since
-        // the position stored is the resume's and not one this delivery could have moved past
-        void delivered(long delivery, @Nullable Checkpoint stored, long repositionsWhenDelivered) {
+        // the position stored is the resume's and not one this delivery could have moved past. One whose checkpoint a
+        // put-back may have written over since it was stored doesn't, until a later put-back finds that checkpoint stored
+        void delivered(long delivery, @Nullable StoredCheckpoint stored, long repositionsWhenDelivered) {
             deliveryLock.lock();
             try {
                 deliveriesUnderWay--;
                 if (delivery == latestCurrentDelivery) {
-                    latestStored = stored != null || storedReposition.count() > repositionsWhenDelivered;
-                    latestPosition = stored == null ? null : stored.asString();
+                    latestStored = (stored != null && stored.putBacks() == putBacks) || storedReposition.count() > repositionsWhenDelivered;
+                    latestPosition = stored == null ? null : stored.checkpoint().asString();
                     latestRepositions = repositionsWhenDelivered;
                     storedBeforeAnyDelivery = false;
                 }
@@ -1832,6 +1838,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // before it
         void puttingBack() {
             repositions++;
+            putBacks++;
             putBackOver = storedReposition;
             storedReposition = storedRepositionBeforeTheLatest;
         }
@@ -1886,16 +1893,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
 
-        // Whether it saved. A delivery that started before a resume at a position stored its own saves nothing
-        boolean saveUnlessCancelledOrRepositioned(long repositionsWhenDelivered, Runnable save) {
+        // What it saved, null when it saved nothing. A delivery that started before a resume at a position stored its own
+        // saves nothing
+        @Nullable StoredCheckpoint saveUnlessCancelledOrRepositioned(long repositionsWhenDelivered, Checkpoint checkpoint, Runnable save) {
             saveLock.lock();
             try {
                 if (cancelled || repositions != repositionsWhenDelivered) {
-                    return false;
+                    return null;
                 }
                 save.run();
                 storedACheckpoint = true;
-                return true;
+                return new StoredCheckpoint(checkpoint, putBacks);
             } finally {
                 saveLock.unlock();
             }

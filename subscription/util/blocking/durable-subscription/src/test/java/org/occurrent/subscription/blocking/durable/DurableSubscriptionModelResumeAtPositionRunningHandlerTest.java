@@ -653,6 +653,59 @@ class DurableSubscriptionModelResumeAtPositionRunningHandlerTest {
         }
 
         @Test
+        void no_quiet_position_is_saved_when_the_put_back_wrote_over_the_checkpoint_a_delivery_of_the_resumed_run_stored_while_it_waited() throws Exception {
+            // Given
+            CountDownLatch deliverySaving = new CountDownLatch(1);
+            CountDownLatch deliverySaveMayFinish = new CountDownLatch(1);
+            InMemoryCheckpointStorage blockingTheDeliverySave = new InMemoryCheckpointStorage() {
+                @Override
+                public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                    if (checkpoint.equals(EVENT_AFTER_THE_RESUME)) {
+                        deliverySaving.countDown();
+                        awaitQuietly(deliverySaveMayFinish);
+                    }
+                    return super.save(subscriptionId, checkpoint, condition);
+                }
+            };
+            DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, blockingTheDeliverySave, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+            subscribeFromTheStoredStart(model, blockingTheDeliverySave);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            AtomicReference<CompletableFuture<Void>> delivery = new AtomicReference<>();
+            AtomicBoolean resumeIsFailing = new AtomicBoolean();
+            wrapped.whenResuming = () -> {
+                // A delivery of the resumed run, started after the resume stored its position and holding the save lock
+                // while the resume fails
+                delivery.set(CompletableFuture.runAsync(() -> wrapped.deliver(SUBSCRIPTION_ID, EVENT_AFTER_THE_RESUME), handlerThreads));
+                assertThat(awaitLatch(deliverySaving)).as("delivery saving").isTrue();
+                resumeIsFailing.set(true);
+            };
+            wrapped.failsResume = true;
+            AtomicReference<Thread> resumingThread = new AtomicReference<>();
+
+            // When
+            CompletableFuture<Void> resume = CompletableFuture.runAsync(() -> {
+                resumingThread.set(Thread.currentThread());
+                model.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(EARLIER_THAN_THE_EVENT));
+            }, handlerThreads);
+            await().atMost(5, SECONDS).until(() -> resumeIsFailing.get() && resumingThread.get().getState() == Thread.State.WAITING);
+            deliverySaveMayFinish.countDown();
+
+            // Then
+            assertThatThrownBy(() -> resume.get(5, SECONDS))
+                    .hasRootCauseInstanceOf(IllegalStateException.class)
+                    .hasRootCauseMessage("resume failed for " + SUBSCRIPTION_ID);
+            delivery.get().get(5, SECONDS);
+            assertThat(blockingTheDeliverySave.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            await().during(300, MILLISECONDS).atMost(2, SECONDS).untilAsserted(() -> {
+                Consumer<Checkpoint> saver = wrapped.beforeReading(SUBSCRIPTION_ID);
+                if (saver != null) {
+                    saver.accept(QUIET);
+                }
+                assertThat(blockingTheDeliverySave.read(SUBSCRIPTION_ID)).isEqualTo(START);
+            });
+        }
+
+        @Test
         void no_quiet_position_is_saved_while_the_checkpoint_the_failed_resume_refused_is_the_latest_one() {
             // Given
             DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
