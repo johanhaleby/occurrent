@@ -495,7 +495,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * ends ten seconds after it began, or after that code began if later, and this throws
      * {@link IllegalStateException} and changes nothing, since that code may be waiting for this resume. The same holds
      * for {@link #start(boolean)}, {@link #stop()} and {@link #resumeSubscription(String, StartAt)}, and a
-     * {@code shutdown()} waiting that way shuts the wrapped model down without the lock.
+     * {@code shutdown()} waiting that way shuts the wrapped model down without the lock, and again under it before the
+     * thread holding the lock lets it go.
      * <p>
      * On a thread that runs a replay of this model outside the action, such as in a {@link CatchupListener}, or that is
      * in the middle of a call for one of its subscriptions, it neither waits nor runs alone, so it takes effect before

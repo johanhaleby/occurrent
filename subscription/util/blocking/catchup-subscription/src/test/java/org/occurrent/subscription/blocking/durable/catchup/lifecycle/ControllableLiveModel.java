@@ -11,6 +11,7 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
 import org.occurrent.subscription.blocking.durable.catchup.lifecycle.LifecycleCall.StartFailure;
 
@@ -19,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -27,6 +29,9 @@ import java.util.function.Predicate;
  * A change-stream-like live model. A subscribe while the model is stopped is held, a resume starts the model and that
  * subscription, start(true) resumes every held one. A start can fail before it takes effect or after it, and can wait.
  * Pausing a subscription that is not running throws, as {@code SubscriptionModelLifeCycle#pauseSubscription} says.
+ * With {@code asksTheStartAtAndRejectsOnceShutDown} on it is made like the in-memory model, which asks the start-at
+ * function before it registers a subscription, and whose subscribe registers the subscription and then throws once the
+ * model is shut down. A {@code shutdown()} then drops every subscription.
  */
 final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
 
@@ -47,6 +52,16 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     // Runs at the start of subscribe(id, ..), before the model's monitor is taken, so a test can hold a handover in the live model
     volatile Consumer<String> beforeSubscribe = id -> {
     };
+    volatile boolean asksTheStartAtAndRejectsOnceShutDown = false;
+
+    /**
+     * The context type the start-at is asked with, since the catch-up model hands the function to a live model only for
+     * the context type of a wrapper.
+     */
+    interface AsksAsAWrapper extends SubscriptionModelWrapper {
+    }
+
+    private volatile boolean shutDown = false;
     final Map<String, FakeSubscription> subscriptions = new ConcurrentHashMap<>();
 
     @Override
@@ -62,7 +77,30 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         beforeSubscribe.accept(subscriptionId);
-        return subscribeHoldingTheMonitor(subscriptionId, action);
+        asksTheStartAt(startAt);
+        Subscription subscription = subscribeHoldingTheMonitor(subscriptionId, action);
+        rejectsOnceShutDown();
+        return subscription;
+    }
+
+    private void asksTheStartAt(StartAt startAt) {
+        if (asksTheStartAtAndRejectsOnceShutDown) {
+            startAt.get(new StartAt.SubscriptionModelContext(AsksAsAWrapper.class));
+        }
+    }
+
+    private void rejectsOnceShutDown() {
+        if (asksTheStartAtAndRejectsOnceShutDown && shutDown) {
+            throw new RejectedExecutionException("shut down");
+        }
+    }
+
+    @Override
+    public void shutdown() {
+        if (asksTheStartAtAndRejectsOnceShutDown) {
+            shutDown = true;
+            subscriptions.clear();
+        }
     }
 
     private synchronized Subscription subscribeHoldingTheMonitor(String subscriptionId, Consumer<CloudEvent> action) {
@@ -74,8 +112,10 @@ final class ControllableLiveModel implements CheckpointAwareSubscriptionModel, R
 
     @Override
     public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        asksTheStartAt(startAt);
         FakeSubscription subscription = new FakeSubscription(subscriptionId, action);
         subscriptions.put(subscriptionId, subscription);
+        rejectsOnceShutDown();
         return subscription;
     }
 

@@ -164,6 +164,32 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     }
 
     @Test
+    void a_shutdown_that_gave_up_while_the_wrapped_model_asks_the_function_leaves_no_subscription_in_either_model_once_the_subscribe_has_unwound() throws Exception {
+        // Given a wrapped model that asks the function from inside its subscribe, before it registers the subscription, and an action that resumes x and then subscribes z paused,
+        // whose function answers now, so z goes live, and waits for a shutdown from another thread when the wrapped model asks
+        live.asksTheStartAtInsideTheDelegate = true;
+        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
+            if (context.subscriptionModelType() == HookedSubscriptionModel.AsksAsAWrapper.class && functionAsked.compareAndSet(false, true)) {
+                waitForTheCall(model::shutdown);
+            }
+            return StartAt.now();
+        }));
+
+        // When the shutdown gave up on the lock and returned, the function returned, and the subscribe of z has unwound
+        awaitTheFunction();
+        assertThat(callEndedWhileTheFunctionWaited.get()).as("whether the shutdown returned within " + BOUND + " while the function waited for it").isTrue();
+        assertThat(callOfTheFunction.get().thrown()).as("what the shutdown threw").isNull();
+        model.awaitTheHandedCalls("the test");
+
+        // Then neither model holds z, which the wrapped model registered after the shutdown had returned
+        assertThat(inMemory.subscriptionIds()).as("the subscriptions the wrapped model holds").doesNotContain(Z);
+        assertThat(inMemory.isRunning(Z)).as("whether the wrapped model runs z").isFalse();
+        assertThat(inMemory.isPaused(Z)).as("whether the wrapped model holds z paused").isFalse();
+        assertThat(model.isRunning(Z)).as("whether the catch-up model runs z").isFalse();
+        assertThat(model.isPaused(Z)).as("whether the catch-up model holds z paused").isFalse();
+    }
+
+    @Test
     void a_stop_from_another_thread_throws_when_a_catchup_listener_that_runs_under_the_lock_without_a_handed_call_waits_for_it_and_a_later_stop_completes() throws Exception {
         // Given z held paused with a parked replay, and a listener for z that waits for a stop from another thread
         eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
@@ -201,13 +227,16 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
     // the lifecycle thread under the model lock and asks the function there. The function runs call on another thread
     // and waits for it, which is the wait that deadlocks without the fix
     private void actionResumesXThenSubscribesZWhoseFunctionWaitsFor(Runnable call) throws Exception {
-        givenXPaused();
-        StartAt waits = StartAt.dynamic(() -> {
+        actionResumesXThenSubscribesZ(StartAt.dynamic(() -> {
             if (functionAsked.compareAndSet(false, true)) {
                 waitForTheCall(call);
             }
             return StartAtTime.beginningOfTime();
-        });
+        }));
+    }
+
+    private void actionResumesXThenSubscribesZ(StartAt waits) throws Exception {
+        givenXPaused();
         model.subscribe(Y, null, StartAt.now(), event -> {
             try {
                 handleOfX.set(model.resumeSubscription(X));

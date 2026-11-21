@@ -2984,7 +2984,9 @@ the catch-up is not affected.
   `resumeSubscription(id)` calls when it relaunches a parked replay. While such code runs there, each of the waits
   above on another thread ends once that code and the wait have both run for 10 seconds. A `start(..)`, `stop()`,
   `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
-  changed." in its message, and a `shutdown()` shuts the wrapped model down without the lock and logs a `WARN`.
+  changed." in its message, and a `shutdown()` shuts the wrapped model down without the lock and logs a `WARN`. The
+  thread that held the lock then shuts the wrapped model down again before it lets the lock go, so the wrapped model
+  keeps no subscription that the code went on to register.
 
 ### What to do
 

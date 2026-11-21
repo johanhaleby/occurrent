@@ -20,10 +20,12 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.util.List;
@@ -57,6 +59,17 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     // Off, a shutdown() is counted and hooked but leaves the in-memory delegate running. Its own shutdown() waits for an
     // action that is still running
     volatile boolean shutsTheDelegateDown = true;
+    // Off, a subscribe is given StartAt.now(). On, the in-memory delegate asks the start-at it got from inside its own
+    // subscribe, after it has checked that it is not shut down and before it registers the subscription, as a live
+    // delegate that evaluates a StartAt.dynamic function does. The catch-up model hands that function to a delegate only
+    // for the context type of a wrapper, which AsksAsAWrapper is
+    volatile boolean asksTheStartAtInsideTheDelegate = false;
+
+    /**
+     * The context type the start-at is asked with when {@code asksTheStartAtInsideTheDelegate} is on.
+     */
+    interface AsksAsAWrapper extends SubscriptionModelWrapper {
+    }
 
     HookedSubscriptionModel(InMemorySubscriptionModel delegate) {
         this.delegate = delegate;
@@ -76,7 +89,20 @@ class HookedSubscriptionModel implements CheckpointAwareSubscriptionModel {
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         beforeSubscribe.accept(subscriptionId);
-        return delegate.subscribe(subscriptionId, filter, StartAt.now(), action);
+        return delegate.subscribe(subscriptionId, filter, startAtForTheDelegate(startAt), action);
+    }
+
+    @Override
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        beforeSubscribe.accept(subscriptionId);
+        return delegate.subscribePaused(subscriptionId, filter, startAtForTheDelegate(startAt), action);
+    }
+
+    private StartAt startAtForTheDelegate(StartAt startAt) {
+        return asksTheStartAtInsideTheDelegate ? StartAt.dynamic(context -> {
+            startAt.get(new SubscriptionModelContext(AsksAsAWrapper.class));
+            return StartAt.now();
+        }) : StartAt.now();
     }
 
     @Override

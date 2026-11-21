@@ -130,23 +130,57 @@ class CatchupLifecycleCallerCodeHoldsUpTheLockTest {
         assertLaterLifecycleCallsComplete();
     }
 
+    @Test
+    void a_shutdown_that_gave_up_while_the_live_model_asks_the_function_leaves_no_subscription_in_either_model_once_the_subscribe_has_unwound() throws Exception {
+        // Given a live model that asks the function before it registers a subscription, and an action that resumes x and then subscribes z paused,
+        // whose function answers the catch-up model's own ask and waits for a shutdown from another thread when the live model asks
+        live.asksTheStartAtAndRejectsOnceShutDown = true;
+        actionResumesXThenSubscribesZ(StartAt.dynamic(context -> {
+            if (context.subscriptionModelType() == ControllableLiveModel.AsksAsAWrapper.class) {
+                waitForTheCall(model::shutdown);
+            }
+            return StartAt.now();
+        }));
+
+        // When the shutdown gave up on the lock and returned, the function returned, and the subscribe of z has unwound behind the handed calls
+        awaitTheFunction();
+        assertThat(callEndedWhileTheFunctionWaited.get()).as("whether the shutdown returned within " + BOUND + " while the function waited for it").isTrue();
+        assertThat(callOfTheFunction.get().thrown()).as("what the shutdown threw").isNull();
+        catchThrowable(() -> model.resumeSubscription("nobody"));
+
+        // Then neither model holds z, which the live model registered after the shutdown had returned
+        assertThat(live.subscriptions).as("the subscriptions the live model holds").doesNotContainKey(Z);
+        assertThat(live.isRunning(Z)).as("whether the live model runs z").isFalse();
+        assertThat(live.isPaused(Z)).as("whether the live model holds z paused").isFalse();
+        assertThat(model.isRunning(Z)).as("whether the catch-up model runs z").isFalse();
+        assertThat(model.isPaused(Z)).as("whether the catch-up model holds z paused").isFalse();
+    }
+
     // The action of y, a live action, hands the resume of x over and then subscribes z paused behind it, so z subscribes on
     // the lifecycle thread under the model lock and asks the function there. The function runs call on another thread
     // and waits for it, which is the wait that deadlocks without the fix
     private void actionResumesXThenSubscribesZWhoseFunctionWaitsFor(Runnable call) throws Exception {
+        actionResumesXThenSubscribesZ(StartAt.dynamic(() -> {
+            waitForTheCall(call);
+            return StartAt.now();
+        }));
+    }
+
+    // Runs on the thread that holds the model lock and asks the caller's code, and waits for the call once
+    private void waitForTheCall(Runnable call) {
+        if (functionAsked.compareAndSet(false, true)) {
+            Call started = new Call("call-the-function-waits-for", call);
+            callOfTheFunction.set(started);
+            callEndedWhileTheFunctionWaited.set(started.endedWithin(BOUND));
+            functionReturned.countDown();
+        }
+    }
+
+    private void actionResumesXThenSubscribesZ(StartAt waits) throws Exception {
         model.subscribe(X, null, StartAt.now(), event -> {
         });
         model.pauseSubscription(X);
         assertThat(model.isPaused(X)).as("whether x is paused before the test starts").isTrue();
-        StartAt waits = StartAt.dynamic(() -> {
-            if (functionAsked.compareAndSet(false, true)) {
-                Call started = new Call("call-the-function-waits-for", call);
-                callOfTheFunction.set(started);
-                callEndedWhileTheFunctionWaited.set(started.endedWithin(BOUND));
-                functionReturned.countDown();
-            }
-            return StartAt.now();
-        });
         model.subscribe(Y, null, StartAt.now(), event -> {
             try {
                 handleOfX.set(model.resumeSubscription(X));

@@ -215,6 +215,13 @@ the code while it runs under the model lock. A `start(..)`, `stop()`, `stopRepla
 seconds, and throws (`NOTHING_CHANGED`). A `shutdown()` that gives up shuts the wrapped model down without the lock
 and logs a `WARN`.
 
+The marked code can be inside the wrapped model, which can ask the function again in its own `subscribe(..)`, and the
+wrapped model then goes on registering the subscription once the function returns. So a `shutdown()` that gives up
+queues a second pass, which forgets the catch-ups again and calls the wrapped model's `shutdown()` again, under the
+lock. The thread that holds the lock runs it before its outermost hold ends, or the shutdown runs it itself when it
+finds the lock free by then. Until the pass has run, the shutdown counts as under way, and a `start(..)` doesn't start
+the wrapped model.
+
 A call waiting behind the handed calls gives up only while the lifecycle thread hasn't begun it, and then the lifecycle
 thread skips it, so the calls that do run keep their order. The cost is that code the caller supplied that runs longer
 than 10 seconds for other reasons makes these calls throw where they would have waited. A per-id call already has the
