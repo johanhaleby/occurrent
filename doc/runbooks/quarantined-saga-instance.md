@@ -672,9 +672,15 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    that names no database:
 
    ```
-   mongorestore --uri "<connection string without a database>" --nsFrom "<database>.saga-order-fulfilment_skipped_inputs" \
-     --nsTo "skipped-inputs.saga-order-fulfilment_skipped_inputs" skipped-inputs-dump
+   mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_inputs" \
+     --nsFrom "<database>.saga-order-fulfilment_skipped_inputs" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_inputs" \
+     skipped-inputs-dump
    ```
+
+   `--nsInclude` names the one collection to restore. Without it `mongorestore` restores every collection in
+   `skipped-inputs-dump`, and `--nsFrom` and `--nsTo` only rename the one they match. A dump of another saga's
+   collection in the same directory, or of a collection you have deleted since, would then be written back into the
+   database it came from.
 
    Read the restored collection with a MongoDB driver. Each record holds `sagaId` and `quarantineId`, and `seq` and then
    `key` give the order the instance would have applied them in. A record holds its event in up to four fields:
@@ -689,13 +695,15 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    Rebuild each event from its record the way a release in `SpringMongoSagaStateStore` reads it:
 
    - Read the attributes from `event` with the CloudEvents JSON format.
-   - Add each entry of `extensions` as an extension. A string, a 32-bit or 64-bit integer, a double, a boolean or
-     binary data is the value of the extension as it is. A document holds a value as a string in `value` and its class
-     in `type`, where `uri` is a `URI`, `timestamp` an `OffsetDateTime`, `byte` a `Byte`, `short` a `Short`, `float` a
+   - Add each entry of `extensions` as an extension. A string, a 32-bit or 64-bit integer, a double or a boolean is
+     the value of the extension as it is. Binary data is its bytes. The Java driver reads it as an
+     `org.bson.types.Binary`, and its bytes are `getData()`. A value the driver gives as a `byte[]` is those bytes. A document holds a value as a string in
+     `value` and its class in `type`, where `uri` is a `URI`, `timestamp` an `OffsetDateTime`, `byte` a `Byte`, `short` a `Short`, `float` a
      `Float`, `bigInteger` a `BigInteger` and `bigDecimal` a `BigDecimal`.
    - When the record has `dataDocument`, the data is a `PojoCloudEventData` of that document. Its bytes are `data` when
-     the record has it, and otherwise the document as the Java driver's `Document.toJson()` writes it, in UTF-8.
-   - When the record has `data` and no `dataDocument`, the data is those bytes.
+     the record has it, read as bytes the way binary data in an extension is, and otherwise the document as the Java
+     driver's `Document.toJson()` writes it, in UTF-8.
+   - When the record has `data` and no `dataDocument`, the data is those bytes, read as bytes the same way.
    - A record with neither field holds an event without data.
 
    Then, from a process that runs no `SagaRunner`, store every instance that is still

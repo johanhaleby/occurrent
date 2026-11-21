@@ -25,6 +25,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.BsonBinarySubType;
 import org.bson.Document;
 import org.bson.types.Binary;
 import org.bson.types.Decimal128;
@@ -83,6 +84,7 @@ class SkippedInputExportTest {
 
     private static final String COLLECTION = "saga-export";
     private static final String SKIPPED_INPUTS = COLLECTION + "_skipped_inputs";
+    private static final String OTHER_SAGAS_SKIPPED_INPUTS = "saga-other_skipped_inputs";
     private static final String ORDER = "order-1";
     private static final String QUARANTINE_ID = "q-1";
     private static final Instant NOW = Instant.parse("2026-03-04T05:16:17.456Z");
@@ -191,6 +193,49 @@ class SkippedInputExportTest {
         assertThat(differences(fromExport, fromStore)).as("differences between the export's event and the store's").isNotEmpty();
     }
 
+    @Test
+    void an_extension_the_driver_reads_as_Binary_is_rebuilt_from_its_bytes() throws Exception {
+        record(CloudEventBuilder.from(mapEvent("held-1", deliveredMap(), null)).withExtension("bytesext", new byte[]{0, 1, (byte) 0xff}).build());
+        String restoredDatabase = restore(dump(SKIPPED_INPUTS));
+        rewriteBinaryAsUserDefinedSubtype(restoredDatabase, true, false);
+
+        List<Document> restored = readRestored(restoredDatabase);
+
+        assertThat(restored.get(0).get("extensions", Document.class).get("bytesext")).as("the driver reads the extension as").isInstanceOf(Binary.class);
+        assertThat(differences(rebuild(restored.get(0)), stateStore.findSkippedInputs(ORDER, QUARANTINE_ID, LIMIT).get(0).event())).as("differences between the rebuilt event and the store's").isEmpty();
+    }
+
+    @Test
+    void data_the_driver_reads_as_Binary_is_rebuilt_from_its_bytes() throws Exception {
+        record(CloudEventBuilder.from(mapEvent("held-1", deliveredMap(), "{\"other\":1}".getBytes(UTF_8))).build());
+        record(builder("held-2").withData("application/octet-stream", new byte[]{0, 1, (byte) 0xff, (byte) 0x80}).build());
+        String restoredDatabase = restore(dump(SKIPPED_INPUTS));
+        rewriteBinaryAsUserDefinedSubtype(restoredDatabase, false, true);
+
+        List<Document> restored = readRestored(restoredDatabase);
+        List<SkippedInput> fromStore = stateStore.findSkippedInputs(ORDER, QUARANTINE_ID, LIMIT);
+
+        assertThat(restored).as("records in the restored collection").hasSize(2);
+        for (int i = 0; i < restored.size(); i++) {
+            assertThat(restored.get(i).get("data")).as("the driver reads data of record " + i + " as").isInstanceOf(Binary.class);
+            assertThat(differences(rebuild(restored.get(i)), fromStore.get(i).event())).as("differences between the rebuilt event and the store's, record " + i).isEmpty();
+        }
+    }
+
+    @Test
+    void only_the_named_collection_is_restored_when_the_dump_directory_holds_another_sagas_collection_too() throws Exception {
+        record(mapEvent("held-1", deliveredMap(), null));
+        template.getCollection(OTHER_SAGAS_SKIPPED_INPUTS).insertOne(new Document("sagaId", "other-1").append("quarantineId", "q-9").append("seq", 0L).append("key", "other"));
+        String directory = dump(SKIPPED_INPUTS, OTHER_SAGAS_SKIPPED_INPUTS);
+        template.getCollection(OTHER_SAGAS_SKIPPED_INPUTS).deleteMany(new Document());
+
+        String restoredDatabase = restore(directory);
+
+        assertThat(template.getCollection(OTHER_SAGAS_SKIPPED_INPUTS).countDocuments()).as("records written back into the other saga's collection in the source database").isZero();
+        assertThat(collectionNames(restoredDatabase)).as("collections in the restored database").containsExactly(SKIPPED_INPUTS);
+        assertThat(readRestored(restoredDatabase)).as("records restored").hasSize(1);
+    }
+
     private CloudEventBuilder builder(String id) {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test").withSubject(ORDER)
                 .withTime(OffsetDateTime.of(2026, 3, 4, 5, 16, 17, 456_000_000, ZoneOffset.UTC))
@@ -247,23 +292,67 @@ class SkippedInputExportTest {
     // Runs the guide's dump and restore inside the container against this test's own database, and reads the restored
     // records with a driver
     private List<Document> restoredRecords() throws IOException, InterruptedException {
+        return readRestored(restore(dump(SKIPPED_INPUTS)));
+    }
+
+    // The guide's mongodump, run for each saga's collection into the one directory. Returns the directory.
+    private String dump(String... collections) throws IOException, InterruptedException {
         String directory = "/tmp/" + UUID.randomUUID();
+        for (String collection : collections) {
+            ExecResult dump = mongoDBContainer.execInContainer("mongodump", "--uri", "mongodb://localhost:27017/" + databaseName + "?directConnection=true",
+                    "--collection", collection, "--out", directory);
+            assertThat(dump.getExitCode()).as("mongodump exit code for " + collection + ", stderr: " + dump.getStderr()).isZero();
+            ExecResult listing = mongoDBContainer.execInContainer("ls", directory + "/" + databaseName + "/" + collection + ".bson");
+            assertThat(listing.getExitCode()).as("the dump holds the bson file of " + collection + ", stderr: " + listing.getStderr()).isZero();
+        }
+        return directory;
+    }
+
+    // The guide's mongorestore of this saga's skipped inputs collection, from a connection string that names no
+    // database. Returns the name of the database restored into.
+    private String restore(String directory) throws IOException, InterruptedException {
         String restoredDatabase = requireNonNull(new ConnectionString(mongoDBContainer.getReplicaSetUrl("restored-" + UUID.randomUUID().toString().substring(0, 8))).getDatabase());
         assertThat(restoredDatabase.getBytes(UTF_8).length).as("restored database name fits MongoDB's limit").isLessThan(64);
 
-        ExecResult dump = mongoDBContainer.execInContainer("mongodump", "--uri", "mongodb://localhost:27017/" + databaseName + "?directConnection=true",
-                "--collection", SKIPPED_INPUTS, "--out", directory);
-        assertThat(dump.getExitCode()).as("mongodump exit code, stderr: " + dump.getStderr()).isZero();
-        ExecResult listing = mongoDBContainer.execInContainer("ls", directory + "/" + databaseName + "/" + SKIPPED_INPUTS + ".bson");
-        assertThat(listing.getExitCode()).as("the dump holds the collection's bson file, stderr: " + listing.getStderr()).isZero();
-
         ExecResult restore = mongoDBContainer.execInContainer("mongorestore", "--uri", "mongodb://localhost:27017/?directConnection=true",
+                "--nsInclude", databaseName + "." + SKIPPED_INPUTS,
                 "--nsFrom", databaseName + "." + SKIPPED_INPUTS, "--nsTo", restoredDatabase + "." + SKIPPED_INPUTS, directory);
         assertThat(restore.getExitCode()).as("mongorestore exit code, stderr: " + restore.getStderr()).isZero();
+        return restoredDatabase;
+    }
 
+    private List<Document> readRestored(String restoredDatabase) {
         try (MongoClient client = MongoClients.create(mongoDBContainer.getReplicaSetUrl(restoredDatabase))) {
             return client.getDatabase(restoredDatabase).getCollection(SKIPPED_INPUTS, Document.class).find()
                     .sort(new Document("sagaId", 1).append("quarantineId", 1).append("seq", 1).append("key", 1)).into(new ArrayList<>());
+        }
+    }
+
+    private static byte[] bytesOf(Object binary) {
+        return binary instanceof Binary value ? value.getData() : (byte[]) binary;
+    }
+
+    private List<String> collectionNames(String database) {
+        try (MongoClient client = MongoClients.create(mongoDBContainer.getReplicaSetUrl(database))) {
+            return client.getDatabase(database).listCollectionNames().into(new ArrayList<>());
+        }
+    }
+
+    // Writes the extension and the data of every restored record back as binary of a user defined subtype, which the
+    // driver reads as an org.bson.types.Binary, where it reads subtype 0 as a byte[]
+    private void rewriteBinaryAsUserDefinedSubtype(String restoredDatabase, boolean extension, boolean data) {
+        try (MongoClient client = MongoClients.create(mongoDBContainer.getReplicaSetUrl(restoredDatabase))) {
+            var collection = client.getDatabase(restoredDatabase).getCollection(SKIPPED_INPUTS, Document.class);
+            for (Document record : collection.find()) {
+                Document set = new Document();
+                if (extension) {
+                    set.append("extensions.bytesext", new Binary(BsonBinarySubType.USER_DEFINED, bytesOf(record.get("extensions", Document.class).get("bytesext"))));
+                }
+                if (data) {
+                    set.append("data", new Binary(BsonBinarySubType.USER_DEFINED, bytesOf(record.get("data"))));
+                }
+                assertThat(collection.updateOne(new Document("_id", record.get("_id")), new Document("$set", set)).getModifiedCount()).as("record rewritten").isEqualTo(1);
+            }
         }
     }
 
@@ -289,6 +378,7 @@ class SkippedInputExportTest {
                     case Long number -> builder.withExtension(name, number);
                     case Double number -> builder.withExtension(name, number);
                     case Boolean bool -> builder.withExtension(name, bool);
+                    // The recipe: binary data is its bytes, read as a byte[] or an org.bson.types.Binary depending on the subtype
                     case Binary binary -> builder.withExtension(name, binary.getData());
                     case byte[] bytes -> builder.withExtension(name, bytes);
                     case Document tagged -> {
@@ -309,6 +399,7 @@ class SkippedInputExportTest {
             });
         }
         Object data = record.get("data");
+        // The recipe: `data` is read as bytes the way binary data in an extension is
         byte[] bytes = data == null ? null : data instanceof Binary binary ? binary.getData() : (byte[]) data;
         Document dataDocument = record.get("dataDocument", Document.class);
         if (dataDocument != null) {
