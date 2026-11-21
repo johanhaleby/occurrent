@@ -3138,6 +3138,11 @@ everything its handler does for every event from its start, the records it write
 messages it sends. For a rebuild that is the whole history. Stop every instance on the old id before the first
 instance on the new id starts. Stopping them doesn't prevent the repeats.
 
+When the subscription under the new id starts at the present, as it does for `NOW` or `DEFAULT`, it gets no event
+committed before it starts. The events committed while no instance runs, after the last instance on the old id stops
+and before the first one on the new id starts, are never delivered, and neither are the earlier events that only a
+changed filter matches.
+
 What else a new id takes depends on the deployment:
 
 - When every instance writes to one store, give every instance the same new id.

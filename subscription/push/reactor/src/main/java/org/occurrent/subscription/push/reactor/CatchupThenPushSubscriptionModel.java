@@ -143,7 +143,9 @@ import java.util.function.Supplier;
  * failed catch-up starts it failing the same way, and also refuses each event from anywhere else that is still
  * waiting, and does not apply it. When deleting the marker still fails after 3 retries, the subscription logs an
  * error naming the subscription id. A cancel deletes the marker again, and when that delete fails too, subscribing
- * again in this process deletes it once more and replays from the beginning. After a restart a catch-up that reads a
+ * again in this process deletes it once more and replays from the beginning. A catch-up that failed because the
+ * checkpoint stored under the id is not a catch-up marker, such as a durable subscription's, does not delete that
+ * checkpoint, but a cancel deletes it, even when something else still uses it. After a restart a catch-up that reads a
  * marker the store still holds resumes after it and does not replay a failed event at or below it. Deleting the marker
  * by hand is best effort, as a cancel's delete is, so only a subscription under a new id is sure to replay from the
  * beginning, see the "Cancel" section of
@@ -776,7 +778,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * <p>
      * The cancel happens when you call this, whether or not anything subscribes to the returned {@code Mono}. When the
      * delete fails, the subscription stays cancelled and the marker stays stored. It deletes the marker for an id this
-     * model has never subscribed to.
+     * model has never subscribed to. It deletes a checkpoint stored under the id that is not a catch-up marker as well,
+     * such as a durable subscription's that a catch-up of this model refused, even when something else still uses it.
      * <p>
      * Without a {@link CheckpointStorage} there is no marker, and the {@code Mono} completes at once.
      *

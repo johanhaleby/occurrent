@@ -1643,6 +1643,11 @@ depends on where each instance keeps what the subscription builds, as
 [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 in the 0.35.0 upgrade guide describes.
 
+When the subscription under the new id starts at the present, as it does for `NOW` or `DEFAULT`, it gets no event
+committed before it starts. The events before that start that only the widened filter matches are never delivered, and
+neither are the events committed while no instance runs, after the last instance on the old id stops and before the
+first one on the new id starts.
+
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
 below the oplog window. `neverSaveQuietPosition()` turns the save off. A subscription that then matches nothing for
 longer than the oplog window ends in lost history when it next starts from its stored checkpoint. With
