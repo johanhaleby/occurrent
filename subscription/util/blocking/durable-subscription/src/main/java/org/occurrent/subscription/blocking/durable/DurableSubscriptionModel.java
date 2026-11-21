@@ -109,7 +109,12 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} do. On another storage, such as
  * {@code SpringRedisCheckpointStorage} or {@code InMemoryCheckpointStorage}, a node with an older version can save a
  * later checkpoint between the {@code ifAbsent()} write and the save with the version, and that save then stores the
- * first position over it. The events between the two positions are delivered again. A {@link CheckpointStorage} that
+ * first position over it. The events between the two positions are delivered again. A storage that overrides the
+ * two-argument {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint)} and not the three-argument one
+ * gets no save with the version, since another node can store an earlier first position through it between the two
+ * writes, and the save would move it later again and skip the events between the two. There the first position is
+ * stored without a version, as in 0.34.0, so a node whose lease moved on can write over it until the next checkpoint
+ * write stores the version, which delivers events again. A {@link CheckpointStorage} that
  * answers {@code false} from
  * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} could only write it unconditionally, and then the two
  * nodes could overwrite each other's and lose the events between the two positions. Such a subscription is refused with
@@ -209,6 +214,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // subscribe(..) records a subscription id here when its StartAt resolved to null, opting it out of this model's
     // checkpoint management (the same "not allowed to start" case CompetingConsumerSubscriptionModel has its own
     // set for). resumeSubscription reads this so it forwards such a subscription unchanged too, rather than
+    // Whether the storage overrides only the two-argument resolveFirstCheckpointRace, which can store an earlier first
+    // position between an ifAbsent() write and a save of the version, so that save is skipped
+    private final boolean firstPositionCanMoveEarlierBetweenTwoWrites;
     // resuming it from a checkpoint this model was never asked to manage. A plain set is safe here only because
     // subscribe, cancelSubscription and resumeSubscription all run under the lock for the id, which makes at most
     // one of them active for a given id at a time, so no two attempts for the same id are ever both live against
@@ -405,13 +413,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.subscriptionModel = subscriptionModel;
         this.config = config;
         this.writeVersionSource = writeVersionSource;
-        if (writeVersionSource != null && resolvesFirstCheckpointRaceWithoutWriteVersion(storage)) {
+        this.firstPositionCanMoveEarlierBetweenTwoWrites = resolvesFirstCheckpointRaceWithoutWriteVersion(storage);
+        if (writeVersionSource != null && firstPositionCanMoveEarlierBetweenTwoWrites) {
             log.warn("Checkpoint storage {} overrides resolveFirstCheckpointRace(String, Checkpoint) but not " +
                      "resolveFirstCheckpointRace(String, Checkpoint, long), so a first position this model records is " +
-                     "written with ifAbsent() and then saved again with the write version. Another node can store an " +
-                     "earlier first position between those two writes, and the second write then moves it later, so the " +
-                     "events between the two positions are skipped. Override resolveFirstCheckpointRace(String, " +
-                     "Checkpoint, long) to settle the first position and store the version in one write.",
+                     "written with ifAbsent() and stored without the write version. Saving it again with the version " +
+                     "could move an earlier first position another node stored in between later and skip the events " +
+                     "between the two. Until the next checkpoint write stores the version, a node whose lease moved on " +
+                     "can write over the first position, which delivers events again. Override " +
+                     "resolveFirstCheckpointRace(String, Checkpoint, long) to settle the first position and store the " +
+                     "version in one write.",
                     storage.getClass().getName());
         }
         HistoryLossReportingSubscriptions.findIn(subscriptionModel)
@@ -914,9 +925,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // Only for a storage that answered settleWithWriteVersion empty. An ifAbsent() write stores no version, and
     // notOlderThan(v) accepts any write while none is stored, so without this a node whose lease moved on could
-    // overwrite the first position. This save writes over whatever was stored since the ifAbsent() write
+    // overwrite the first position. This save writes over whatever was stored since the ifAbsent() write, so it is
+    // skipped on a storage whose two-argument resolveFirstCheckpointRace can store an earlier first position in
+    // between, which this save would move later again and skip the events between the two. The first position is
+    // then stored without a version, as in 0.34.0, and a node whose lease moved on can overwrite it until the next
+    // checkpoint write, which only delivers events again
     private Checkpoint stampWriteVersion(String subscriptionId, Checkpoint pinned, CheckpointWriteCondition stamp) {
-        if (!(stamp instanceof CheckpointWriteCondition.NotOlderThan)) {
+        if (!(stamp instanceof CheckpointWriteCondition.NotOlderThan) || firstPositionCanMoveEarlierBetweenTwoWrites) {
             return pinned;
         }
         try {
