@@ -63,6 +63,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -302,6 +303,31 @@ class SagaQuarantineTest {
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().input()).isEqualTo(POISON + "@2"),
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().position()).isNull(),
                     () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
+        @Test
+        void are_isolated_from_it_when_it_skips_an_event_with_an_AtomicLong_extension_the_store_holds_as_a_Long() {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
+
+            model.push(CloudEventBuilder.v1(cloudEvent(POISON, 3, new PaymentReserved("5", POISON))).withExtension("counter", (Number) new AtomicLong(7)).build());
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            String quarantineId = subscription.instances().find(POISON).orElseThrow().failure().quarantineId();
+            SagaStateStoreSkippedInputs skipped = (SagaStateStoreSkippedInputs) stateStore;
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).as("the other instance dispatches").containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(skipped.findSkippedInputs(POISON, quarantineId, 10)).as("the quarantined instance holds the failed input and the skipped one")
+                            .extracting(SkippedInput::key).containsExactly(POISON + "@2", POISON + "@3"),
+                    () -> assertThat(skipped.findSkippedInputs(POISON, quarantineId, 10).getLast().event().getExtension("counter")).as("the AtomicLong extension as released")
+                            .isExactlyInstanceOf(Long.class).isEqualTo(7L)
             ));
         }
 

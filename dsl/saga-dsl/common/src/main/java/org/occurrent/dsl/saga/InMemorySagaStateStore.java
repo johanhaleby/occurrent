@@ -27,6 +27,9 @@ import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SkippedInputData;
+import org.occurrent.dsl.saga.internal.SkippedInputNumber;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -61,18 +64,31 @@ import static java.util.Objects.requireNonNull;
  * is copied, as long as a map holds no key equal to another of its keys. An {@code IdentityHashMap} can hold two equal
  * keys, and a copy would keep only one of them.
  * <p>
+ * An extension that is a {@code Number} of any class other than {@code Byte}, {@code Short}, {@code Integer},
+ * {@code Long}, {@code Float}, {@code Double}, {@code BigInteger} and {@code BigDecimal}, such as an {@code AtomicLong} or
+ * a subclass of {@code BigDecimal}, is held as a {@code Long} when its value is an integer that fits in one, and otherwise
+ * as a {@code BigDecimal} with its value and scale, and a release hands it back as that class. Its value is the decimal
+ * its {@code toString} writes. When {@code toString} doesn't write a decimal, as for {@code NaN}, it's held as its
+ * {@code doubleValue}. This module doesn't depend on BSON, so a {@code Decimal128} extension comes back here as a
+ * {@code Long} or a {@code BigDecimal}, while {@code SpringMongoSagaStateStore} hands it back as the same
+ * {@code Decimal128}. The store logs a warning that names the instance, the input, the extension, the delivered class
+ * and the class a release hands back, and never the value.
+ * <p>
  * Data it can't copy is held as its bytes, and every read rebuilds it the way {@code SpringMongoSagaStateStore} rebuilds
  * data it holds as bytes. A {@code JsonCloudEventData} comes back as a {@code JsonCloudEventData} read from those bytes
  * the way the CloudEvents JSON format with its default options reads them, whatever format the application registered,
  * with every decimal number read as a {@code BigDecimal} when a {@code double} can't hold one of them. Data of any other
  * class, such as a {@code PojoCloudEventData} of an object, comes back as a {@code BytesCloudEventData}.
  * {@link #compareAndSaveSkipped} throws an {@link IllegalStateException}, and records nothing, for an event with an
- * extension it can't copy, for data whose copy isn't of the class a release hands the converter, and for JSON data
+ * extension of a class other than {@code String}, {@code Boolean}, {@code URI}, {@code OffsetDateTime}, {@code byte[]}
+ * and {@code Number}, such as a {@code UUID} that a {@code CloudEventExtension} sets, for data whose copy isn't of the class a release hands the converter, and for JSON data
  * that comes back with another value, such as a binary value as text.
  *
  * @param <S> the user state type
  */
 public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S>, SagaStateStoreSkippedInputs {
+
+    private static final Logger log = LoggerFactory.getLogger(InMemorySagaStateStore.class);
 
     private final ConcurrentMap<String, Instance> instances = new ConcurrentHashMap<>();
 
@@ -358,6 +374,11 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 case OffsetDateTime value -> copy.withExtension(name, value);
                 case byte[] value -> copy.withExtension(name, value.clone());
                 case Number value when UNCHANGEABLE.contains(value.getClass()) -> copy.withExtension(name, value);
+                case Number value -> {
+                    Number released = SkippedInputNumber.releasedAs(value);
+                    SkippedInputNumber.warnHeldAs(log, sagaId, input.key(), name, value, released);
+                    copy.withExtension(name, released);
+                }
                 case Object value -> throw cannotCopy(sagaId, input, "the extension '" + name + "', a " + value.getClass().getName());
             }
         }

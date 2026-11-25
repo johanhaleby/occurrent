@@ -20,11 +20,13 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
 import io.cloudevents.CloudEventExtension;
 import io.cloudevents.CloudEventExtensions;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -65,6 +67,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
@@ -210,6 +213,36 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 () -> assertThat(held.getData()).isExactlyInstanceOf(BytesCloudEventData.class),
                 () -> assertThat(requireNonNull(held.getData()).toBytes()).isEqualTo("{}".getBytes(UTF_8))
         );
+    }
+
+    @Test
+    void a_String_with_an_unpaired_surrogate_in_map_data_is_held_as_the_bytes_of_the_data_and_read_back_as_the_delivered_bytes_with_a_warning() throws Exception {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("orderId", ORDER);
+        data.put("holder-key-3f9a", "a\uD800b");
+        byte[] delivered = json(data);
+        CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, SpringMongoSagaStateStoreHeldEventClassTest::json)).build();
+
+        Held held = heldAndReadWarned(event);
+
+        CloudEventData read = requireNonNull(held.event().getData());
+        assertAll(
+                () -> assertThat(read).isExactlyInstanceOf(BytesCloudEventData.class),
+                () -> assertThat(read.toBytes()).as("the delivered bytes").isEqualTo(delivered),
+                () -> assertThat(new ObjectMapper().readValue(read.toBytes(), Map.class).get("holder-key-3f9a")).as("the String the bytes decode to").isEqualTo("a\uD800b"),
+                () -> assertThat(held.warnings()).singleElement().satisfies(warning -> assertThat(warning)
+                        .contains("holds the data of the input '" + KEY + "' it skips as its bytes")
+                        .contains("The value at 'entry 1' of its data, a java.lang.String, comes back as ")
+                        .doesNotContain("holder-key-3f9a").doesNotContain("\uD800"))
+        );
+    }
+
+    private static byte[] json(Object value) {
+        try {
+            return new ObjectMapper().writeValueAsBytes(value);
+        } catch (JsonProcessingException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     @Test
@@ -476,8 +509,38 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void a_fractional_extension_of_a_custom_Number_class_is_held_and_released_as_a_Decimal128_with_its_value_and_scale() {
-        assertReleasedAs(new Reading("1234567890.123456789"), new Decimal128(new BigDecimal("1234567890.123456789")));
+    void a_fractional_extension_of_a_custom_Number_class_is_held_as_its_decimal_string_and_released_as_a_BigDecimal_with_its_value_and_scale() {
+        Object released = assertReleasedAs(new Reading("1234567890.123456789"), new BigDecimal("1234567890.123456789"));
+
+        assertAll(
+                () -> assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(9),
+                () -> assertThat(storedExtension("number").get("value")).as("the stored value").isEqualTo("1234567890.123456789")
+        );
+    }
+
+    @Test
+    void a_fractional_extension_of_a_custom_Number_class_with_trailing_zeros_is_released_as_a_BigDecimal_with_the_same_scale() {
+        Object released = assertReleasedAs(new Reading("2.50"), new BigDecimal("2.50"));
+
+        assertAll(
+                () -> assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(2),
+                () -> assertThat(storedExtension("number").get("value")).as("the stored value").isEqualTo("2.50")
+        );
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigDecimal_is_held_as_its_decimal_string_and_released_as_a_BigDecimal_with_its_value_and_scale_and_a_warning() {
+        Object released = assertReleasedAs(new SubclassedBigDecimal("2.50"), new BigDecimal("2.50"));
+
+        assertAll(
+                () -> assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(2),
+                () -> assertThat(storedExtension("number")).as("the stored extension").containsEntry("value", "2.50")
+        );
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigInteger_is_held_and_released_as_a_Long_with_its_value_and_a_warning() {
+        assertReleasedAs(new SubclassedBigInteger("12345"), Long.valueOf(12345));
     }
 
     @Test
@@ -486,7 +549,7 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void an_integral_extension_of_a_custom_Number_class_past_a_Long_and_a_Decimal128_is_held_and_released_as_a_BigDecimal_with_its_exact_value() {
+    void an_integral_extension_of_a_custom_Number_class_past_a_Long_is_held_and_released_as_a_BigDecimal_with_its_exact_value() {
         assertReleasedAs(new Reading("12345678901234567890123456789012345678901234567890"), new BigDecimal("12345678901234567890123456789012345678901234567890"));
     }
 
@@ -505,11 +568,11 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
 
         assertAll(
                 restored(held.event(), "first", Long.valueOf(1_234_567)),
-                restored(held.event(), "second", new Decimal128(new BigDecimal("1234567890.123456789"))),
+                restored(held.event(), "second", new BigDecimal("1234567890.123456789")),
                 restored(held.event(), "held", Long.valueOf(7_654_321)),
                 () -> assertThat(held.warnings()).containsExactlyInAnyOrder(
                         warning("first", AtomicLong.class, Long.class),
-                        warning("second", Reading.class, Decimal128.class))
+                        warning("second", Reading.class, BigDecimal.class))
         );
     }
 
@@ -737,6 +800,18 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         };
     }
 
+    private static final class SubclassedBigDecimal extends BigDecimal {
+        private SubclassedBigDecimal(String value) {
+            super(value);
+        }
+    }
+
+    private static final class SubclassedBigInteger extends BigInteger {
+        private SubclassedBigInteger(String value) {
+            super(value);
+        }
+    }
+
     // A Number of a class the record can't hold as that class, whose toString is the decimal it writes
     private static final class Reading extends Number {
         private final String text;
@@ -793,15 +868,17 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                + ", so a release hands it back as a " + released.getName() + ".";
     }
 
-    private void assertReleasedAs(Number delivered, Object expected) {
+    private Object assertReleasedAs(Number delivered, Object expected) {
         Held held = heldAndReadWarned(baseEvent().withExtension("number", delivered).build());
 
         assertAll(
                 restored(held.event(), "number", expected),
                 () -> assertThat(held.warnings()).containsExactly(warning("number", delivered.getClass(), expected.getClass())),
                 () -> assertThat(String.join("\n", held.warnings())).as("the warning does not hold the value").doesNotContain(delivered.toString()),
-                () -> assertThat(storedExtension("number")).as("the stored extension").containsEntry("type", "number").containsEntry("class", delivered.getClass().getName())
+                () -> assertThat(storedExtension("number")).as("the stored extension").containsEntry("type", "number").containsEntry("class", delivered.getClass().getName()),
+                () -> assertThat(storedExtension("number").get("value")).as("the stored value").isEqualTo(expected instanceof BigDecimal decimal ? decimal.toString() : expected)
         );
+        return requireNonNull(held.event().getExtension("number"));
     }
 
     private Document storedExtension(String name) {

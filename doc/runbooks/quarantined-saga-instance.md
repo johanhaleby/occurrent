@@ -439,17 +439,19 @@ A key is `<streamId>@<streamVersion>` for an event from a stream.
 `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a string
 with a tag that names the class. A `String` with an unpaired surrogate is stored as its UTF-16 code units with the tag
 `utf16`, and a `Number` of any other class than those and `Integer`, `Long`, `Double` and `Decimal128`, such as an
-`AtomicLong`, with the tag `number` and the name of its class. Any other extension is stored as it is. Data delivered
+`AtomicLong` or a subclass of `BigDecimal`, with the tag `number` and the name of its class. Any other extension is stored as it is. Data delivered
 as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in
 `data` unless they are the document's own JSON. Other data is held in `data` as its bytes in BSON binary, and a release
 hands it to the converter as a `BytesCloudEventData`.
 
 A release hands back every extension as it was delivered, except one stored with the tag `number`. That one comes back
-with its value as a `Long` when the value is an integer that fits in one, otherwise as a `Decimal128` when one holds
-it, and otherwise as a `BigDecimal`. The value is the decimal the number's `toString` writes, and a number whose
+with its value as a `Long` when the value is an integer that fits in one, and otherwise as a `BigDecimal` with its
+value and scale. The value is the decimal the number's `toString` writes, and a number whose
 `toString` isn't a decimal, such as `NaN`, comes back as its `doubleValue`. The store logs a `WARN` that names the
 instance, the input, the extension, the delivered class and the class a release hands back. The MongoDB event store
 never delivers such an extension, so it comes from an in-memory event store or one of your own.
+`InMemorySagaStateStore` hands such an extension back by the same rule and logs the same `WARN`. It doesn't depend on
+BSON, so it hands a `Decimal128` extension back as a `Long` or a `BigDecimal` too.
 
 Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
 the way MongoDB stores it, decodes it, and reads the event back the way a release does. It writes the copy of the
@@ -789,8 +791,8 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    - For `utf16` the value is binary, and the extension is the `String` whose UTF-16 code units, big-endian, are its
      bytes. Read them without a charset decoder, such as with `ByteBuffer.wrap(bytes).asCharBuffer().toString()`, since
      a decoder replaces an unpaired surrogate.
-   - For `number` the extension is the one a release hands back. A 64-bit integer is a `Long`, a decimal128 a
-     `Decimal128`, a double a `Double`, and a string a `BigDecimal` of it.
+   - For `number` the extension is the one a release hands back. A 64-bit integer is a `Long`, a double a `Double`,
+     and a string a `BigDecimal` of it.
    - When the record has `dataClass`, the data is `data`, read as bytes the way binary data in an extension is. When
      `dataClass` is `io.cloudevents.jackson.JsonCloudEventData`, it is a `JsonCloudEventData` of those bytes read as
      JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. When a

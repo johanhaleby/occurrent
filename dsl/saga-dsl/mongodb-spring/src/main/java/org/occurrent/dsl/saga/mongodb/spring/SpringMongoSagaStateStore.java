@@ -69,6 +69,7 @@ import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.internal.SkippedInputData;
+import org.occurrent.dsl.saga.internal.SkippedInputNumber;
 import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
@@ -314,8 +315,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String EXTENSION_BIG_DECIMAL = "bigDecimal";
     // A String with an unpaired surrogate, held as its UTF-16 code units in BSON binary
     private static final String EXTENSION_UTF16 = "utf16";
-    // A Number of a class neither BSON nor another tag knows, held with its class as a Long, a Decimal128, a decimal
-    // string or a Double, and released as a Long, a Decimal128, a BigDecimal or a Double
+    // A Number of a class BSON doesn't hold, held with its class as a Long, a decimal string or a Double, and released
+    // as a Long, a BigDecimal or a Double
     private static final String EXTENSION_NUMBER = "number";
     private static final String EXTENSION_CLASS = "class";
 
@@ -1015,11 +1016,17 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // BSON reads a URI, an OffsetDateTime, a Byte, a Short, a Float, a BigInteger and a BigDecimal back as another class,
     // so they are stored as a string tagged with the class to restore. A String with an unpaired surrogate, which BSON's
-    // UTF-8 can't hold, is stored as its UTF-16 code units. A Number of a class neither BSON nor a tag knows is stored
-    // as the value releasedAs gives it, tagged with its class. Any other value is stored as it is
+    // UTF-8 can't hold, is stored as its UTF-16 code units. A Number of any other class BSON doesn't hold, a subclass of
+    // BigInteger or BigDecimal included, is stored tagged with its class as the Long, BigDecimal or Double a release
+    // hands back, a BigDecimal as its decimal string. Any other value is stored as it is
     private static Object heldExtension(Object value) {
         return switch (value) {
             case String string when !isWellFormed(string) -> taggedExtension(EXTENSION_UTF16, utf16(string));
+            case Number number when !heldAsItsClass(number) -> {
+                Number released = SkippedInputNumber.releasedAs(number);
+                Object stored = released instanceof BigDecimal decimal ? decimal.toString() : released;
+                yield new Document(EXTENSION_TYPE, EXTENSION_NUMBER).append(EXTENSION_CLASS, number.getClass().getName()).append(EXTENSION_VALUE, stored);
+            }
             case URI uri -> taggedExtension(EXTENSION_URI, uri.toString());
             case OffsetDateTime time -> taggedExtension(EXTENSION_TIMESTAMP, time.toString());
             case Byte number -> taggedExtension(EXTENSION_BYTE, number.toString());
@@ -1028,12 +1035,6 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             case Float number -> taggedExtension(EXTENSION_FLOAT, number.toString());
             case BigInteger number -> taggedExtension(EXTENSION_BIG_INTEGER, number.toString());
             case BigDecimal number -> taggedExtension(EXTENSION_BIG_DECIMAL, number.toString());
-            case Number number when !heldAsItsClass(number) -> {
-                Number released = releasedAs(number);
-                // A BigDecimal, which BSON writes as a Decimal128, is past what one holds, so it's stored as its decimal
-                Object stored = released instanceof BigDecimal decimal ? decimal.toString() : released;
-                yield new Document(EXTENSION_TYPE, EXTENSION_NUMBER).append(EXTENSION_CLASS, number.getClass().getName()).append(EXTENSION_VALUE, stored);
-            }
             default -> value;
         };
     }
@@ -1042,44 +1043,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return new Document(EXTENSION_TYPE, type).append(EXTENSION_VALUE, value);
     }
 
-    // Whether BSON or a tag holds a Number of this class as that class
+    // The Number classes BSON or a tag holds as that class. Matched by exact class, since a subclass of BigInteger or
+    // BigDecimal would come back as its superclass
+    private static final Set<Class<?>> HELD_NUMBERS = Set.of(Integer.class, Long.class, Double.class, Decimal128.class,
+            Byte.class, Short.class, Float.class, BigInteger.class, BigDecimal.class);
+
     private static boolean heldAsItsClass(Number number) {
-        return number instanceof Integer || number instanceof Long || number instanceof Double || number instanceof Decimal128
-               || number instanceof Byte || number instanceof Short || number instanceof Float || number instanceof BigInteger || number instanceof BigDecimal;
+        return HELD_NUMBERS.contains(number.getClass());
     }
 
     // The extension a release hands back for an extension delivered as value
     private static Object released(Object value) {
-        return value instanceof Number number && !heldAsItsClass(number) ? releasedAs(number) : value;
-    }
-
-    // The value a release hands back for a Number of a class neither BSON nor a tag knows, as the class that holds it
-    // exactly. Its value is the decimal its toString writes, which is how Jackson writes such a Number. That's a Long
-    // when it's an integer that fits, otherwise a Decimal128 when one holds it, otherwise a BigDecimal. A Number whose
-    // toString isn't a decimal, such as NaN, is its doubleValue as a Double
-    private static Number releasedAs(Number number) {
-        BigDecimal value;
-        try {
-            value = new BigDecimal(number.toString());
-        } catch (NumberFormatException e) {
-            return number.doubleValue();
-        }
-        if (value.signum() == 0 || value.stripTrailingZeros().scale() <= 0) {
-            try {
-                return value.longValueExact();
-            } catch (ArithmeticException e) {
-                // Past a Long
-            }
-        }
-        try {
-            Decimal128 decimal = new Decimal128(value);
-            if (decimal.bigDecimalValue().compareTo(value) == 0) {
-                return decimal;
-            }
-        } catch (NumberFormatException e) {
-            // Past a Decimal128, and its message quotes the value
-        }
-        return value;
+        return value instanceof Number number && !heldAsItsClass(number) ? SkippedInputNumber.releasedAs(number) : value;
     }
 
     // Whether every surrogate in string is part of a pair, which is what UTF-8 can encode
@@ -1146,11 +1121,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * An extension comes back with its value and its class. A {@code String} with an unpaired surrogate, which BSON's
      * UTF-8 can't hold, is held as its UTF-16 code units and comes back as the same {@code String}. A {@code Number} of
      * any class other than {@code Byte}, {@code Short}, {@code Integer}, {@code Long}, {@code Float}, {@code Double},
-     * {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an {@code AtomicLong}, comes back with its
-     * value as a {@code Long} when the value is an integer that fits in one, otherwise as a {@code Decimal128} when one
-     * holds the value exactly, and otherwise as a {@code BigDecimal}. Its value is the decimal its {@code toString}
-     * writes, which is how Jackson writes such a number. When {@code toString} doesn't write a decimal, as for
-     * {@code NaN}, it comes back as its {@code doubleValue}. The store logs a warning that names the instance, the
+     * {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an {@code AtomicLong} or a subclass of
+     * {@code BigDecimal}, comes back with its value as a {@code Long} when the value is an integer that fits in one, and
+     * otherwise as a {@code BigDecimal} with its value and scale. Its value is the decimal its {@code toString} writes,
+     * which is how Jackson writes such a number. When {@code toString} doesn't write a decimal, as for {@code NaN}, it
+     * comes back as its {@code doubleValue}. {@code InMemorySagaStateStore} hands such a number back as the same {@code Long},
+     * {@code BigDecimal} or {@code Double}.
+     * The store logs a warning that names the instance, the
      * input, the extension, the delivered class and the class a release hands back, and never the value.
      * <p>
      * Before it writes anything, this encodes the record to BSON the way MongoDB stores it, decodes it, and reads the
@@ -1352,8 +1329,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         for (String name : input.event().getExtensionNames()) {
             if (input.event().getExtension(name) instanceof Number number && !heldAsItsClass(number)) {
-                log.warn("Saga instance '{}' can't hold the extension '{}' of the input '{}' it skips as a {}, so a release hands it back as a {}.",
-                        sagaId, name, input.key(), number.getClass().getName(), releasedAs(number).getClass().getName());
+                SkippedInputNumber.warnHeldAs(log, sagaId, input.key(), name, number, SkippedInputNumber.releasedAs(number));
             }
         }
         if (upsertFits(filter, new Document("$setOnInsert", held), held, codecs)) {
@@ -1445,7 +1421,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // How the restored event differs from the delivered one in an attribute, an extension or, withData, its data, at any
     // depth, or null when every value is equal and of the same class. An extension is checked against the one a release
-    // promises for it, which for a Number of a class the record can't hold is releasedAs. A map or a list may come back as another
+    // promises for it, which for a Number of a class the record can't hold is SkippedInputNumber.releasedAs. A map or a list may come back as another
     // implementation of Map or List. Without withData the data was held as its bytes, and it's checked against the data
     // SkippedInputData promises a release hands back for them, its class and the value of JSON data
     private static @Nullable String difference(CloudEvent delivered, CloudEvent restored, boolean withData) {

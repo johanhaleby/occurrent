@@ -263,19 +263,21 @@ class SkippedInputExportTest {
     }
 
     @Test
-    void an_extension_of_a_Number_class_the_record_does_not_hold_is_rebuilt_as_the_Long_Decimal128_or_BigDecimal_or_Double_a_release_hands_back() throws Exception {
+    void an_extension_of_a_Number_class_the_record_does_not_hold_is_rebuilt_as_the_Long_BigDecimal_or_Double_a_release_hands_back() throws Exception {
         record(builder("held-1").withExtension("number", (Number) new AtomicLong(1_234_567)).build());
         record(builder("held-2").withExtension("number", (Number) new Reading("1234567890.123456789")).build());
         record(builder("held-3").withExtension("number", (Number) new Reading("1234567890123456789012345678901234567890.5")).build());
         record(builder("held-4").withExtension("number", (Number) new Reading("NaN")).build());
+        record(builder("held-5").withExtension("number", (Number) new Reading("2.50")).build());
 
         List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
 
         assertThat(restored.stream().map(record -> rebuild(record).getExtension("number")).toList()).as("extensions of the rebuilt events").containsExactly(
                 Long.valueOf(1_234_567),
-                new Decimal128(new BigDecimal("1234567890.123456789")),
+                new BigDecimal("1234567890.123456789"),
                 new BigDecimal("1234567890123456789012345678901234567890.5"),
-                Double.NaN);
+                Double.NaN,
+                new BigDecimal("2.50"));
     }
 
     @Test
@@ -605,11 +607,10 @@ class SkippedInputExportTest {
                             // The recipe: the value of utf16 is binary, the String whose UTF-16BE code units are its bytes, read without a
                             // charset decoder, which replaces an unpaired surrogate
                             case "utf16" -> builder.withExtension(name, ByteBuffer.wrap(bytesOf(stored)).asCharBuffer().toString());
-                            // The recipe: the value of number is a Long when it is a 64-bit integer, a Decimal128 when it is a decimal128,
-                            // a BigDecimal when it is a string and a Double when it is a double
+                            // The recipe: the value of number is a Long when it is a 64-bit integer, a BigDecimal when it is a string
+                            // and a Double when it is a double
                             case "number" -> builder.withExtension(name, switch (stored) {
                                 case Long number -> number;
-                                case Decimal128 number -> number;
                                 case String decimal -> new BigDecimal(decimal);
                                 case Double number -> number;
                                 default -> throw new IllegalStateException("Unknown number value for '" + name + "': " + stored.getClass());

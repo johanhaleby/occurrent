@@ -33,10 +33,11 @@ import java.util.Optional;
  * {@link #findSkippedInputs(String, String, int)}, for a release to replay. A release converts the event again, so a
  * store returns the event as it was delivered, with the same attributes, the same data class, the same values of the
  * same Java classes at any depth, the same bytes, and the extensions with the same values and the same classes. The one
- * exception is an extension that is a {@code Number} of a class the store can't hold, such as an {@code AtomicLong},
- * which a store may hand back with its value as a class it can hold, and then logs a warning that names both classes.
- * {@code SpringMongoSagaStateStore} hands it back as a {@code Long}, a {@code Decimal128}, a {@code BigDecimal} or a {@code Double}. A map or
- * a list inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't
+ * exception is an extension that is a {@code Number} of a class the store can't hold as that class, such as an
+ * {@code AtomicLong}. A store hands it back as a {@code Long} when the decimal its {@code toString} writes is an integer
+ * that fits in one, and otherwise as a {@code BigDecimal} with the value and scale of that decimal. When
+ * {@code toString} doesn't write a decimal, as for {@code NaN}, the store hands back its {@code doubleValue} as a
+ * {@code Double}. It logs a warning that names both classes and never the value. A map or a list inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't
  * hold the data that way may hold its bytes instead, and then returns a {@code JsonCloudEventData} read from those
  * bytes with the same JSON value for data that was one, and a {@code BytesCloudEventData} with the same bytes for data
  * of any other class. A number in the JSON keeps its value but not always its node class, so {@code 1.10} may come back

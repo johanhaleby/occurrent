@@ -119,12 +119,12 @@ keeps no other copy of a skipped
 event. A release converts the event again, so `SpringMongoSagaStateStore` holds an event so that a release hands the
 converter the event exactly as it was delivered. That means the same attributes, the same `CloudEventData` class,
 the same data values with the same Java classes at any depth, the same bytes, and the extensions with the same values
-and the same Java classes. The one exception is an extension that is a `Number` of a class neither BSON nor a tag in the
-record knows, such as an `AtomicLong`, which comes back with its value as another class. A map or a list inside the
+and the same Java classes. The one exception is an extension that is a `Number` of a class the store doesn't hold as
+that class, such as an `AtomicLong`, which comes back with its value as a `Long` or a `BigDecimal`. A map or a list inside the
 data may come back as another implementation of `Map` or `List`, such as a `Document` for a `LinkedHashMap`. Data the
 record can't hold that way is held as its bytes and its class, and a record too large for one document is split
 across several, so an event a quarantined instance skips stops the subscription only when the record can't hold its
-attributes, an extension that isn't a `String` or a `Number`, or its key.
+attributes, an extension such as a `UUID` that a `CloudEventExtension` sets, or its key.
 
 In the record, `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A
 `URI`, an `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a
@@ -133,9 +133,9 @@ surrogate, which BSON's UTF-8 can't hold, is stored as its UTF-16 code units in 
 comes back as the same `String`. Any other extension is stored as it is.
 
 A `Number` of any other class than `Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger`, `BigDecimal`
-and `Decimal128` is stored with the tag `number`, the name of its class, and its value. A release hands it back as the
-class that holds the value exactly, a `Long` when it's an integer that fits in one, otherwise a `Decimal128` when one
-holds it, and otherwise a `BigDecimal`, which the record stores as its decimal string. Its value is the decimal its
+and `Decimal128`, a subclass of `BigInteger` or `BigDecimal` included, is stored with the tag `number`, the name of its
+class, and its value. A release hands it back as a `Long` when its value is an integer that fits in one, and otherwise
+as a `BigDecimal` with its value and scale, which the record stores as its decimal string. Its value is the decimal its
 `toString` writes, which is how Jackson writes such a number, and a `Number` whose `toString` isn't a decimal, such as
 `NaN`, comes back as its `doubleValue`. The store logs a `WARN` that names the instance, the input, the extension, the
 delivered class and the class a release hands back, and not the value. A release can't hand back the delivered class,
@@ -143,6 +143,12 @@ since `Number` has no way to build one from a value, and refusing the event woul
 instance of the saga. The MongoDB event store never delivers such an extension, since it hands back every extension as
 an `Integer`, a `Long`, a `Boolean` or a `String`, so such an event comes from an in-memory event store or one of your
 own.
+
+`InMemorySagaStateStore` holds such a `Number` by the same rule and logs the same `WARN`, for any class other than
+`Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger` and `BigDecimal`, so a release hands back the same
+class from either store. The exception is a `Decimal128`, which `SpringMongoSagaStateStore` hands back as the same
+`Decimal128`. The saga DSL's common module doesn't depend on BSON, so `InMemorySagaStateStore` hands a `Decimal128`
+back as a `Long` or a `BigDecimal`.
 
 Data delivered as a `PojoCloudEventData` that holds a map, which is how the MongoDB event store delivers a JSON object,
 is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON, and a release hands the
