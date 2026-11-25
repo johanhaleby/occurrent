@@ -271,8 +271,10 @@ other lifecycle call and `shutdown()` would wait behind it too. The catch-up mar
 under a handover lock, per subscription. A lifecycle call for that subscription holds its claim, and it gives up once
 the marked code and its own wait for the handover lock have both run for 10 seconds. It throws `IllegalStateException`
 saying what it did before it took the claim. A `stop()` that gives up has stopped the model (`STOPPED_ALL_THE_SAME`),
-and the replay parks itself once the listener returns. A call for another subscription that waits behind that stop
-waits those 10 seconds, and then goes on.
+and the replay parks itself once the listener returns. It then stays parked, as a replay the stop parked does, until a
+`start(true)` or a resume of its own subscription. A `start(false)` made before the listener returns, such as the one a
+resume of another subscription can make in a stopped model, doesn't let it go on. A call for another subscription that
+waits behind that stop waits those 10 seconds, and then goes on.
 
 A call waiting behind the handed calls gives up only while the lifecycle thread hasn't begun it, and then the lifecycle
 thread skips it, so the calls that do run keep their order. The cost is that code the caller supplied that runs longer

@@ -563,6 +563,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         }
         String whatChanged = started ? AbstractCatchupSubscriptionModel.STARTED_BUT_NOT_RESUMED : AbstractCatchupSubscriptionModel.NOTHING_CHANGED;
         try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claim(subscriptionId, whatChanged)) {
+            // A replay a stop gave up on goes on once this resume is asked, as one it runs again does
+            try (AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().lockHandover(subscriptionId)) {
+                presentCatchupModels().forEach(model -> model.clearTheParkOwedBy(subscriptionId));
+            }
             AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
             if (parkedIn != null) {
                 Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
