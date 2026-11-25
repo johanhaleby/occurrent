@@ -193,6 +193,11 @@ class SagaReleaseStaleRecordsReadTest {
         }
 
         @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return inMemory.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             inMemory.requireAtomicTransitions();
         }

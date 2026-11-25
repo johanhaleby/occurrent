@@ -640,7 +640,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private static Bson withoutState(StoredSaga saga) {
-        Document document = toDocument(saga);
+        return withoutState(toDocument(saga));
+    }
+
+    private static Bson withoutState(Document document) {
         List<Bson> updates = new ArrayList<>();
         for (String field : SagaCodec.fieldsExceptState()) {
             // Unset rather than left alone, so a field the new instance has no value for goes away instead of keeping
@@ -649,6 +652,33 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             updates.add(document.containsKey(field) ? Updates.set(field, document.get(field)) : Updates.unset(field));
         }
         return Updates.combine(updates);
+    }
+
+    /**
+     * Reads the instance as it is stored, and measures it with the fields {@code compareAndSaveWithoutState} sets
+     * replaced, the way {@link #fits(StoredSaga)} measures a whole instance. Nothing of the stored document is decoded,
+     * so the received events of a flow saga stay the JSON strings they are stored as, and one that no longer reads back
+     * as a CloudEvent doesn't fail the answer.
+     */
+    @Override
+    public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Document stored = findInstance(saga.sagaId(), () -> Query.query(where(ID).is(saga.sagaId())));
+            if (stored == null || ((Number) stored.get(VERSION)).longValue() != expectedVersion) {
+                return true;
+            }
+            Document written = toDocument(saga);
+            Document candidate = new Document(stored);
+            for (String field : SagaCodec.fieldsExceptState()) {
+                if (written.containsKey(field)) {
+                    candidate.put(field, written.get(field));
+                } else {
+                    candidate.remove(field);
+                }
+            }
+            return fitsDocument(candidate);
+        });
     }
 
     private static Bson versionIs(String sagaId, long expectedVersion) {
@@ -1156,10 +1186,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public boolean fits(StoredSaga candidate) {
         Objects.requireNonNull(candidate, "candidate cannot be null");
+        return fitsDocument(toDocument(candidate));
+    }
+
+    private boolean fitsDocument(Document candidate) {
         CodecRegistry codecs = instances(databaseFactory.getMongoDatabase()).getCodecRegistry();
-        RawBsonDocument document = new RawBsonDocument(toDocument(candidate), codecs.get(Document.class));
+        RawBsonDocument document = new RawBsonDocument(candidate, codecs.get(Document.class));
         // The write compares the stored version, a long like the candidate's, so the filter encodes to the same size
-        BsonDocument filter = versionIs(candidate.sagaId(), candidate.version()).toBsonDocument(BsonDocument.class, codecs);
+        BsonDocument filter = versionIs(candidate.getString(ID), ((Number) candidate.get(VERSION)).longValue()).toBsonDocument(BsonDocument.class, codecs);
         BsonDocument update = withoutState(candidate).toBsonDocument(BsonDocument.class, codecs);
         return document.getByteBuffer().remaining() <= MAX_DOCUMENT_SIZE
                && encodedSize(statement(filter, document), codecs) <= MAX_STATEMENT_SIZE

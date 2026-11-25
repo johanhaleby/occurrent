@@ -374,6 +374,11 @@ class SpringMongoSagaReleaseUndecodableDataTest {
         }
 
         @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return mongo.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             mongo.requireAtomicTransitions();
         }

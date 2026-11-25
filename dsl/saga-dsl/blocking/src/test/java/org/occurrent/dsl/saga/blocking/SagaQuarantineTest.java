@@ -1578,6 +1578,11 @@ class SagaQuarantineTest {
         }
 
         @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegate.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
         public SagaStateCodec<OrderState> stateCodec() {
             return delegate.stateCodec();
         }
@@ -1702,6 +1707,11 @@ class SagaQuarantineTest {
         @Override
         public boolean fits(StoredSaga candidate) {
             return delegate.fits(candidate);
+        }
+
+        @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegate.fitsWithoutState(saga, expectedVersion);
         }
 
         @Override

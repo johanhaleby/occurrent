@@ -355,6 +355,11 @@ class SagaRefusesAnInputItCannotRecordTest {
         }
 
         @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return inMemory.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             throw new IllegalStateException("this store cannot write atomically");
         }

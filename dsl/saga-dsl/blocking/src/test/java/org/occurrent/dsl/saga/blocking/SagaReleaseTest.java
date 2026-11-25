@@ -2883,6 +2883,11 @@ class SagaReleaseTest {
         }
 
         @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegate.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             delegate.requireAtomicTransitions();
         }

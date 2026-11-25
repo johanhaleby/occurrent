@@ -200,6 +200,11 @@ class SagaQuarantineWarningTest {
         }
 
         @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return true;
+        }
+
+        @Override
         public void requireAtomicTransitions() {
             throw new IllegalStateException("no atomic transitions here");
         }

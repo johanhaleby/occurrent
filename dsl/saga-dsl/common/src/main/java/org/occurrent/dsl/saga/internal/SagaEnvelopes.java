@@ -88,13 +88,6 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
         return records.findWithFirstSkippedInput(sagaId).map(read -> new WithFirstSkippedInput<>(codec.decode(read.saga()), read.firstSkippedInput()));
     }
 
-    /** As {@link #findWithFirstSkippedInput}, with the instance decoded without reading its state. */
-    public Optional<WithFirstSkippedInput<S>> findWithFirstSkippedInputWithoutState(SagaStateStoreSkippedInputs records, String sagaId) {
-        requireNonNull(records, "records cannot be null");
-        requireNonNull(sagaId, "sagaId cannot be null");
-        return records.findWithFirstSkippedInput(sagaId).map(read -> new WithFirstSkippedInput<>(codec.decodeWithoutState(read.saga()), read.firstSkippedInput()));
-    }
-
     /**
      * The instance and the {@code seq} and {@code key} of its first skipped input as one write left them, see
      * {@link SagaStateStoreSkippedInputs#findWithFirstSkippedInputKey(String)}, with the instance decoded without
@@ -167,18 +160,25 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
 
     /**
      * Whether {@code records} can write {@code envelope} with {@code compareAndSaveWithoutState}, which leaves the stored
-     * state where it is. The instance is read whole, and the fields that write sets are replaced with
-     * {@code envelope}'s, see {@link SagaStateStore#compareAndSaveWithoutState}. An instance that is not stored, or is
-     * stored with another version than {@code expectedVersion}, fits, since the compare-and-set refuses the write anyway.
+     * state where it is, see {@link SagaStateStoreSkippedInputs#fitsWithoutState}. The store measures the instance as it
+     * holds it, so nothing here decodes the stored state.
      */
     public boolean fitsWithoutState(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion) {
         requireNonNull(records, "records cannot be null");
         requireNonNull(envelope, "envelope cannot be null");
-        StoredSaga stored = store.find(envelope.sagaId()).orElse(null);
-        if (stored == null || stored.version() != expectedVersion) {
-            return true;
-        }
-        StoredSaga written = codec.encodeWithoutState(envelope);
+        return records.fitsWithoutState(codec.encodeWithoutState(envelope), expectedVersion);
+    }
+
+    /**
+     * {@code stored} with the fields a write under the rule of {@link SagaStateStore#compareAndSaveWithoutState} sets
+     * replaced by those of {@code written}, which is the instance that write leaves. A field {@code written} has no
+     * value for is removed, and the state and the step derived from it stay as {@code stored} has them. For a store
+     * that keeps an instance as the {@link StoredSaga} it is given, to answer
+     * {@link SagaStateStoreSkippedInputs#fitsWithoutState} with {@link SagaStateStoreSkippedInputs#fits}.
+     */
+    public static StoredSaga withFieldsExceptStateOf(StoredSaga stored, StoredSaga written) {
+        requireNonNull(stored, "stored cannot be null");
+        requireNonNull(written, "written cannot be null");
         Map<String, @Nullable Object> fields = new LinkedHashMap<>(stored.encoded().fields());
         Map<String, Object> set = written.encoded().fields();
         for (String field : SagaCodec.fieldsExceptState()) {
@@ -188,7 +188,7 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
                 fields.remove(field);
             }
         }
-        return records.fits(new StoredSaga(written.sagaId(), written.version(), new EncodedSaga(fields), written.index()));
+        return new StoredSaga(written.sagaId(), written.version(), new EncodedSaga(fields), written.index());
     }
 
     /**

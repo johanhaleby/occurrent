@@ -496,5 +496,15 @@ class SagaReleaseWriteCheckTest {
             asked.add(candidate);
             return fits.test(codec.decode(candidate));
         }
+
+        // The stored instance with the fields the write sets replaced, as the release asked before the store was asked to do it
+        @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            StoredSaga stored = inMemory.find(saga.sagaId()).orElse(null);
+            if (stored == null || stored.version() != expectedVersion) {
+                return true;
+            }
+            return fits(SagaEnvelopes.withFieldsExceptStateOf(stored, saga));
+        }
     }
 }

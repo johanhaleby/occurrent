@@ -200,7 +200,8 @@ that retries such an event stops on it.
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
 parameter, since its methods take and return an instance as a `StoredSaga`, with the state encoded already, and none
-of its methods has a default, `fits` included, so a store with a size limit doesn't answer `true` by leaving it out.
+of its methods has a default, `fits` and `fitsWithoutState` included, so a store with a size limit doesn't answer `true`
+by leaving it out.
 The in-memory store and
 `SpringMongoSagaStateStore` implement it. Point 7 says what the runner does with a store that doesn't.
 
@@ -476,8 +477,12 @@ CloudEvent key.
 
 When the read of the instance and its first record fails, the release reads the instance and the key of its first
 record again with `findWithFirstSkippedInputKey`, which decodes neither the state nor the record's event. It records the
-failure against that record, as above. When no record is left, the release ends the quarantine as in point 4. When that
-read fails too, the release throws and the instance stays releasing. On a store that answers the poller's query, the
+failure against that record, as above. When no record is left, the release ends the quarantine as in point 4. Nothing
+it reads or checks from then on decodes the stored state. The size checks measure the instance as the store holds it,
+and the failure record names the input from the record read alone, by its event when that decodes and by its key when
+it doesn't. On MongoDB, a flow saga whose received events no longer decode has its failure counted against the
+record, or is released, the same way. When the read with `findWithFirstSkippedInputKey`
+fails too, the release throws and the instance stays releasing. On a store that answers the poller's query, the
 poller tries again on its next poll.
 
 ### 6. Timers stay held until the instance is ACTIVE
@@ -694,7 +699,11 @@ The upgrade guide has the procedure for operators, in
 - A release keeps every stream version it applies in the instance's stream marks until the write that ends it, see
   point 2, so the instance's document grows by one number per replayed input during one release. A release asks the
   store before every write it makes whether it can take it, through `SagaStateStoreSkippedInputs.fits`, and for the
-  write that applies a record it asks before it dispatches the record's commands. When the store can't take the
+  write that applies a record it asks before it dispatches the record's commands. For a write that leaves the stored
+  state where it is, which starts a release, records a failure, quarantines the instance again or ends the quarantine,
+  it asks through `fitsWithoutState(saga, expectedVersion)`. `SpringMongoSagaStateStore` reads the instance as it holds
+  it, replaces the fields that write sets and measures the result, without decoding the state, so a state that no
+  longer decodes doesn't fail the answer. The in-memory store answers `true`, as it does for `fits`. When the store can't take the
   instance with the record applied, or with the record's failure recorded, the release applies and dispatches nothing
   for the record. The instance is quarantined again on that record with its marks trimmed to the reorder window, the release
   returns `QUARANTINED_AGAIN`, and an ERROR names the instance. When the record applied to the trimmed instance fits,

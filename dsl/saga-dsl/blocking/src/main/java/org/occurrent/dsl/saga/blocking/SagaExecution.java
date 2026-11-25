@@ -793,7 +793,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * <p>
      * A read of the instance and its first record that fails, such as on a state a replay saved that doesn't decode any
      * more or on a record whose event doesn't, counts against the budget of that record the way a replay that fails
-     * does. With no record left the quarantine ends instead, and the stored state stays as it is. See
+     * does. With no record left the quarantine ends instead, and the stored state stays as it is. Nothing the release
+     * reads or checks after such a read decodes the stored state, the size checks included. The event of the record is
+     * decoded only to name the input in the failure record, from the record read alone, and a throw there names it by
+     * its key instead. So no decoding stops the failure from being counted or the quarantine from ending. See
      * {@link #recordReadFailure}.
      */
     private SagaSubscription.@Nullable ReleaseResult continueRelease(String sagaId, SagaStateStoreSkippedInputs records, int maxRecords,
@@ -1078,9 +1081,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     // Record that reading a releasing instance and its first record failed against the budget of that record, the way a
     // failed replay is recorded. That covers a state a replay saved that doesn't decode any more, and a record whose
-    // event doesn't. The instance is read again without its state, and its first record with its event when that
-    // decodes, so the failure record names the input the way a failed replay names it, or by its seq and key alone when
-    // it doesn't. An instance with no record left has nothing more to replay, so its quarantine ends with the stored state
+    // event doesn't. The instance is read again without its state and with only the seq and key of its first record.
+    // The failure record names the input the way a failed replay names it when that record reads alone with its event,
+    // and by its seq and key alone when it doesn't. An instance with no record left has nothing more to replay, so its quarantine ends with the stored state
     // left as it is, and a state that doesn't decode fails the next input the way it fails any input of an active
     // instance. When the read by seq and key fails too, the store read nothing to charge and the failure propagates as
     // it is, and the next poll tries again. Null when the write that ends the quarantine lost, and the caller reads again
@@ -1108,7 +1111,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     subscriptionId, sagaId, readFailure);
             return endQuarantine(records, sagaId, current, quarantineId, clock.get());
         }
-        return recordReleaseFailure(records, sagaId, quarantineId, first, metaOfRecord(records, sagaId, first, readFailure), readFailure, clock.get());
+        return recordReleaseFailure(records, sagaId, quarantineId, first, metaOfRecord(records, sagaId, quarantineId, first, readFailure), readFailure, clock.get());
     }
 
     // End the quarantine of current, which the read that returned it found with no record left, and leave the stored
@@ -1129,10 +1132,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // The delivery metadata of the record first, read off its event when the record reads with it, and otherwise built
     // from its key, which names the stream id and version, or the CloudEvent id and source, its budget is counted under.
     // The event type and the position are known only from the event, so a record whose event doesn't decode is counted
-    // without them
-    private EventMeta metaOfRecord(SagaStateStoreSkippedInputs records, String sagaId, RecordKey first, Throwable readFailure) {
+    // without them. The record is read alone, without the instance, so a state that doesn't decode leaves the event to
+    // name the input, and a throw from the read only falls back to the key
+    private EventMeta metaOfRecord(SagaStateStoreSkippedInputs records, String sagaId, String quarantineId, RecordKey first, Throwable readFailure) {
         try {
-            SkippedInput read = envelopes.findWithFirstSkippedInputWithoutState(records, sagaId).map(SagaEnvelopes.WithFirstSkippedInput::first).orElse(null);
+            SkippedInput read = records.findSkippedInputs(sagaId, quarantineId, 1).stream().findFirst().orElse(null);
             if (read != null && isSameRecord(RecordKey.of(read), first)) {
                 return extractMeta(read.event()).meta();
             }

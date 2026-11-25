@@ -985,6 +985,11 @@ class SagaPendingStreamVersionTest {
         }
 
         @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegateRecords.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
         public SagaStateCodec<Basket> stateCodec() {
             return delegate.stateCodec();
         }

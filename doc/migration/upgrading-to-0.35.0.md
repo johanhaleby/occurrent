@@ -1082,11 +1082,18 @@ poller asks for them on every poll and goes on with their release, starting each
 one listed and from the first id again once a poll lists fewer than `limit`. It implements `requireAtomicTransitions()`,
 which `SagaRunner.run` calls when quarantine is on, before the saga gets its first input. It throws an
 `IllegalStateException` when the store can't make those writes atomic in the database it's connected to, and does
-nothing otherwise. It implements `fits(candidate)`, which a release calls before every write it makes, and for the
-write that applies a record before it dispatches the record's commands. It returns `false` when the store can't write
-`candidate`, such as an instance whose write would go over a size limit of the store's, and `true` otherwise, without
-reading the database. A store with a limit that returns `true` anyway makes a release dispatch the commands of a record
-whose write then fails, on every attempt. None of the eight methods has a default.
+nothing otherwise. It implements `fits(candidate)`, which a release calls before every write it makes that writes the
+whole instance, and for the write that applies a record before it dispatches the record's commands. It returns `false`
+when the store can't write `candidate`, such as an instance whose write would go over a size limit of the store's, and
+`true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a release
+dispatch the commands of a record whose write then fails, on every attempt. It implements
+`fitsWithoutState(saga, expectedVersion)`, which a release calls before every write that leaves the stored state where
+it is, the one that ends the quarantine included. It returns what `fits` returns for the instance as stored with the
+fields `compareAndSaveWithoutState` sets taken from `saga`, and `true` when no instance is stored under the id or it is
+stored at another version than `expectedVersion`. It may read the database for that, and it doesn't decode the stored
+state, since a release calls it after a read of the instance failed to decode, and a throw there would leave the
+instance releasing with nothing counted. A store with no size limit returns `true` from both, as the in-memory store
+does. None of the methods has a default.
 
 A store that keeps the `StoredSaga` it's given as it is keeps the quarantine id and the skip count with it. A store
 that maps each field to a column of its own has to persist both, or reading an instance it quarantined throws an
