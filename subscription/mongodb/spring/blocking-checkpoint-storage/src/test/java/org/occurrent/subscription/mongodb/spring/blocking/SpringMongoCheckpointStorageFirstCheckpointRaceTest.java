@@ -136,6 +136,18 @@ class SpringMongoCheckpointStorageFirstCheckpointRaceTest {
     }
 
     @Test
+    void a_candidate_that_is_not_an_operation_time_checkpoint_answers_empty_and_touches_nothing_when_a_version_is_given() {
+        Checkpoint stored = operationTimeCheckpoint(900);
+        storage.save(subscriptionId, stored, CheckpointWriteCondition.notOlderThan(2));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, new StringBasedCheckpoint("not-an-operation-time"), 3);
+
+        assertThat(resolution).isEmpty();
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(stored.asString());
+        assertThat(storage.writeVersion(subscriptionId)).hasValue(2L);
+    }
+
+    @Test
     void writes_the_candidate_with_the_version_when_nothing_is_stored() {
         Checkpoint candidate = operationTimeCheckpoint(200);
 

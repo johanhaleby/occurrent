@@ -585,9 +585,12 @@ In 0.34.0 that first position was written with `CheckpointWriteCondition.ifAbsen
 that had lost its lease could write over it until the new lease holder saved its next checkpoint. From 0.35.0 the
 model first calls the new `CheckpointStorage.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion)`,
 which stores the first position and the version in one write. When the storage holds a newer version, the call writes
-nothing and the subscription starts from the checkpoint stored. `NativeMongoCheckpointStorage`,
+nothing and the subscription starts from the checkpoint stored. When reading that checkpoint back fails or finds
+nothing, `subscribe` throws `StartPositionAlreadyPinnedException`. `NativeMongoCheckpointStorage`,
 `SpringMongoCheckpointStorage`, `SpringRedisCheckpointStorage` and `InMemoryCheckpointStorage` implement it, so there
-the old lease holder's writes are refused from the first write on.
+the old lease holder's writes are refused from the first write on, once every node runs 0.35.0. During a rolling
+upgrade, a 0.34.0 node that has lost its lease settles a lost race without a version, so on the MongoDB storages it
+can replace a first position a 0.35.0 node stored with an earlier one, which delivers events again but skips none.
 
 ### What to do
 

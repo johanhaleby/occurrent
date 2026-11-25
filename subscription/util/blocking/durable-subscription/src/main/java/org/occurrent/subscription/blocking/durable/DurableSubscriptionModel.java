@@ -99,7 +99,10 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * {@code SpringMongoCheckpointStorage} store the earlier position, and {@code SpringRedisCheckpointStorage} and
  * {@code InMemoryCheckpointStorage} keep the checkpoint already stored. When the storage holds a newer write version,
  * nothing is written, the refusal is logged, and the subscription starts from the checkpoint stored. So on these four
- * storages the writes of a node with an older version are refused from the moment the first position is written.
+ * storages, once every node runs Occurrent 0.35.0 or later, the writes of a node with an older version are refused from
+ * the moment the first position is written. A node on 0.34.0 settles a lost race without a version, and on the MongoDB
+ * storages it can replace a first position stored with a version with an earlier one, which delivers events again but
+ * skips none.
  * Without a version, or for a storage that answers that call empty, the first position is written with
  * {@link CheckpointWriteCondition#ifAbsent()} and no write version, as in 0.34.0, so of two nodes recording one at the
  * same moment, only one write is stored. This model doesn't save the position again with the version, since that save

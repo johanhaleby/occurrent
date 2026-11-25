@@ -23,6 +23,7 @@ import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
+import io.cloudevents.CloudEvent;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
@@ -36,7 +37,10 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -49,6 +53,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -227,7 +232,9 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
                     () -> assertThat(storage.refused.get()).as("the version of this node, older than the stored one, was refused")
                             .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(laterFirstPosition.asString()),
-                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
+                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from")
+                            .isNotEmpty().containsOnly(laterFirstPosition.asString())
             );
         } finally {
             nativeModel.shutdown();
@@ -305,6 +312,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
     private static final class EarlierPositionModel extends NativeMongoSubscriptionModel {
         @Nullable
         volatile Checkpoint answers;
+        final List<String> positionsStartedFrom = new CopyOnWriteArrayList<>();
 
         EarlierPositionModel(String eventCollectionName, ExecutorService executor) {
             super(database, eventCollectionName, RFC_3339_STRING, executor);
@@ -314,6 +322,30 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
         public @Nullable Checkpoint globalCheckpoint() {
             Checkpoint fixed = answers;
             return fixed != null ? fixed : super.globalCheckpoint();
+        }
+
+        @Override
+        public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return super.subscribe(subscriptionId, filter, recordingWhatItResolvesTo(startAt), action);
+        }
+
+        @Override
+        public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return super.subscribePaused(subscriptionId, filter, recordingWhatItResolvesTo(startAt), action);
+        }
+
+        // The position a dynamic start resolves to when the feed evaluates it, which is where the feed starts from
+        private StartAt recordingWhatItResolvesTo(StartAt startAt) {
+            if (!startAt.isDynamic()) {
+                return startAt;
+            }
+            return StartAt.dynamic(context -> {
+                StartAt resolved = startAt.get(context);
+                if (resolved instanceof StartAt.StartAtCheckpoint checkpoint) {
+                    positionsStartedFrom.add(checkpoint.checkpoint.asString());
+                }
+                return resolved;
+            });
         }
 
         @Nullable Checkpoint superGlobalCheckpoint() {

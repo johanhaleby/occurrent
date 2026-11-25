@@ -23,13 +23,18 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -43,9 +48,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -201,6 +208,33 @@ class SpringRedisCheckpointStorageFirstCheckpointRaceTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void retries_a_failed_attempt_and_settles_the_first_position_with_its_version() {
+        AtomicInteger attempts = new AtomicInteger();
+        StringRedisTemplate failingTheFirstAttempt = new StringRedisTemplate(lettuceConnectionFactory) {
+            @Override
+            public <T> T execute(RedisScript<T> script, RedisSerializer<?> argsSerializer, RedisSerializer<T> resultSerializer, List<String> keys, Object... args) {
+                if (attempts.getAndIncrement() == 0) {
+                    throw new RedisConnectionFailureException("Connection lost before the script ran");
+                }
+                return super.execute(script, argsSerializer, resultSerializer, keys, args);
+            }
+        };
+        failingTheFirstAttempt.afterPropertiesSet();
+        SpringRedisCheckpointStorage retrying = new SpringRedisCheckpointStorage(failingTheFirstAttempt, RetryStrategy.fixed(1L).maxAttempts(3));
+
+        Optional<Checkpoint>[] resolution = new Optional[1];
+        Throwable failure = catchThrowable(() -> resolution[0] = retrying.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2));
+
+        assertAll(
+                () -> assertThat(failure).as("failure").isNull(),
+                () -> assertThat(attempts).as("one failed attempt and one that went through").hasValue(2),
+                () -> assertThat(resolution[0]).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("candidate")),
+                () -> assertThat(retrying.read(subscriptionId).asString()).as("stored position").isEqualTo("candidate"),
+                () -> assertThat(retrying.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
+        );
     }
 
     @Test
