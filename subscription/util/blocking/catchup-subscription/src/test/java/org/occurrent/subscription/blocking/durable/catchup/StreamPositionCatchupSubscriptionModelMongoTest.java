@@ -217,6 +217,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("after position 1")
                 .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("stored").isNull();
         assertThat(received).as("delivered").isEmpty();
@@ -248,7 +249,8 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
                 .hasMessageContaining("subscription")
                 .hasMessageContaining(legacyTimeToken)
                 .hasMessageContaining("holds no live start")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(storage.read("subscription").asString()).as("stored").isEqualTo(legacyTimeToken);
         assertThat(received).as("delivered").isEmpty();
     }

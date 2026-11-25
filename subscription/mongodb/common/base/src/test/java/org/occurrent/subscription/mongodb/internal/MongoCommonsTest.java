@@ -614,7 +614,8 @@ class MongoCommonsTest {
         assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class)
                 .hasMessageContaining("subscription \"mySubscription\"")
                 .hasMessageContaining("\"" + GlobalCheckpoint.of(0).asString() + "\"")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(((UnsupportedStartAtException) throwable).startAt()).isSameAs(answer);
     }
 
@@ -641,7 +642,8 @@ class MongoCommonsTest {
 
         // Then
         assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessageContaining("a subscription")
-                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     @Test

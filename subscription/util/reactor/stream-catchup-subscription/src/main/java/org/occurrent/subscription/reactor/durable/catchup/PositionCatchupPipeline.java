@@ -308,7 +308,7 @@ final class PositionCatchupPipeline {
 
     // Named only, as in cancelFirst, since instances can only compete for a subscription with an id
     private static String ifInstancesCompete(@Nullable String subscriptionId) {
-        return subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT;
+        return subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     // A replay again from a position above 0, with a token read now, skips an event below that position that was

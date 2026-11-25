@@ -612,6 +612,7 @@ class StreamPositionCatchupLateCommitMongoTest {
                     .hasMessageContaining("sub")
                     .hasMessageContaining("after position 2")
                     .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                    .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                     .hasMessageContaining("EventMetadata.getCheckpoint()");
             // And the stored position is as it was, with nothing delivered
             assertThat(storage.read("sub")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(GlobalCheckpoint.of(2).asString());

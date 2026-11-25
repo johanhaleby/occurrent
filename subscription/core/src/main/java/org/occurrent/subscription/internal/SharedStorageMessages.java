@@ -45,11 +45,21 @@ public final class SharedStorageMessages {
             + " skips the events since that checkpoint, even with every instance stopped, because the first instance to start finds nothing stored and starts at the present.";
 
     /**
-     * For a message that tells someone to cancel a subscription that stores a checkpoint, or to delete or replace that
-     * checkpoint.
+     * For a message that tells someone, whatever the case, to cancel a subscription that stores a checkpoint, or to
+     * delete or replace that checkpoint. A message that gives the delete only under a condition, or as one of several
+     * choices, appends {@link #CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT} instead.
      */
     public static final String CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT = "When more than one instance runs the subscription, stop every instance,"
             + " delete its stored checkpoint or replace it with the checkpoint to start from, and start every instance again with the same start, as " + GUIDE + " describes."
+            + " " + START_AT_THE_PRESENT_AFTER_A_DELETE;
+
+    /**
+     * For a message that gives a delete of the stored checkpoint, or a cancel that deletes it, only under a condition or
+     * as one of several choices. It says how to do the delete when more than one instance runs the subscription, without
+     * telling anyone to do it.
+     */
+    public static final String CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT = "To delete the stored checkpoint when more than one instance runs the subscription,"
+            + " stop every instance, delete it or replace it with the checkpoint to start from, and start every instance again with the same start, as " + GUIDE + " describes."
             + " " + START_AT_THE_PRESENT_AFTER_A_DELETE;
 
     /**

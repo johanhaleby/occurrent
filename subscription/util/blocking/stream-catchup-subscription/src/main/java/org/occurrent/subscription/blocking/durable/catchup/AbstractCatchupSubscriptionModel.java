@@ -1731,8 +1731,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         } else if (liveDelegate.isRunning(subscriptionId)) {
             return "The subscription model runs the subscription.";
         } else if (liveDelegate.isPaused(subscriptionId)) {
-            return "The subscription model holds the subscription paused until it is resumed. Resuming it through the catch-up replays from the position stored for it when that is one the catch-up replays from, and otherwise resumes it where the subscription model holds it. If the subscription model loses that position again, cancel the subscription and subscribe it again. "
-                   + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT;
+            return "The subscription model holds the subscription paused until it is resumed. Resuming it through the catch-up replays from the position stored for it when that is one the catch-up replays from, and otherwise resumes it where the subscription model holds it. If the subscription model loses that position again, cancel the subscription, which deletes the checkpoint stored for it, and subscribe it again. "
+                   + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT;
         }
         return "The subscription model neither runs the subscription nor holds it paused.";
     }

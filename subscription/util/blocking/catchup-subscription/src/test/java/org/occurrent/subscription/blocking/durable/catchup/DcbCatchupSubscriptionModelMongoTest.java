@@ -269,6 +269,7 @@ class DcbCatchupSubscriptionModelMongoTest {
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("after position 1")
                 .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("stored").isNull();
         assertThat(received).as("delivered").isEmpty();

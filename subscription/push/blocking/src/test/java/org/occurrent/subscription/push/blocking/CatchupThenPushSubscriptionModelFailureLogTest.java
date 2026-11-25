@@ -47,6 +47,7 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
 
     private ListAppender<ILoggingEvent> appender;
     private Logger modelLog;
+    private CatchupThenPushSubscriptionModel model;
 
     @BeforeEach
     void startCapturing() {
@@ -58,6 +59,9 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
 
     @AfterEach
     void stopCapturing() {
+        if (model != null) {
+            model.shutdown();
+        }
         modelLog.detachAppender(appender);
         appender.stop();
     }
@@ -65,7 +69,7 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
     @Test
     void a_failed_catch_up_logs_how_to_change_what_is_stored_when_several_instances_run_it() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+        model = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
 
         var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
         });

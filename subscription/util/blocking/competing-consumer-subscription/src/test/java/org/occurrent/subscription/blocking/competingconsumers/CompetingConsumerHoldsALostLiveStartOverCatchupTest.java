@@ -149,8 +149,9 @@ class CompetingConsumerHoldsALostLiveStartOverCatchupTest {
         await().atMost(EVENTUALLY).untilAsserted(() ->
                 assertThat(logged.errors()).as("errors logged").singleElement().asString()
                         .contains("is refused again when this node gets it")
-                        .contains("When the subscription's position is stored, stop every instance of the application, delete that stored checkpoint or replace it with a checkpoint the application kept that the subscription model still has the history back to, and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes. " + SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE + " Otherwise cancel the subscription on every instance")
-                        .contains("Otherwise cancel the subscription on every instance and subscribe it again from the beginning, or from a checkpoint the application kept that the subscription model still has the history back to")
+                        .contains("When the subscription's position is stored, stop every instance of the application, delete that stored checkpoint or replace it with a checkpoint the application kept that the subscription model still has the history back to, and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes. " + SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE + " Otherwise stop every instance")
+                        .contains("Otherwise stop every instance and start them all again subscribed from the beginning, or from a checkpoint the application kept that the subscription model still has the history back to")
+                        .doesNotContain("Otherwise cancel")
                         .doesNotContain("replays the subscription from the beginning again"));
     }
 

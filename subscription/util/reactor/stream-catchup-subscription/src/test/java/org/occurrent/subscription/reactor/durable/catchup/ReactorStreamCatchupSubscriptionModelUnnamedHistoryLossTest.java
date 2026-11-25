@@ -88,6 +88,7 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
                         .hasMessageContaining("Cannot start catch-up subscription")
                         .hasMessageContaining(LOST_TOKEN.asString())
                         .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                         .hasMessageNotContaining("delete it first"))
                 .verify();
 
@@ -106,6 +107,7 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining(LATER_TOKEN.asString())
                         .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                         .hasCauseInstanceOf(HistoryLostException.class))
                 .verify();
 
@@ -121,7 +123,8 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
         StepVerifier.create(catchup.subscribe(Filter.all(), StartAt.now()))
                 .assertNext(delivered -> assertThat(delivered.getId()).isEqualTo("e1"))
                 .expectErrorSatisfies(failure -> assertThat(failure).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(LATER_TOKEN.asString())
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify();
 
         assertAll(

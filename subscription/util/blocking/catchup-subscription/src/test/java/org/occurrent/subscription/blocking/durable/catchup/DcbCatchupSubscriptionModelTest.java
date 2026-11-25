@@ -248,6 +248,7 @@ class DcbCatchupSubscriptionModelTest {
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("after position 2")
                 .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("the stored checkpoint").isNull();
         assertThat(received).as("delivered").isEmpty();
@@ -287,6 +288,7 @@ class DcbCatchupSubscriptionModelTest {
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("after position 2")
                 .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("the stored checkpoint").isEqualTo(GlobalCheckpoint.of(2));
         assertThat(received).as("delivered").isEmpty();
@@ -311,6 +313,7 @@ class DcbCatchupSubscriptionModelTest {
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("holds no live start")
                 .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("the stored checkpoint").isEqualTo(bareTime);
         assertThat(received).as("delivered").isEmpty();
@@ -850,7 +853,8 @@ class DcbCatchupSubscriptionModelTest {
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("from the beginning again")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(storage.read("subscription")).as("the stored checkpoint").isEqualTo(stored);
         assertThat(received).as("delivered").isEmpty();
         assertThat(liveStarts).as("nothing handed over").isEmpty();
@@ -882,7 +886,8 @@ class DcbCatchupSubscriptionModelTest {
                     .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("subscription")
                     .hasMessageContaining("from the beginning again")
-                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                    .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(resumeProbes).as("asked when subscribed, before the replay and once after it, which did not run again").hasSize(3);
             assertThat(received).as("delivered by the one replay").containsExactly(history.get(1), history.get(2));
         } finally {

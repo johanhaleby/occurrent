@@ -928,7 +928,8 @@ class ReactorStreamCatchupSubscriptionModelTest {
                             .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("catch-up subscription sub after position 1")
                             .hasMessageContaining("cancel it first, which deletes that checkpoint")
-                            .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                            .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                            .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                             .hasMessageContaining("EventMetadata.getCheckpoint()"))
                     .verify(Duration.ofSeconds(10));
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
@@ -955,7 +956,8 @@ class ReactorStreamCatchupSubscriptionModelTest {
                             .isInstanceOf(CatchupCannotResumeException.class)
                             .hasMessageContaining("catch-up subscription sub again from position 1")
                             .hasMessageContaining("cancel it first, which deletes that checkpoint")
-                            .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                            .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                            .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                             .hasMessageContaining("from the beginning again"))
                     .verify(Duration.ofSeconds(10));
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
@@ -980,7 +982,8 @@ class ReactorStreamCatchupSubscriptionModelTest {
                     .isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("catch-up subscription sub from checkpoint")
                     .hasMessageContaining("replays only by position")
-                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                    .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
             assertThat(wrapped.subscribeCalls).as("handed over").isEmpty();
         } finally {
             catchup.shutdown();

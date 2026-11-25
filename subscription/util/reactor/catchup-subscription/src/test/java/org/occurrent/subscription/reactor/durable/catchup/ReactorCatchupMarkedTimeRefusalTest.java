@@ -77,7 +77,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
                 .as("what the named subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingReadSubscribedOrDelivered();
     }
 
@@ -91,7 +92,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
         StepVerifier.create(unnamed(() -> catchup.subscribe(StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(MARKED_TIME))))
                 .expectErrorSatisfies(error -> assertThat(error).as("the error signal")
                         .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify();
         assertNothingReadSubscribedOrDelivered();
     }
@@ -107,7 +109,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
                 .as("what the named subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingReadSubscribedOrDelivered();
     }
 
@@ -121,7 +124,8 @@ class ReactorCatchupMarkedTimeRefusalTest {
         StepVerifier.create(unnamed(() -> catchup.subscribe(DcbSubscriptionFilter.filter(CRITERIA), StartAt.checkpoint(MARKED_TIME))))
                 .expectErrorSatisfies(error -> assertThat(error).as("the error signal")
                         .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify();
         assertNothingReadSubscribedOrDelivered();
     }
@@ -137,11 +141,13 @@ class ReactorCatchupMarkedTimeRefusalTest {
                 .as("what the named subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         StepVerifier.create(unnamed(() -> catchup.subscribe(null, StartAt.checkpoint(MARKED_TIME))))
                 .expectErrorSatisfies(error -> assertThat(error).as("the error signal")
                         .isInstanceOf(CatchupCannotResumeException.class).hasMessageContainingAll(MARKED_TIME.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify();
         assertNothingReadSubscribedOrDelivered();
         assertThat(catchup.isRunning("sub")).as("whether the refused subscription runs").isFalse();

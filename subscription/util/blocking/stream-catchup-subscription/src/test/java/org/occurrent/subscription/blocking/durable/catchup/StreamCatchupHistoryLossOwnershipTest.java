@@ -159,7 +159,8 @@ class StreamCatchupHistoryLossOwnershipTest {
         // Then
         assertThat(thrown).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(ID).hasMessageContaining(TOKEN.asString())
                 .hasMessageContaining(" If the checkpoint is the one stored for the subscription, delete it first. Start the subscription from the beginning,")
-                .hasMessageEndingWith(" " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageEndingWith(" " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertAll(
                 () -> assertThat(liveModel.subscribeCalls).as("subscribes on the live model").isEmpty(),
                 () -> assertThat(saved).as("positions stored").isEmpty(),

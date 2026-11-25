@@ -775,7 +775,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             } else {
                 // Named only, since instances can only compete for a subscription with an id
                 log.error("There was not enough oplog to resume {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.{}",
-                        subscription, subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT, throwable);
+                        subscription, subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT, throwable);
                 return false;
             }
         }

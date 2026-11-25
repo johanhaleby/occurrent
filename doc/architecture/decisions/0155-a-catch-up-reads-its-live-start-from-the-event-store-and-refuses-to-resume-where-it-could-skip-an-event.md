@@ -194,7 +194,7 @@ decides:
 4. A subscription no catch-up owns is left to the subscription model, as before.
 
 A paused subscription logs one error, and `resumeSubscription(id)` throws `CatchupCannotResumeException` until it's
-cancelled, or on the blocking stack resumed at a position, as
+cancelled, or resumed at a position on a blocking catch-up subscription model you call directly, as
 [the manual recovery](#a-paused-subscription-is-recovered-by-hand) describes. On the blocking stack `start(true)` throws it too, and on the reactor stack it pauses the subscription again
 with one more error. An unnamed `Flux` fails with it. `restart-on-change-stream-history-lost` no longer affects a
 subscription a catch-up runs, which in Spring Boot is every subscription by default, `NOW` and `DEFAULT` included.

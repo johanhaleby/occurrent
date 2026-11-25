@@ -331,7 +331,8 @@ public class SpringMongoSubscriptionModelTest {
     private static void assertRefusedBecauseTheHistoryWasLost(Throwable thrown, String subscriptionId) {
         assertThat(thrown).isExactlyInstanceOf(UnsupportedStartAtException.class)
                 .hasMessageStartingWith("There was not enough oplog to resume subscription \"" + subscriptionId + "\"")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .rootCause().isInstanceOfSatisfying(MongoCommandException.class, e -> assertThat(e.getErrorCode()).isEqualTo(MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE));
     }
 

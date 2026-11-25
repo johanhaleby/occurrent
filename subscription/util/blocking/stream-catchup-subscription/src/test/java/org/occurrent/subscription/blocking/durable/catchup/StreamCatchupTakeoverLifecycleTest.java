@@ -642,7 +642,7 @@ class StreamCatchupTakeoverLifecycleTest {
 
     @Test
     @Timeout(60)
-    void a_loss_the_live_model_reports_again_for_a_subscription_it_holds_paused_after_a_takeover_that_a_pause_beat_logs_how_to_change_the_checkpoint_when_several_instances_run_it() throws InterruptedException {
+    void a_loss_the_live_model_reports_again_for_a_subscription_it_holds_paused_after_a_takeover_that_a_pause_beat_logs_that_a_cancel_deletes_the_checkpoint_and_how_to_delete_it_when_several_instances_run_it() throws InterruptedException {
         // Given a takeover that a pause got to first, so no replay runs and the live model holds the subscription paused
         TheTakeoverIsAskedForWhileAnotherCallHoldsTheSubscription theTakeover = new TheTakeoverIsAskedForWhileAnotherCallHoldsTheSubscription(true, () -> catchup.pauseSubscription(ID));
         theTakeover.isAskedForWhileACallIsQueued();
@@ -657,7 +657,10 @@ class StreamCatchupTakeoverLifecycleTest {
         assertThat(logged.events).filteredOn(event -> event.getFormattedMessage().contains("again after the catch-up took it over")).singleElement().satisfies(event ->
                 assertThat(event.getFormattedMessage())
                         .contains("No replay of the catch-up resumes it now. The subscription model holds the subscription paused until it is resumed.")
-                        .endsWith(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT));
+                        .contains("If the subscription model loses that position again, cancel the subscription, which deletes the checkpoint stored for it, and subscribe it again.")
+                        .doesNotContain("cancel the subscription and subscribe it again.")
+                        .endsWith(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT));
     }
 
     @ParameterizedTest(name = "storing={0}")

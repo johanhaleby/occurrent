@@ -163,7 +163,7 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
 
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(modelLog.list).as("what the model logged about the lost history")
                 .filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("will not restart subscription"))
-                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription sub").contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription sub").contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)));
     }
 
     @Test

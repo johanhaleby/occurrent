@@ -232,7 +232,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 && !startsAtPositionZero(firstStartAt, subscriptionModelContextType)) {
             throw new UnsupportedStartAtException(firstStartAt, "Cannot start catch-up subscription " + subscriptionId + " after a global position, since the event store doesn't write one. "
                     + "Start it from the beginning of time with StartAtTime.beginningOfTime(), or from a time. "
-                    + "If the position is the checkpoint stored for the subscription, delete that checkpoint first. " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                    + "If the position is the checkpoint stored for the subscription, delete that checkpoint first. " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
         }
     }
 

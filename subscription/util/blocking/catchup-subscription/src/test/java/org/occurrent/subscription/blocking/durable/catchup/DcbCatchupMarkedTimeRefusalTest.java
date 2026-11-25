@@ -102,7 +102,8 @@ class DcbCatchupMarkedTimeRefusalTest {
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingWrittenSubscribedOrDelivered(null);
     }
 
@@ -118,7 +119,8 @@ class DcbCatchupMarkedTimeRefusalTest {
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint")
-                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingWrittenSubscribedOrDelivered(MARKED_TIME);
     }
 

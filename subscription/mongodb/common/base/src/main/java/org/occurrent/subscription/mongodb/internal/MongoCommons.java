@@ -581,7 +581,7 @@ public class MongoCommons {
                         + checkpoint.asString() + "\", " + NOT_A_CHANGE_STREAM_POSITION + "Start the subscription through a catch-up subscription model. "
                         + "When one already wraps this model, restore the start position its replay had or remove the stored checkpoint."
                         // Named only, since instances can only compete for a subscription with an id
-                        + (subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT));
+                        + (subscriptionId == null ? "" : " " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT));
             }
             return resolved;
         });

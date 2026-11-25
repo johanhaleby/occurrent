@@ -437,7 +437,8 @@ class PositionCatchupPipelineTest {
                         .hasMessageContaining("position 1")
                         .hasMessageContaining("from the beginning again")
                         .hasMessageNotContaining("cancel it first")
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.resumeProbes).containsExactly(agedOut);
         assertThat(live.liveStarts).as("nothing handed over").isEmpty();
@@ -460,7 +461,8 @@ class PositionCatchupPipelineTest {
                         .hasMessageContaining("position 1")
                         .hasMessageContaining("from the beginning again")
                         .hasMessageNotContaining("cancel it first")
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.liveStarts).as("nothing handed over").isEmpty();
     }
@@ -479,7 +481,8 @@ class PositionCatchupPipelineTest {
                         .hasMessageContaining("position 1")
                         .hasMessageContaining("from the beginning again")
                         .hasMessageNotContaining("cancel it first")
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.opensAt).as("opened once at the stored live start, not again after a second replay").containsExactly(storedLiveStart);
     }
@@ -532,7 +535,8 @@ class PositionCatchupPipelineTest {
                         .hasMessageContaining("after position 1")
                         .hasMessageContaining("EventMetadata.getCheckpoint()")
                         .hasMessageNotContaining("cancel it first")
-                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT))
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify(Duration.ofSeconds(10));
         assertThat(live.resumeProbes).as("asked").isEmpty();
         assertThat(live.liveStarts).as("handed over").isEmpty();

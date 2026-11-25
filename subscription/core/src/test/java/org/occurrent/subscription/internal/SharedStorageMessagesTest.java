@@ -40,6 +40,17 @@ class SharedStorageMessagesTest {
     }
 
     @Test
+    void the_step_for_a_delete_that_is_conditional_or_one_of_several_choices_says_how_to_delete_and_never_tells_anyone_to_delete() {
+        assertThat(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .isEqualTo("To delete the stored checkpoint when more than one instance runs the subscription,"
+                        + " stop every instance, delete it or replace it with the checkpoint to start from, and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes."
+                        + " " + SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE)
+                .startsWith("To delete the stored checkpoint when more than one instance runs the subscription,")
+                .isNotEqualTo(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .doesNotContain("When more than one instance runs the subscription, stop every instance,");
+    }
+
+    @Test
     void the_sentence_about_a_delete_names_a_start_from_now_or_at_the_model_default_the_events_since_the_checkpoint_and_that_the_first_instance_starts_at_the_present() {
         assertThat(SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE).isEqualTo(
                 "Deleting the checkpoint of a subscription that starts from now or at the subscription model default skips the events since that checkpoint,"

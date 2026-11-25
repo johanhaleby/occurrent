@@ -39,6 +39,7 @@ import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,10 +52,17 @@ import static org.awaitility.Awaitility.await;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelFailureLogTest {
 
+    private final List<CatchupThenPushSubscriptionModel> models = new ArrayList<>();
+
     @BeforeEach
     @AfterEach
     void forgetWhatWasLogged() {
         CapturingLoggerProvider.clear();
+    }
+
+    @AfterEach
+    void shutDownTheModels() {
+        models.forEach(CatchupThenPushSubscriptionModel::shutdown);
     }
 
     @Test
@@ -106,27 +114,30 @@ class CatchupThenPushSubscriptionModelFailureLogTest {
                 .toList();
     }
 
-    private static void failCatchUp(String subscriptionId) {
+    private void failCatchUp(String subscriptionId) {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+        models.add(model);
 
         model.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty());
     }
 
-    private static void refuseCheckpointThatIsNotAMarker(String subscriptionId) {
+    private void refuseCheckpointThatIsNotAMarker(String subscriptionId) {
         InMemoryReactivePositionOrderedReader store = new InMemoryReactivePositionOrderedReader();
         InMemoryCheckpointStorage checkpoints = new InMemoryCheckpointStorage();
         checkpoints.save(subscriptionId, new StringBasedCheckpoint("resume-token-xyz")).block(Duration.ofSeconds(5));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), checkpoints);
+        models.add(model);
 
         model.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty());
     }
 
-    private static void cancelWhoseMarkerDeleteFails(String subscriptionId) {
+    private void cancelWhoseMarkerDeleteFails(String subscriptionId) {
         InMemoryReactivePositionOrderedReader store = new InMemoryReactivePositionOrderedReader();
         store.append(List.of(CloudEventBuilder.v1().withId("1").withSource(URI.create("urn:occurrent:test")).withType("Created").build()));
         MarkerStoreWhoseDeleteFails markers = new MarkerStoreWhoseDeleteFails();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), markers);
+        models.add(model);
         model.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(5));
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(markers.read(subscriptionId).hasElement().block()).as("catch-up marker written").isTrue());
 
