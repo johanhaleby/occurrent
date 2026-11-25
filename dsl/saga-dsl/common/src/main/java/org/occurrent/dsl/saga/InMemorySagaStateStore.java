@@ -65,15 +65,14 @@ import static java.util.Objects.requireNonNull;
  * keys, and a copy would keep only one of them.
  * <p>
  * An extension that is a {@code Number} of any class other than {@code Byte}, {@code Short}, {@code Integer},
- * {@code Long}, {@code Float}, {@code Double}, {@code BigInteger} and {@code BigDecimal}, such as an {@code AtomicLong} or
- * a subclass of {@code BigDecimal}, is held as another class, and a release hands it back as that class. A subclass of
- * {@code BigInteger} or {@code BigDecimal} is held as that class, with its value and scale. Any other is held as a
- * {@code Long} when its value is an integer that fits in one, and otherwise as a {@code BigDecimal} with its value and
- * scale. Its value is the decimal its {@code toString} writes. When {@code toString} doesn't write a decimal, as for
- * {@code NaN} or an infinity, it's held as its {@code doubleValue}, a {@code Double}. This module doesn't depend on
- * BSON, so a {@code Decimal128} extension comes back here as a {@code Long}, a {@code BigDecimal}, or a {@code Double}
- * for {@code NaN} or an infinity, while {@code SpringMongoSagaStateStore} hands it back as the same {@code Decimal128}.
- * Once it has recorded the input, the store logs a warning that names the instance, the input, the extension, the
+ * {@code Long}, {@code Float}, {@code Double}, {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an
+ * {@code AtomicLong} or a subclass of {@code BigDecimal}, is held, and handed back by a release, as another class, the
+ * same one {@code SpringMongoSagaStateStore} hands back. A subclass of {@code BigInteger} or
+ * {@code BigDecimal} is held as a plain {@code BigInteger} or {@code BigDecimal} with its value, and a
+ * {@code BigDecimal} keeps its scale. Any other is held as a {@code Long} when its value is an integer that fits in one,
+ * and otherwise as a {@code BigDecimal} with its value and scale. Its value is the decimal its {@code toString} writes.
+ * When {@code toString} doesn't write a decimal, as for {@code NaN} or an infinity, it's held as its
+ * {@code doubleValue}, a {@code Double}. Once it has recorded the input, the store logs a warning that names the instance, the input, the extension, the
  * delivered class and the class a release hands back, and never the value.
  * <p>
  * Data it can't copy is held as its bytes, and every read rebuilds it the way {@code SpringMongoSagaStateStore} rebuilds
@@ -358,9 +357,13 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     private static final Set<Class<?>> UNCHANGEABLE = Set.of(String.class, Boolean.class, Character.class, Byte.class, Short.class,
             Integer.class, Long.class, Float.class, Double.class, BigInteger.class, BigDecimal.class);
 
+    // A final, immutable Number that SpringMongoSagaStateStore holds as an extension as itself. Named, since this module
+    // doesn't depend on BSON
+    private static final String DECIMAL128 = "org.bson.types.Decimal128";
+
     // The BSON values that SpringMongoSagaStateStore reads back from map data as the same class, each of them immutable.
     // Named, since this module doesn't depend on BSON. A CodeWithScope comes back too, but holds a Document that can change
-    private static final Set<String> BSON_VALUES = Set.of("org.bson.types.ObjectId", "org.bson.types.Decimal128", "org.bson.types.Binary",
+    private static final Set<String> BSON_VALUES = Set.of("org.bson.types.ObjectId", DECIMAL128, "org.bson.types.Binary",
             "org.bson.types.Code", "org.bson.types.Symbol", "org.bson.types.MinKey", "org.bson.types.MaxKey", "org.bson.BsonTimestamp",
             "org.bson.BsonRegularExpression", "org.bson.BsonDbPointer", "org.bson.BsonUndefined");
 
@@ -392,7 +395,7 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 case URI value -> copy.withExtension(name, value);
                 case OffsetDateTime value -> copy.withExtension(name, value);
                 case byte[] value -> copy.withExtension(name, value.clone());
-                case Number value when UNCHANGEABLE.contains(value.getClass()) -> copy.withExtension(name, value);
+                case Number value when UNCHANGEABLE.contains(value.getClass()) || value.getClass().getName().equals(DECIMAL128) -> copy.withExtension(name, value);
                 case Number value -> {
                     SkippedInputNumber number = SkippedInputNumber.of(name, value);
                     converted.add(number);

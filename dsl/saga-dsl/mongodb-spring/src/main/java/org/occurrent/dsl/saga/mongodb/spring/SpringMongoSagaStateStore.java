@@ -1016,8 +1016,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // BSON reads a URI, an OffsetDateTime, a Byte, a Short, a Float, a BigInteger and a BigDecimal back as another class,
     // so they are stored as a string tagged with the class to restore. A String with an unpaired surrogate, which BSON's
     // UTF-8 can't hold, is stored as its UTF-16 code units. A Number of a class BSON doesn't hold comes as the
-    // SkippedInputNumber a release hands back. A subclass of BigInteger or BigDecimal is stored as that class, and any
-    // other is stored tagged with its class as the Long, BigDecimal or Double a release hands back, a BigDecimal as its
+    // SkippedInputNumber a release hands back. A subclass of BigInteger or BigDecimal is stored as the plain BigInteger or
+    // BigDecimal a release hands back, and any other is stored tagged with its class as the Long, BigDecimal or Double a release hands back, a BigDecimal as its
     // decimal string. Any other value is stored as it is
     private static Object heldExtension(Object value) {
         return switch (value) {
@@ -1052,13 +1052,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return HELD_NUMBERS.contains(number.getClass());
     }
 
-    // The extensions of event, each read once, so a Number that changes after the read is held, checked and logged as
-    // one value. A Number of a class the store doesn't hold is the SkippedInputNumber a release hands back for it
+    // The extensions of event, each read once, so a value that changes after the read is held, checked and logged as one
+    // value. A byte[] is a copy of the array read, and a Number of a class the store doesn't hold is the
+    // SkippedInputNumber a release hands back for it. Every other class a release reads back is immutable
     private static Map<String, Object> extensionsOf(CloudEvent event) {
         Map<String, Object> extensions = new LinkedHashMap<>();
         for (String name : event.getExtensionNames()) {
             Object value = Objects.requireNonNull(event.getExtension(name));
-            extensions.put(name, value instanceof Number number && !heldAsItsClass(number) ? SkippedInputNumber.of(name, number) : value);
+            extensions.put(name, switch (value) {
+                case byte[] bytes -> bytes.clone();
+                case Number number when !heldAsItsClass(number) -> SkippedInputNumber.of(name, number);
+                default -> value;
+            });
         }
         return extensions;
     }
@@ -1134,7 +1139,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * any class other than {@code Byte}, {@code Short}, {@code Integer}, {@code Long}, {@code Float}, {@code Double},
      * {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an {@code AtomicLong} or a subclass of
      * {@code BigDecimal}, comes back as another class. A subclass of {@code BigInteger} or {@code BigDecimal} comes back as
-     * that class, with its value and scale. Any other comes back with its value as a {@code Long} when the value is an
+     * a plain {@code BigInteger} or {@code BigDecimal} with its value, and a {@code BigDecimal} keeps its scale. Any other
+     * comes back with its value as a {@code Long} when the value is an
      * integer that fits in one, and otherwise as a {@code BigDecimal} with its value and scale. Its value is the decimal
      * its {@code toString} writes, which is how Jackson writes such a number. When {@code toString} doesn't write a
      * decimal, as for {@code NaN} or an infinity, it comes back as its {@code doubleValue}, a {@code Double}. The store
@@ -1145,7 +1151,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * Before it writes anything, this encodes the record to BSON the way MongoDB stores it, decodes it, and reads the
      * event back the way a release reads it. It writes the copy of the record it checked, decoded from the record's BSON,
      * so a change to the delivered event after the check, such as to its bytes or a map in its data, doesn't reach the
-     * record. When the data doesn't come back as the same values of the same classes, or
+     * record. It reads each extension once and checks a copy of a {@code byte[]}, so an extension that changes during the
+     * check is recorded as it was first read. When the data doesn't come back as the same values of the same classes, or
      * doesn't encode at all, the record holds the data's bytes in BSON binary instead, next to the name of the data's
      * class, and once the record is inserted the store logs a warning that names the instance, the input and the
      * difference. A release then hands
@@ -1156,6 +1163,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * the decimal numbers, every decimal number in the data is read as a {@code BigDecimal}, so a number comes back
      * with its value, though {@code 1.10} may come back as {@code 1.1}. A map with a {@code BigDecimal} or a key
      * that isn't a {@code String} at any depth is held this way, and so is a {@code JsonCloudEventData}.
+     * <p>
+     * Inside a MongoDB transaction of the caller's, the store logs both warnings once the record is written in that
+     * transaction, before the caller commits it. When the caller rolls back, the warning is for a record that was never kept, and
+     * a redelivery of the event logs it again.
      * <p>
      * A record that doesn't fit in one document, or in the write that sends it, is encoded to BSON and split across
      * chunks of 8 MiB in the collection named after the instances with {@code _skipped_input_chunks} appended. The
@@ -1209,7 +1220,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 return inserted[0];
             });
             // Only for a record this write inserted, so a refused event, a lost compare-and-set and a key recorded before
-            // warn nothing
+            // warn nothing. Inside a transaction of the caller's that is before the caller commits, so a rollback still warns
             if (saved && inserted[0]) {
                 held.warnings().forEach(Runnable::run);
             }
@@ -1318,9 +1329,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // delivered, or doesn't encode, the record holds the data's bytes and its class instead, and a release rebuilds the
     // data from them. A record too large for one document is split across chunks. Refused only for an event whose
     // attributes or extensions don't come back, whose data held as its bytes doesn't come back as the class a release
-    // promises, or whose saga id, quarantine id and key leave no room for a chunk. Each extension is read once, so a Number
-    // that changes during the check is held and checked as one value. The warnings are left to the caller, to log once
-    // the upsert inserts the record.
+    // promises, or whose saga id, quarantine id and key leave no room for a chunk. Each extension is read once, and a
+    // byte[] copied, so a Number or an array that changes during the check is held and checked as one value. The warnings
+    // are left to the caller, to log once the upsert inserts the record.
     // Checked here, since the driver throws exceptions that name neither the instance nor the input, and a retry would
     // send the same record again
     private static HeldRecord checkedRecord(String sagaId, Document filter, SkippedInput input, CodecRegistry codecs) {

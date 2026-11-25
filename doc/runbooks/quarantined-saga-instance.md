@@ -438,7 +438,7 @@ A key is `<streamId>@<streamVersion>` for an event from a stream.
 `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `URI`, an
 `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a string
 with a tag that names the class. A `String` with an unpaired surrogate is stored as its UTF-16 code units with the tag
-`utf16`. A subclass of `BigInteger` or `BigDecimal` is stored with the tag of that class, and a `Number` of any other
+`utf16`. A subclass of `BigInteger` or `BigDecimal` is stored with the `bigInteger` or `bigDecimal` tag, and a `Number` of any other
 class than those and `Integer`, `Long`, `Double` and `Decimal128`, such as an `AtomicLong`, with the tag `number` and
 the name of its class. Any other extension is stored as it is. Data delivered
 as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in
@@ -446,24 +446,27 @@ as a map, which is how the MongoDB event store delivers a JSON object, is held i
 hands it to the converter as a `BytesCloudEventData`.
 
 A release hands back every extension as it was delivered, except a subclass of `BigInteger` or `BigDecimal` and one
-stored with the tag `number`. A subclass comes back as `BigInteger` or `BigDecimal`, with its value and scale. One
+stored with the tag `number`. A subclass comes back as a plain `BigInteger` or `BigDecimal` with its value, and a `BigDecimal` keeps its scale. One
 stored with the tag `number` comes back with its value as a `Long` when the value is an integer that fits in one,
 otherwise as a `BigDecimal` with its value and scale, and as a `Double` when the number's `toString` isn't a decimal,
 such as for `NaN` or an infinity. The value is the decimal the number's `toString` writes, and a `Double` is the
 number's `doubleValue`. Once the record is written, the store logs a `WARN` that names the instance, the input, the
 extension, the delivered class and the class a release hands back. It logs nothing for an event it refuses, a write
-that loses its compare-and-set, or an event whose key it has recorded already. The MongoDB event store never delivers such an extension, so it
-comes from an in-memory event store or one of your own. `InMemorySagaStateStore` hands such an extension back by the
-same rule and logs the same `WARN`. It doesn't depend on BSON, so it hands a `Decimal128` extension back as a `Long`, a
-`BigDecimal`, or a `Double` for `NaN` or an infinity, too.
+that loses its compare-and-set, or an event whose key it has recorded already. Inside a MongoDB transaction of yours,
+it logs once the record is written in that transaction, before you commit it. When you roll back, the `WARN` is for a
+record that was never kept, and a redelivery logs it again. The MongoDB event store never delivers such an extension,
+so it comes from an in-memory event store or one of your own. `InMemorySagaStateStore` hands such an extension back by
+the same rule and logs the same `WARN`, and it hands a `Decimal128` extension back as the same `Decimal128`.
 
 Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
 the way MongoDB stores it, decodes it, and reads the event back the way a release does. It writes the copy of the
 record it checked, decoded from the record's BSON, so a change your application makes to the delivered event after the
-check doesn't reach the record. When the data read back isn't
+check doesn't reach the record. It reads each extension once and checks a copy of a `byte[]`, so an extension your
+application changes during the check is recorded as it was first read. When the data read back isn't
 the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
 name of the data's class in `dataClass`, and once the record is written the store logs a `WARN` that names the
-instance, the input and the difference. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
+instance, the input and the difference. Inside a MongoDB transaction of yours, it logs that `WARN` before you commit
+too. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
 doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
 `BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
 those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
@@ -487,7 +490,7 @@ it's known, where in the event the difference is. A subscription that retries su
 
 Neither that message nor the `WARN` quotes the event. A value in the data is named by its position, such as
 `entry 2 > element 0`, which counts the entries of a map, the fields of a JSON object and the elements of a list from
-0, and by its class. Look the value up in the event in the event store. After the `WARN` the record also holds the
+0, and by its class. Look the value up in the event in the event store. When the record is kept, it also holds the
 data's bytes in `data`.
 
 These records and their chunks are the only copy of the skipped events that the saga keeps, and erasing an event

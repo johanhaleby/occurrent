@@ -513,36 +513,37 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("decimal128NonFiniteValues")
-    void a_non_finite_Decimal128_extension_is_recorded_and_released_as_the_Double_of_that_value(String name, Decimal128 delivered, Double expected) {
+    @MethodSource("decimal128Values")
+    void a_Decimal128_extension_is_recorded_and_released_as_the_same_Decimal128_without_a_warning(String name, Decimal128 delivered) {
         quarantinedInstance();
 
-        Object released = assertReleasedAs(delivered, expected);
+        skip(CloudEventBuilder.v1().withId(KEY).withSource(URI.create("urn:test")).withType("t").withExtension("number", delivered).build());
 
-        assertThat(released).isExactlyInstanceOf(Double.class);
+        Object released = recordedEvent().getExtension("number");
+        assertAll(
+                () -> assertThat(released).as("the released extension").isExactlyInstanceOf(Decimal128.class).isEqualTo(delivered),
+                () -> assertThat(warnings()).as("the warnings").isEmpty()
+        );
     }
 
-    static Stream<Arguments> decimal128NonFiniteValues() {
+    static Stream<Arguments> decimal128Values() {
         return Stream.of(
-                Arguments.of("NaN", Decimal128.NaN, Double.NaN),
-                Arguments.of("positive infinity", Decimal128.POSITIVE_INFINITY, Double.POSITIVE_INFINITY),
-                Arguments.of("negative infinity", Decimal128.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY));
+                Arguments.of("integral", Decimal128.parse("100")),
+                Arguments.of("fractional", Decimal128.parse("1.250")),
+                Arguments.of("NaN", Decimal128.NaN),
+                Arguments.of("positive infinity", Decimal128.POSITIVE_INFINITY),
+                Arguments.of("negative infinity", Decimal128.NEGATIVE_INFINITY));
     }
 
     @Test
-    void a_fractional_Decimal128_extension_is_recorded_and_released_as_a_BigDecimal_with_its_value_and_scale() {
+    void a_byte_array_extension_is_released_as_the_bytes_first_read_when_the_producer_changes_the_array_after_the_skip() {
         quarantinedInstance();
+        byte[] delivered = {1, 2, 3};
+        skip(CloudEventBuilder.v1().withId(KEY).withSource(URI.create("urn:test")).withType("t").withExtension("raw", delivered).build());
 
-        Object released = assertReleasedAs(Decimal128.parse("1.250"), new BigDecimal("1.250"));
+        delivered[0] = 99;
 
-        assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(3);
-    }
-
-    @Test
-    void an_integral_Decimal128_extension_is_recorded_and_released_as_a_Long_with_its_value() {
-        quarantinedInstance();
-
-        assertReleasedAs(Decimal128.parse("100"), Long.valueOf(100));
+        assertThat(recordedEvent().getExtension("raw")).isEqualTo(new byte[]{1, 2, 3});
     }
 
     @Test

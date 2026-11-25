@@ -50,9 +50,9 @@ public record SkippedInputNumber(String extension, Class<? extends Number> deliv
     }
 
     /**
-     * The number a release hands back for {@code number}. A subclass of {@code BigDecimal} or {@code BigInteger}, which
-     * every store holds, comes back as that class with the value and scale its {@code BigDecimal} or {@code BigInteger}
-     * methods give. Any other number's value is the decimal its {@code toString} writes, which is how Jackson writes
+     * The number a release hands back for {@code number}. A subclass of {@code BigDecimal} or {@code BigInteger} comes
+     * back as a plain {@code BigDecimal} or {@code BigInteger}, a class every store holds, with the value its
+     * {@code BigDecimal} or {@code BigInteger} methods give, and a {@code BigDecimal} keeps the scale they give. Any other number's value is the decimal its {@code toString} writes, which is how Jackson writes
      * such a number. It's a {@code Long} when that decimal is an integer that fits in one, and otherwise a
      * {@code BigDecimal} with the same value and scale. When {@code toString} doesn't write a decimal, as for
      * {@code NaN} or an infinity, it's the {@code doubleValue} as a {@code Double}.
@@ -97,7 +97,8 @@ public record SkippedInputNumber(String extension, Class<? extends Number> deliv
     /**
      * Logs a warning that saga instance {@code sagaId} holds this extension of the input {@code inputKey} it skips as
      * the class a release hands back. The warning names the instance, the extension, the input and both classes, and
-     * never the value. A store logs it once it has recorded the input.
+     * never the value. A store logs it once it has written the record of the input, which inside a transaction of the
+     * caller's is before the caller commits it.
      */
     public void warn(Logger log, String sagaId, String inputKey) {
         log.warn("Saga instance '{}' can't hold the extension '{}' of the input '{}' it skips as a {}, so a release hands it back as a {}.",

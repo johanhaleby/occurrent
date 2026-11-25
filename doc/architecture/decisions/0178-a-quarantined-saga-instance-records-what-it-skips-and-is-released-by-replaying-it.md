@@ -121,7 +121,7 @@ converter the event exactly as it was delivered. That means the same attributes,
 the same data values with the same Java classes at any depth, the same bytes, and the extensions with the same values
 and the same Java classes. The one exception is an extension that is a `Number` of a class the store doesn't hold as
 that class, such as an `AtomicLong`, which comes back with its value as a `Long`, a `BigDecimal` or a `Double`, or a
-subclass of `BigInteger` or `BigDecimal`, which comes back as that class. A map or a list inside the
+subclass of `BigInteger` or `BigDecimal`, which comes back as a plain `BigInteger` or `BigDecimal`. A map or a list inside the
 data may come back as another implementation of `Map` or `List`, such as a `Document` for a `LinkedHashMap`. Data the
 record can't hold that way is held as its bytes and its class, and a record too large for one document is split
 across several, so an event a quarantined instance skips stops the subscription only when the record can't hold its
@@ -131,29 +131,35 @@ In the record, `event` holds the event's attributes as a CloudEvents JSON string
 `URI`, an `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a
 string with a tag that names the class, since BSON would read it back as another class. A `String` with an unpaired
 surrogate, which BSON's UTF-8 can't hold, is stored as its UTF-16 code units in BSON binary with the tag `utf16`, and
-comes back as the same `String`. Any other extension is stored as it is.
+comes back as the same `String`. Any other extension is stored as it is. The store reads each extension once and
+holds a copy of a `byte[]`, so an array its producer changes while the store checks the record is checked and stored
+as it was first read. Every other class a release hands back is immutable.
 
 A `Number` of any other class than `Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger`, `BigDecimal`
 and `Decimal128` comes back as another class. The store reads its value once, so a number its producer changes while
 the store checks the record is held and checked as one value. A subclass of `BigInteger` or `BigDecimal` is stored with
-the tag of that class and comes back as it, with its value and scale. Any other is stored with the tag `number`, the
+the `bigInteger` or `bigDecimal` tag and comes back as a plain `BigInteger` or `BigDecimal` with its value, and a
+`BigDecimal` keeps its scale. Any other is stored with the tag `number`, the
 name of its class, and its value. A release hands it back as a `Long` when its value is an integer that fits in one,
 and otherwise as a `BigDecimal` with its value and scale, which the record stores as its decimal string. Its value is
 the decimal its `toString` writes, which is how Jackson writes such a number, and a `Number` whose `toString` isn't a
 decimal, such as `NaN` or an infinity, comes back as its `doubleValue`, a `Double`. Once the record is written, the
 store logs a `WARN` that names the instance, the input, the extension, the delivered class and the class a release
 hands back, and not the value. It logs nothing for an event it refuses, a write that loses its compare-and-set, or an
-event whose key it has recorded already. A release can't hand back the delivered class,
+event whose key it has recorded already. Inside a MongoDB transaction of the caller's, it logs once the record is
+written in that transaction, before the caller commits it. When the caller rolls back, the `WARN` is for a record that
+was never kept, and a redelivery logs it again. Logging after the commit instead would need a hook that a transaction on a
+session from `MongoTemplate.withSession` doesn't have, and the `WARN` only goes to the log. A release can't hand back the delivered class,
 since `Number` has no way to build one from a value, and refusing the event would stop the subscription for every
 instance of the saga. The MongoDB event store never delivers such an extension, since it hands back every extension as
 an `Integer`, a `Long`, a `Boolean` or a `String`, so such an event comes from an in-memory event store or one of your
 own.
 
 `InMemorySagaStateStore` holds such a `Number` by the same rule and logs the same `WARN`, for any class other than
-`Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger` and `BigDecimal`, so a release hands back the same
-class from either store. The exception is a `Decimal128`, which `SpringMongoSagaStateStore` hands back as the same
-`Decimal128`. The saga DSL's common module doesn't depend on BSON, so `InMemorySagaStateStore` hands a `Decimal128`
-back as a `Long` or a `BigDecimal`, or as a `Double` for `NaN` or an infinity.
+`Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger`, `BigDecimal` and `Decimal128`, so a release hands
+back the same class from either store. The saga DSL's common module doesn't depend on BSON, so it knows a `Decimal128`
+by its class name, as it already does for a `Decimal128` in data, and holds it as it is, since the class is final and
+immutable.
 
 Data delivered as a `PojoCloudEventData` that holds a map, which is how the MongoDB event store delivers a JSON object,
 is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON, and a release hands the
@@ -188,7 +194,8 @@ The check compares the data it reads back from the bytes with the data a release
 `JsonCloudEventData`, its JSON value at every depth. A number equals a number of the same value whatever its node
 class, and any other value equals only an equal value of the same node class. Once the record is written, the store
 logs a warning that names the instance, the input and the difference, since the converter then gets bytes where it was
-delivered a map or an object.
+delivered a map or an object. Inside a MongoDB transaction of the caller's, it logs that warning before the caller
+commits, as it does the `WARN` for a number.
 
 A record that doesn't fit in one document, at most 16 MiB, or in the write that sends it, at most 16 MiB and 16 KiB
 with its filter, is encoded to BSON and split into chunks of 8 MiB. Each chunk is a document in a collection named

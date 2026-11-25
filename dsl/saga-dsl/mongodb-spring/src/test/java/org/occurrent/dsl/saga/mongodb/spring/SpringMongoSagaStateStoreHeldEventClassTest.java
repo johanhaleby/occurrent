@@ -621,6 +621,24 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
+    void a_byte_array_extension_that_the_producer_changes_after_the_store_reads_it_is_held_and_released_as_the_bytes_first_read_without_falling_back_to_the_data_as_bytes() {
+        byte[] live = {1, 2, 3};
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("orderId", ORDER);
+        CloudEvent delivered = baseEvent().withExtension("raw", live).withDataContentType("application/json")
+                .withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
+
+        Held held = heldAndReadWarned(new ChangesTheArrayAfterItIsRead(delivered, "raw", live));
+
+        Document record = requireNonNull(template.getCollection(SKIPPED_INPUTS).find().first());
+        assertAll(
+                () -> assertThat(held.event().getExtension("raw")).as("the released extension").isEqualTo(new byte[]{1, 2, 3}),
+                () -> assertThat(record.containsKey("dataClass")).as("the record holds the data as its bytes").isFalse(),
+                () -> assertThat(held.warnings()).as("the warnings").isEmpty()
+        );
+    }
+
+    @Test
     void no_warning_is_logged_for_an_event_the_store_refuses_because_an_extension_is_a_UUID() {
         CloudEvent event = baseEvent().withExtension("number", (Number) new AtomicLong(1_234_567)).withExtension(new UuidExtension("correlation", UUID.randomUUID())).build();
         StoredSaga instance = anInstance();
@@ -1023,6 +1041,103 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         @Override
         public String toString() {
             return text;
+        }
+    }
+
+    // An event whose array extension is the live array the producer holds, and which changes that array on every access
+    // after the first read of the extension, as a producer that keeps writing to it would
+    private static final class ChangesTheArrayAfterItIsRead implements CloudEvent {
+        private final CloudEvent delegate;
+        private final String extension;
+        private final byte[] live;
+        private boolean read;
+
+        private ChangesTheArrayAfterItIsRead(CloudEvent delegate, String extension, byte[] live) {
+            this.delegate = delegate;
+            this.extension = extension;
+            this.live = live;
+        }
+
+        private void touch() {
+            if (read) {
+                live[0]++;
+            }
+        }
+
+        @Override
+        public io.cloudevents.SpecVersion getSpecVersion() {
+            touch();
+            return delegate.getSpecVersion();
+        }
+
+        @Override
+        public String getId() {
+            touch();
+            return delegate.getId();
+        }
+
+        @Override
+        public String getType() {
+            touch();
+            return delegate.getType();
+        }
+
+        @Override
+        public URI getSource() {
+            touch();
+            return delegate.getSource();
+        }
+
+        @Override
+        public String getDataContentType() {
+            touch();
+            return delegate.getDataContentType();
+        }
+
+        @Override
+        public URI getDataSchema() {
+            touch();
+            return delegate.getDataSchema();
+        }
+
+        @Override
+        public String getSubject() {
+            touch();
+            return delegate.getSubject();
+        }
+
+        @Override
+        public OffsetDateTime getTime() {
+            touch();
+            return delegate.getTime();
+        }
+
+        @Override
+        public Object getAttribute(String attributeName) {
+            touch();
+            return delegate.getAttribute(attributeName);
+        }
+
+        @Override
+        public Object getExtension(String extensionName) {
+            touch();
+            Object value = extensionName.equals(extension) ? live : delegate.getExtension(extensionName);
+            if (extensionName.equals(extension)) {
+                read = true;
+            }
+            return value;
+        }
+
+        @Override
+        public Set<String> getExtensionNames() {
+            touch();
+            return delegate.getExtensionNames();
+        }
+
+        @Override
+        public CloudEventData getData() {
+            touch();
+            return delegate.getData();
         }
     }
 
