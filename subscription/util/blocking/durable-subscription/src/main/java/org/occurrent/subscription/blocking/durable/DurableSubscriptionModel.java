@@ -714,10 +714,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     if (persistCheckpoint.test(cloudEvent)) {
                         Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
                         toStore = checkpoint;
-                        registration.saveUnlessCancelledRepositionedOrSuperseded(delivery, checkpoint, () -> {
+                        boolean saved = registration.saveUnlessCancelledRepositionedOrSuperseded(delivery, checkpoint, () -> {
                             storage.save(subscriptionId, checkpoint, writeCondition);
                             registration.lastWrite.set(System.nanoTime());
                         });
+                        if (!saved) {
+                            log.debug("Did not store checkpoint {} of subscription {}, since the subscribe that delivered the event was cancelled or replaced, or a resume, a restart after a lost history or the save of a later delivery came after the event was read.",
+                                    checkpoint.asString(), subscriptionId);
+                        }
                     }
                 } finally {
                     registration.delivered(delivery, toStore);
@@ -1143,8 +1147,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (recorded != null) {
                     return StartAt.checkpoint(recorded);
                 }
-                // Taken before the read, so a resume, a put-back or a restart after a lost history that stores a position
-                // after this read refuses the first position recorded below
+                // Taken before the read. A resume, a put-back or a restart after a lost history moves the count once its
+                // write has returned or thrown, so one whose write the read below may miss refuses the first position
+                // recorded below
                 long repositionsWhenRead = registration.repositions();
                 // Read inside the supplier so a retry picks up the latest checkpoint, not a stale one
                 Checkpoint checkpoint = storage.read(subscriptionId);
@@ -1349,7 +1354,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * before the call. A checkpoint another node has written with a newer lease in the meantime refuses the put-back. A catch-up model that shares the
      * checkpoint storage then replays from where it would have before the call. When nothing was stored before, the
      * position asked for here stays stored. When putting the old checkpoint back throws too, that exception is added
-     * to the thrown one as a suppressed exception, and the position asked for here may still be the one stored.
+     * to the thrown one as a suppressed exception, and the position asked for here may still be the one stored. The
+     * model then reads what is stored, and when that read throws, its exception is added as a suppressed exception too.
      * After a failed resume, a quiet position is saved only when the model knows the stored checkpoint is the
      * checkpoint of the last event delivered, a position stored after it, or the position of a resume made after that
      * event was read. When the old checkpoint goes back over an event whose checkpoint this call refused, no quiet
@@ -1397,18 +1403,21 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Checkpoint previous = storage.read(subscriptionId);
             CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
             // A handler the pause stopped waiting for can still return and save the checkpoint of its event over the
-            // position stored here, so that save is refused from before this write on. It stays refused when the write
-            // throws, since the position may have been stored anyway, and when the resume fails, which only delivers
-            // its event again
+            // position stored here, so that save is refused from this write on. It waits for the saveLocks held over
+            // the write, and the count moves before they are released. It stays refused when the write throws, since
+            // the position may have been stored anyway, and when the resume fails, which only delivers its event
+            // again. The count moves once the write has returned or thrown, so an evaluation of the start position
+            // that took it before the move is refused, and one that took it after reads what the write left
             try {
                 underLocks(saveLocksOf(writing), () -> {
-                    writing.forEach(CheckpointRegistration::repositioning);
                     try {
                         storage.save(subscriptionId, position, writeCondition);
                     } catch (Throwable failure) {
+                        writing.forEach(CheckpointRegistration::repositioning);
                         writing.forEach(registration -> registration.repositionMayBeStored(position, previous));
                         throw failure;
                     }
+                    writing.forEach(CheckpointRegistration::repositioning);
                     writing.forEach(registration -> registration.repositionStored(position, previous));
                 });
             } finally {
@@ -1429,8 +1438,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 List<ReentrantLock> locks = new ArrayList<>(deliveryLocksOf(writing));
                 locks.addAll(saveLocksOf(writing));
                 underLocks(locks, () -> {
+                    boolean putBackStored = putBack(subscriptionId, previous, writeCondition, e);
                     writing.forEach(CheckpointRegistration::puttingBack);
-                    if (putBack(subscriptionId, previous, writeCondition, e)) {
+                    if (putBackStored) {
                         writing.forEach(registration -> registration.stored(previous));
                     } else {
                         // Unknown also when the put-back was refused, since its condition is the one the position was

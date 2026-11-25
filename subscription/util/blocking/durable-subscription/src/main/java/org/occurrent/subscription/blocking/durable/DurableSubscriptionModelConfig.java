@@ -141,15 +141,17 @@ public class DurableSubscriptionModelConfig {
      * the paused run that is still running keeps the save off until it returns, for as long as that takes. So with a
      * predicate that declines some events, such as {@link EveryN} with {@code n} above 1, a subscription that goes
      * quiet right after a declined event gets no position saved until the predicate stores one. A position read before
-     * a resume at a position isn't saved either, nor one read before the position a restart after a lost history
-     * starts from was stored, nor one a paused run read once the resumed run has started saving. So the stored
-     * checkpoint doesn't move back.
+     * a resume at a position isn't saved either, nor one read before the put-back of the stored checkpoint after such
+     * a resume failed, nor one read before a plain resume that asks the wrapped model to resume at the stored
+     * checkpoint. Neither is one read before the write of the position a restart after a lost history starts from,
+     * when that write stored the position or threw anything but {@code CheckpointWriteConditionNotFulfilledException},
+     * nor one a paused run read once the resumed run has started saving. So the stored checkpoint doesn't move back.
      * <p>
      * After a checkpoint write throws, the next quiet save reads the stored checkpoint first, since the write may have
      * gone through. Once the subscription has delivered an event, it saves the position only when the read returns the
      * checkpoint of the last event delivered, a position stored after it, or the last quiet position or restart position
      * whose write threw anything but {@code CheckpointWriteConditionNotFulfilledException}, and otherwise no position is
-     * saved until the checkpoint of an event or a restart position is stored. When the read throws, the save after the
+     * saved until the checkpoint of an event, a restart position or the position of a resume at a position is stored. When the read throws, the save after the
      * next interval reads again.
      * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB

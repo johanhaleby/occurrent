@@ -178,25 +178,37 @@ before the pause, since `QuietPositionReportingSubscriptions` doesn't promise to
 decides every save of an event's checkpoint and of a quiet position, under the lock all checkpoint writes take. The
 model numbers each read of the wrapped model and notes how many times the subscription was repositioned when it was
 made. A delivery belongs to the read its thread made last, and a quiet position to the read it was handed out before.
-The save is dropped when one of these came after that read:
+A delivery on a thread that made no read, from a wrapped model that hands its events to a pool for example, belongs to
+the latest read when the delivery starts, with the count at that moment. The save is dropped when one of these came
+after that read:
 
-* a resume at a position, a put-back or a restart position, whether its write returned or threw, since each one stores
-  where the subscription reads from next
+* a resume at a position or a put-back, whether its write returned or threw, and a restart position whose write
+  returned or threw anything but `CheckpointWriteConditionNotFulfilledException`, since each one stores where the
+  subscription reads from next. A restart write the storage refused wrote nothing, and a save with the same or an
+  older write condition is refused by the storage the same way
 * a plain resume of the paused subscription that asks the wrapped model to resume at the stored checkpoint, whatever
   the wrapped model's `restartsAt(..)` answers for it. The replaced run's save would write its own checkpoint over the
   stored one, and when another node stored that checkpoint during the pause to replay from it, a restart after a crash
   would skip the replay. The resume reads the stored checkpoint under the same lock, so no save is written between that
   read and the drop
 * a save from a later read, or from the same read and a delivery started later, since a run reads and delivers one
-  event at a time on one thread, so only a run that a resume replaced saves after a later read has
+  event at a time on one thread, so only a run that a resume replaced saves after a later read has. A delivery on a
+  thread that made no read is dropped once a delivery that started after it has saved
+
+Each of those moves the count once its write has returned or thrown, still holding the lock the write was made under,
+so a save waiting for that lock is dropped. A plain resume moves it with its read of the stored checkpoint.
 
 `HistoryLossListener` doesn't say which thread it's called on, so the rule doesn't depend on it. The save of a delivery
 or a quiet position whose read was made before the restart position was written is dropped whichever thread it runs
 on, and one whose read was made after it saves. The MongoDB models end the run that lost the history and read again
 before they deliver, so the restarted run loses no save. When a delivery that started before the restart position was
-written ends, the model goes on comparing the stored checkpoint with the restart position. Without the rule, a stopped
-run that returns from its action for e1 after the resumed run stored e2 writes e1 over e2, and a restart would deliver
-e2 again while quiet saves wait for the next event. A quiet position handed out before a restart position was stored
+written ends, the model goes on comparing the stored checkpoint with the restart position. Without the rule, a handler
+the pause stopped waiting for writes the checkpoint of its event over the position a resume at a position stored, or
+over a checkpoint another node stored during the pause to replay from, and a restart after a crash skips the replay.
+The MongoDB models wait for that handler to return before the resumed run delivers, so on them that is how a stopped
+run writes over a later position. A wrapped model that doesn't wait can also have a stopped run return from its
+action for e1 after the resumed run stored e2, and write e1 over e2, so a restart would deliver e2 again while quiet
+saves wait for the next event. A quiet position handed out before a restart position was stored
 would write over it, and once the history no longer holds that quiet position, a restart from it skips the events
 written after the restart position.
 
@@ -242,8 +254,12 @@ dropping the replaced run's saves there would hold quiet saves until the next ev
 The first position the model records for a subscription that starts at the model default follows the same rule. The
 evaluation of the start position notes how many times the subscription was repositioned before it reads the stored
 checkpoint. When it found nothing stored and a resume at a position, a put-back, a plain resume to the stored
-checkpoint or a restart position came after that read, it records nothing and throws `IllegalStateException`. It
-checks under the lock all checkpoint writes take, and both writes of a first position run inside it. Without that, an
+checkpoint or a restart position the storage didn't refuse came after that read, it records nothing and throws
+`IllegalStateException`. It checks under the lock all checkpoint writes take, and both writes of a first position run
+inside it. The count moves only once the write has returned or thrown, so an evaluation that noted the count before
+the move is refused, and one that noted it after reads what the write left. An evaluation that read the position of
+a failed resume at a position while its put-back was writing is ignored the same way, so it doesn't let a quiet
+position be saved over the checkpoint the put-back restored. Without that, an
 evaluation that found nothing stored before a restart position R2 was written would record its earlier position P1,
 and a storage that keeps the earlier of two first positions, as the MongoDB storages do for an operation time, would
 replace R2 with P1. The blocking MongoDB models evaluate the start position again after a refusal, and that evaluation

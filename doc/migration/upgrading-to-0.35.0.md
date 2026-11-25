@@ -136,6 +136,9 @@ other sections compile fine and behave differently, so read them first.
   A `CheckpointStorage` of your own gets the version stored with the first position in one write only once it
   implements the three-argument `resolveFirstCheckpointRace`, and with a checkpoint already stored only once it
   implements `storeWriteVersion`. Compiles unchanged.
+- [A quiet position whose save throws a checked exception is logged](#a-quiet-position-whose-save-throws-a-checked-exception-is-logged).
+  A checked exception that a `CheckpointStorage` throws from the save of a quiet position no longer reaches the
+  wrapped subscription model. Compiles unchanged.
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
@@ -479,9 +482,10 @@ still be running when the resume stores the position. Once it returns, the check
 that position, and neither is a quiet position read before the resume. A restart then resumes from the position you
 asked for. A plain `resumeSubscription(id)` drops those saves the same way when it asks the wrapped model to resume at
 the stored checkpoint. That includes a catch-up's position or a time on the MongoDB models, which go on from their own
-position for those checkpoints. An
-evaluation of the start position that found no checkpoint stored before such a resume, or a restart after a lost
-history, stored a position records no first position over it. It throws `IllegalStateException`, and evaluating again
+position for those checkpoints. After such a resume, when the wrapped model goes on from its own position, no quiet
+position is saved over a checkpoint another node stored during the pause until the resumed subscription stores the
+checkpoint of an event. An evaluation of the start position that found no checkpoint stored before such a resume, or
+a restart after a lost history, stored a position records no first position over it. It throws `IllegalStateException`, and evaluating again
 starts from the stored checkpoint.
 
 A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
@@ -649,6 +653,31 @@ version stored with the first position in one write, override the three-argument
 javadoc describes. One that doesn't override `storeWriteVersion` stores no version with a checkpoint already stored,
 and the subscription starts from that checkpoint as in 0.34.0. Override it as its javadoc describes to close that.
 There is no OpenRewrite recipe for this.
+
+## A quiet position whose save throws a checked exception is logged
+
+### Who is affected
+
+An application whose blocking `DurableSubscriptionModel` saves quiet positions with `saveQuietPositionEvery(..)`, over
+a `CheckpointStorage` that throws a checked exception without declaring it, as a storage written in Kotlin can.
+Compiles unchanged.
+
+### What changes
+
+In 0.34.0 the model logged a `RuntimeException` from the save of a quiet position and tried again after the interval,
+and a checked exception reached the wrapped subscription model that asked for the save. From 0.35.0 a checked exception
+is logged at `WARN` and tried again after the interval too. A `CheckpointWriteConditionNotFulfilledException` and an
+`Error` still reach the wrapped model.
+
+After any checkpoint write that throws, the next quiet save reads the stored checkpoint first, since the write may or
+may not have stored its position. It saves the quiet position only when what it reads is the checkpoint of the latest
+event or a position the model wrote after that event. A read that throws is logged and tried again after the interval.
+
+### What to do
+
+Nothing, unless an error handler of the wrapped model counts on seeing that checked exception. `DurableSubscriptionModel`
+logs it instead, at `WARN` with the message "Failed to save the quiet position of subscription". There is no
+OpenRewrite recipe for this.
 
 ## A capability that acts on a subscription is not found past a wrapper
 
