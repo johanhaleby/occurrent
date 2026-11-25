@@ -3061,7 +3061,9 @@ when the token you kept is from a live event and the oplog still has it. Call
 paused subscription again from that token, and a later `resumeSubscription(id)` no longer throws. This resume never
 replays, so a checkpoint from a replayed event doesn't work here. When the catch-up model wraps a
 `DurableSubscriptionModel`, that model stores the token as the subscription's checkpoint, which every instance reads.
-So with more than one instance, stop every instance and recover with the steps above instead.
+With more than one instance,
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+says what happens to the other instances.
 
 The blocking Spring Boot starter puts a `CompetingConsumerSubscriptionModel` around the catch-up model, and that model
 has no resume at a position, see [#1304](https://github.com/johanhaleby/occurrent/issues/1304). So in Spring Boot,
@@ -3110,6 +3112,16 @@ Deleting the checkpoint of a subscription with `startAt = NOW` or `startAt = DEF
 checkpoint, even with every instance stopped, because the first instance to start finds nothing stored and starts at
 the present. The same goes for a subscription in code that starts from `StartAt.now()` or
 `StartAt.subscriptionModelDefault()`.
+
+A `resumeSubscription(id, startAt)` at a position, on a blocking catch-up subscription model you call directly,
+resumes the subscription only on the instance you call it on. Through a `DurableSubscriptionModel` it stores the
+position as the checkpoint every instance reads, also when another instance has stored a newer one. An instance that
+restarts before a newer checkpoint is stored starts from that position, so the events another instance already
+handled after it are delivered again.
+
+Another instance that paused the subscription when it lost the history too stays paused, and its
+`resumeSubscription(id)` keeps throwing `CatchupCannotResumeException`. Restart it with a start that reads the stored
+checkpoint, such as the subscription model default, and it goes on after the checkpoint the resumed instance stored.
 
 When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
 instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its

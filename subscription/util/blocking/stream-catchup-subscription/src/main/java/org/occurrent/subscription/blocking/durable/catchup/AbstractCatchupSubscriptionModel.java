@@ -839,8 +839,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * it went live still runs here, as it did on the MongoDB live delegates in 0.34.0. Pause it before you resume it at a
      * position, or cancel it and subscribe it again. A resume at a position can replace the checkpoint stored for it, as
      * described below, and a cancel deletes it. With more than one instance running it, stop every instance instead of
-     * resuming or cancelling it on one, delete its stored checkpoint, if it stores one, and start them all again with
-     * the same start, as
+     * cancelling it on one, delete its stored checkpoint, if it stores one, or replace it with the position to resume at,
+     * and start them all again with the same start, as
      * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
      * describes. Deleting the checkpoint of a subscription that starts from now or at the subscription model default
      * skips the events since that checkpoint, even with every instance stopped, because the first instance to start
