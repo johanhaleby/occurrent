@@ -33,6 +33,9 @@ import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonCloudEventData;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.Document;
+import org.bson.types.Binary;
+import org.bson.types.Decimal128;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -80,6 +83,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.function.UnaryOperator;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -93,7 +98,9 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * data doesn't come back from BSON as the same values of the same classes. A record whose attribute or extension doesn't
  * come back is refused, naming the instance, the input and the value, before anything is written. Checks against a
  * MongoDB replica set that each class of extension the record holds reads back as the same class with the same value,
- * that an extension of any other class is refused, and that data BSON reads back as another class, such as a
+ * that a {@code String} with an unpaired surrogate reads back as the same {@code String}, that a {@code Number} of
+ * another class reads back with its value as the class the store documents, with a warning, that an extension of any
+ * other class is refused, and that data BSON reads back as another class, such as a
  * {@code BigDecimal} in a map, is held as its bytes and read back as {@code BytesCloudEventData}, where
  * {@code JsonCloudEventData} is read back as itself.
  */
@@ -206,17 +213,57 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void a_String_extension_with_an_unpaired_surrogate_is_refused_with_the_extension_named_and_nothing_written() {
-        CloudEvent event = baseEvent().withExtension("surrogateext", "a\uD800b").build();
-        StoredSaga instance = anInstance();
-
-        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+    void a_String_extension_with_an_unpaired_surrogate_is_held_and_released_as_the_same_String() {
+        CloudEvent held = heldAndRead(baseEvent().withExtension("surrogateext", "a\uD800b").build());
 
         assertAll(
-                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
-                        .hasMessageContaining("'surrogateext'").hasMessageContaining(String.class.getName()),
-                () -> assertNothingWritten()
+                restored(held, "surrogateext", "a\uD800b"),
+                () -> assertThat(String.valueOf(held.getExtension("surrogateext")).toCharArray()).as("the lone surrogate is still there").containsExactly('a', '\uD800', 'b'),
+                () -> assertThat(storedExtension("surrogateext")).as("the stored extension").containsEntry("type", "utf16"),
+                () -> assertThat(storedExtension("surrogateext").get("value") instanceof Binary binary ? binary.getData() : storedExtension("surrogateext").get("value"))
+                        .as("the UTF-16BE code units of the stored extension").isEqualTo(new byte[]{0, 'a', (byte) 0xD8, 0, 0, 'b'})
         );
+    }
+
+    @Test
+    void String_extensions_with_a_lone_low_surrogate_a_reversed_pair_and_a_lone_high_surrogate_after_a_pair_are_held_and_released_as_the_same_String() {
+        String lowOnly = "\uDC00";
+        String reversed = "x\uDC00\uD800y";
+        String afterPair = "😀\uD800";
+        CloudEvent held = heldAndRead(baseEvent().withExtension("lowonly", lowOnly).withExtension("reversed", reversed).withExtension("afterpair", afterPair).build());
+
+        assertAll(
+                restored(held, "lowonly", lowOnly),
+                restored(held, "reversed", reversed),
+                restored(held, "afterpair", afterPair)
+        );
+    }
+
+    @Test
+    void an_id_with_an_unpaired_surrogate_is_held_and_released_as_the_same_id() {
+        assertAttributeHeldAndReleased(baseEvent().withId("a\uD800b"), CloudEvent::getId, "a\uD800b");
+    }
+
+    @Test
+    void a_type_with_an_unpaired_surrogate_is_held_and_released_as_the_same_type() {
+        assertAttributeHeldAndReleased(baseEvent().withType("a\uD800b"), CloudEvent::getType, "a\uD800b");
+    }
+
+    @Test
+    void a_subject_with_an_unpaired_surrogate_is_held_and_released_as_the_same_subject() {
+        assertAttributeHeldAndReleased(baseEvent().withSubject("a\uD800b"), CloudEvent::getSubject, "a\uD800b");
+    }
+
+    @Test
+    void a_source_URI_with_an_unpaired_surrogate_is_held_and_released_as_the_same_URI() {
+        URI source = URI.create("urn:a\uD800b");
+        assertAttributeHeldAndReleased(baseEvent().withSource(source), CloudEvent::getSource, source);
+    }
+
+    @Test
+    void a_dataschema_URI_with_an_unpaired_surrogate_is_held_and_released_as_the_same_URI() {
+        URI schema = URI.create("urn:a\uD800b");
+        assertAttributeHeldAndReleased(baseEvent().withDataSchema(schema), CloudEvent::getDataSchema, schema);
     }
 
     @Test
@@ -417,17 +464,74 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void an_extension_of_a_class_the_record_does_not_hold_is_refused_with_the_extension_and_its_class_named_and_nothing_written() {
-        CloudEvent event = baseEvent().withExtension("counter", (Number) new AtomicLong(7)).build();
-        StoredSaga instance = anInstance();
+    void an_AtomicLong_extension_is_held_and_released_as_a_Long_with_its_value_and_a_warning_that_names_both_classes_and_no_value() {
+        assertReleasedAs(new AtomicLong(1_234_567), Long.valueOf(1_234_567));
 
-        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+        assertThat(storedExtension("number")).as("the stored extension").isEqualTo(new Document("type", "number").append("class", AtomicLong.class.getName()).append("value", 1_234_567L));
+    }
+
+    @Test
+    void an_integral_extension_of_a_custom_Number_class_is_held_and_released_as_a_Long_with_its_value() {
+        assertReleasedAs(new Reading("-9223372036854775808"), Long.valueOf(Long.MIN_VALUE));
+    }
+
+    @Test
+    void a_fractional_extension_of_a_custom_Number_class_is_held_and_released_as_a_Decimal128_with_its_value_and_scale() {
+        assertReleasedAs(new Reading("1234567890.123456789"), new Decimal128(new BigDecimal("1234567890.123456789")));
+    }
+
+    @Test
+    void an_extension_of_a_custom_Number_class_with_40_significant_digits_is_held_and_released_as_a_BigDecimal_with_its_exact_value() {
+        assertReleasedAs(new Reading("1234567890123456789012345678901234567890.5"), new BigDecimal("1234567890123456789012345678901234567890.5"));
+    }
+
+    @Test
+    void an_integral_extension_of_a_custom_Number_class_past_a_Long_and_a_Decimal128_is_held_and_released_as_a_BigDecimal_with_its_exact_value() {
+        assertReleasedAs(new Reading("12345678901234567890123456789012345678901234567890"), new BigDecimal("12345678901234567890123456789012345678901234567890"));
+    }
+
+    @Test
+    void an_extension_of_a_custom_Number_class_whose_toString_is_NaN_is_held_and_released_as_the_Double_NaN() {
+        assertReleasedAs(new Reading("NaN"), Double.NaN);
+    }
+
+    @Test
+    void each_extension_of_a_class_the_record_does_not_hold_as_that_class_is_warned_about_once_and_a_class_it_holds_is_not() {
+        Held held = heldAndReadWarned(baseEvent()
+                .withExtension("first", (Number) new AtomicLong(1_234_567))
+                .withExtension("second", (Number) new Reading("1234567890.123456789"))
+                .withExtension("held", (Number) Long.valueOf(7_654_321))
+                .build());
 
         assertAll(
-                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'").hasMessageContaining("'" + KEY + "'")
-                        .hasMessageContaining("'counter'").hasMessageContaining(AtomicLong.class.getName()),
-                () -> assertNothingWritten()
+                restored(held.event(), "first", Long.valueOf(1_234_567)),
+                restored(held.event(), "second", new Decimal128(new BigDecimal("1234567890.123456789"))),
+                restored(held.event(), "held", Long.valueOf(7_654_321)),
+                () -> assertThat(held.warnings()).containsExactlyInAnyOrder(
+                        warning("first", AtomicLong.class, Long.class),
+                        warning("second", Reading.class, Decimal128.class))
         );
+    }
+
+    @Test
+    void a_Decimal128_extension_is_held_and_released_as_the_same_Decimal128_without_a_warning() {
+        Decimal128 value = new Decimal128(new BigDecimal("1234567890.123456789"));
+        Held held = heldAndReadWarned(baseEvent().withExtension("decimal128ext", (Number) value).build());
+
+        assertAll(
+                restored(held.event(), "decimal128ext", value),
+                () -> assertThat(held.warnings()).isEmpty()
+        );
+    }
+
+    @Test
+    void a_quarantined_instance_that_skips_an_event_with_an_AtomicLong_extension_does_not_stop_the_subscription_for_another_instance() {
+        assertAnotherInstanceIsFreeWhenAQuarantinedInstanceSkips(event -> CloudEventBuilder.v1(event).withExtension("counter", (Number) new AtomicLong(7)).build());
+    }
+
+    @Test
+    void a_quarantined_instance_that_skips_an_event_with_an_unpaired_surrogate_extension_does_not_stop_the_subscription_for_another_instance() {
+        assertAnotherInstanceIsFreeWhenAQuarantinedInstanceSkips(event -> CloudEventBuilder.v1(event).withExtension("surrogateext", "a\uD800b").build());
     }
 
     @Test
@@ -631,6 +735,127 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 return converter.getCloudEventType(type);
             }
         };
+    }
+
+    // A Number of a class the record can't hold as that class, whose toString is the decimal it writes
+    private static final class Reading extends Number {
+        private final String text;
+
+        private Reading(String text) {
+            this.text = text;
+        }
+
+        @Override
+        public int intValue() {
+            return (int) doubleValue();
+        }
+
+        @Override
+        public long longValue() {
+            return (long) doubleValue();
+        }
+
+        @Override
+        public float floatValue() {
+            return (float) doubleValue();
+        }
+
+        @Override
+        public double doubleValue() {
+            return Double.parseDouble(text);
+        }
+
+        @Override
+        public String toString() {
+            return text;
+        }
+    }
+
+    private record Held(CloudEvent event, List<String> warnings) {
+    }
+
+    private Held heldAndReadWarned(CloudEvent event) {
+        Logger storeLog = (Logger) LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        storeLog.addAppender(appender);
+        try {
+            CloudEvent released = heldAndRead(event);
+            return new Held(released, appender.list.stream().filter(logged -> logged.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList());
+        } finally {
+            storeLog.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    private static String warning(String extension, Class<?> delivered, Class<?> released) {
+        return "Saga instance '" + ORDER + "' can't hold the extension '" + extension + "' of the input '" + KEY + "' it skips as a " + delivered.getName()
+               + ", so a release hands it back as a " + released.getName() + ".";
+    }
+
+    private void assertReleasedAs(Number delivered, Object expected) {
+        Held held = heldAndReadWarned(baseEvent().withExtension("number", delivered).build());
+
+        assertAll(
+                restored(held.event(), "number", expected),
+                () -> assertThat(held.warnings()).containsExactly(warning("number", delivered.getClass(), expected.getClass())),
+                () -> assertThat(String.join("\n", held.warnings())).as("the warning does not hold the value").doesNotContain(delivered.toString()),
+                () -> assertThat(storedExtension("number")).as("the stored extension").containsEntry("type", "number").containsEntry("class", delivered.getClass().getName())
+        );
+    }
+
+    private Document storedExtension(String name) {
+        Document record = requireNonNull(template.getCollection(SKIPPED_INPUTS).find().first());
+        return requireNonNull(record.get("extensions", Document.class)).get(name, Document.class);
+    }
+
+    private <T> void assertAttributeHeldAndReleased(CloudEventBuilder builder, Function<CloudEvent, T> attribute, T expected) {
+        CloudEvent event = builder.build();
+        assertThat(attribute.apply(event)).as("the event the store is handed carries the attribute").isEqualTo(expected);
+
+        CloudEvent held = heldAndRead(event);
+
+        assertAll(
+                () -> assertThat(attribute.apply(held)).isEqualTo(expected),
+                () -> assertThat(String.valueOf(attribute.apply(held)).toCharArray()).as("the lone surrogate is still there").isEqualTo(String.valueOf(expected).toCharArray()),
+                () -> assertThat(held).isEqualTo(event)
+        );
+    }
+
+    private void assertAnotherInstanceIsFreeWhenAQuarantinedInstanceSkips(UnaryOperator<CloudEvent> withExtension) {
+        String other = "order-2";
+        List<IllegalStateException> refused = new CopyOnWriteArrayList<>();
+        @SuppressWarnings("unchecked")
+        SpringMongoSagaStateStore<String> observed = Mockito.mock(SpringMongoSagaStateStore.class, Mockito.withSettings().spiedInstance(stateStore).defaultAnswer(invocation -> {
+            try {
+                return invocation.callRealMethod();
+            } catch (Throwable e) {
+                if ("compareAndSaveSkipped".equals(invocation.getMethod().getName()) && e instanceof IllegalStateException refusal) {
+                    refused.add(refusal);
+                }
+                throw e;
+            }
+        }));
+        subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, converter)
+                .run("orders", saga(), observed, dispatched::add, null, SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofHours(1)).withQuarantineAfter(Duration.ofMillis(300)));
+        eventStore.write(STREAM, converter.toCloudEvents(List.of(new OrderPlaced(ORDER), new OrderPlaced(other))));
+        failing.add("priced");
+        eventStore.write(STREAM, converter.toCloudEvents(List.of(new ItemAdded(ORDER, "priced", 5))));
+        await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED));
+
+        eventStore.write(STREAM, List.of(withExtension.apply(converter.toCloudEvent(new ItemAdded(ORDER, "pen", 5)))));
+        Throwable heldTimeout = catchThrowable(() -> await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(15))
+                .untilAsserted(() -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).isEqualTo(2)));
+        eventStore.write(STREAM, converter.toCloudEvents(List.of(new ItemAdded(other, "ink", 5))));
+        Throwable dispatchedTimeout = catchThrowable(() -> await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(15))
+                .untilAsserted(() -> assertThat(dispatched).containsExactly(new Pack("ink"))));
+
+        assertAll(
+                () -> assertThat(refused).as("no record is refused, so the subscription is not stopped").isEmpty(),
+                () -> assertThat(heldTimeout).as("the event it failed on and the one after it are held").isNull(),
+                () -> assertThat(dispatchedTimeout).as("the other instance processes its next event").isNull(),
+                () -> assertThat(dispatched).as("only the other instance dispatches").containsExactly(new Pack("ink"))
+        );
     }
 
     private record UuidExtension(String name, UUID value) implements CloudEventExtension {

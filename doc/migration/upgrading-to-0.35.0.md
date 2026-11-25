@@ -1001,10 +1001,19 @@ keep its skipped inputs or their chunks in the same collection. Rename such a co
 
 `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `URI`, an
 `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a string
-with a tag that names the class, and any other extension as it is. Data delivered as a map, which is how the MongoDB
-event store delivers a JSON object, is held in `dataDocument`, with its bytes in `data` unless they are the document's
-own JSON. Other data is held in `data` as its bytes in BSON binary, and a release hands it to the converter as a
-`BytesCloudEventData`.
+with a tag that names the class. A `String` with an unpaired surrogate is stored as its UTF-16 code units with the tag
+`utf16`, and a `Number` of any other class than those and `Integer`, `Long`, `Double` and `Decimal128`, such as an
+`AtomicLong`, with the tag `number` and the name of its class. Any other extension is stored as it is. Data delivered
+as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in
+`data` unless they are the document's own JSON. Other data is held in `data` as its bytes in BSON binary, and a release
+hands it to the converter as a `BytesCloudEventData`.
+
+A release hands back every extension as it was delivered, except one stored with the tag `number`. That one comes back
+with its value as a `Long` when the value is an integer that fits in one, otherwise as a `Decimal128` when one holds
+it, and otherwise as a `BigDecimal`. The value is the decimal the number's `toString` writes, and a number whose
+`toString` isn't a decimal, such as `NaN`, comes back as its `doubleValue`. The store logs a `WARN` that names the
+instance, the input, the extension, the delivered class and the class a release hands back. The MongoDB event store
+never delivers such an extension, so it comes from an in-memory event store or one of your own.
 
 Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
 the way MongoDB stores it, decodes it, and reads the event back the way a release does. It writes the copy of the
@@ -1028,8 +1037,8 @@ then holds `chunks`, the number of chunks, and `size`, their total size in bytes
 joins the chunks again.
 
 `compareAndSaveSkipped` throws an `IllegalStateException`, so the instance and its records stay as they were, only when
-an attribute or an extension doesn't come back as it was delivered, such as a `String` with an unpaired surrogate,
-when the record doesn't encode even with the data held as its bytes, when JSON data reads back from its bytes as
+an attribute or an extension doesn't come back as it was delivered, such as a `UUID` that a `CloudEventExtension` sets
+as an extension, when the record doesn't encode even with the data held as its bytes, when JSON data reads back from its bytes as
 another value, such as a binary value that comes back as its base64 text, or when the saga id, the quarantine id and the
 key take about 8 MiB between them and leave no room for a chunk. The message names the instance, the input and, when
 it's known, where in the event the difference is. A subscription that retries such an event stops on it.
@@ -1271,11 +1280,18 @@ its subscription goes live. To downgrade without that stall, do steps 1 to 5 whi
    Rebuild each event from its record the way a release in `SpringMongoSagaStateStore` reads it:
 
    - Read the attributes from `event` with the CloudEvents JSON format.
-   - Add each entry of `extensions` as an extension. A string, a 32-bit or 64-bit integer, a double or a boolean is
-     the value of the extension as it is. Binary data is its bytes. The Java driver reads it as an
-     `org.bson.types.Binary`, and its bytes are `getData()`. A value the driver gives as a `byte[]` is those bytes. A document holds a value as a string in
-     `value` and its class in `type`, where `uri` is a `URI`, `timestamp` an `OffsetDateTime`, `byte` a `Byte`, `short` a `Short`, `float` a
-     `Float`, `bigInteger` a `BigInteger` and `bigDecimal` a `BigDecimal`.
+   - Add each entry of `extensions` as an extension. A string, a 32-bit or 64-bit integer, a double, a decimal128 or a
+     boolean is the value of the extension as it is, and the Java driver reads a decimal128 as an
+     `org.bson.types.Decimal128`. Binary data is its bytes. The Java driver reads it as an
+     `org.bson.types.Binary`, and its bytes are `getData()`. A value the driver gives as a `byte[]` is those bytes. A
+     document holds a value in `value` and its class in `type`. For `uri`, `timestamp`, `byte`, `short`, `float`,
+     `bigInteger` and `bigDecimal` the value is a string, and the extension is a `URI`, an `OffsetDateTime`, a `Byte`, a
+     `Short`, a `Float`, a `BigInteger` or a `BigDecimal` of it.
+   - For `utf16` the value is binary, and the extension is the `String` whose UTF-16 code units, big-endian, are its
+     bytes. Read them without a charset decoder, such as with `ByteBuffer.wrap(bytes).asCharBuffer().toString()`, since
+     a decoder replaces an unpaired surrogate.
+   - For `number` the extension is the one a release hands back. A 64-bit integer is a `Long`, a decimal128 a
+     `Decimal128`, a double a `Double`, and a string a `BigDecimal` of it.
    - When the record has `dataClass`, the data is `data`, read as bytes the way binary data in an extension is. When
      `dataClass` is `io.cloudevents.jackson.JsonCloudEventData`, it is a `JsonCloudEventData` of those bytes read as
      JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. When a

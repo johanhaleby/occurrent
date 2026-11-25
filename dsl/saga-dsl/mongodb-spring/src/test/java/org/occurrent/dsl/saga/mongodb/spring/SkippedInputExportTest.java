@@ -62,6 +62,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -74,10 +75,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Docker-based. The downgrade guide has the operator dump the skipped inputs and their chunks with two {@code mongodump}
@@ -245,6 +249,79 @@ class SkippedInputExportTest {
     }
 
     @Test
+    void a_String_extension_with_an_unpaired_surrogate_is_rebuilt_from_its_UTF_16_bytes_as_the_same_String() throws Exception {
+        record(builder("held-1").withExtension("surrogateext", "a\uD800b").build());
+        record(builder("held-2").withExtension("surrogateext", "\uDC00").withExtension("pairedext", "😀").build());
+
+        List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+
+        CloudEvent first = rebuild(restored.get(0));
+        CloudEvent second = rebuild(restored.get(1));
+        assertThat(first.getExtension("surrogateext")).as("extension of the first rebuilt event").isEqualTo("a\uD800b");
+        assertThat(second.getExtension("surrogateext")).as("extension of the second rebuilt event").isEqualTo("\uDC00");
+        assertThat(second.getExtension("pairedext")).as("a well formed String").isEqualTo("😀");
+    }
+
+    @Test
+    void an_extension_of_a_Number_class_the_record_does_not_hold_is_rebuilt_as_the_Long_Decimal128_or_BigDecimal_or_Double_a_release_hands_back() throws Exception {
+        record(builder("held-1").withExtension("number", (Number) new AtomicLong(1_234_567)).build());
+        record(builder("held-2").withExtension("number", (Number) new Reading("1234567890.123456789")).build());
+        record(builder("held-3").withExtension("number", (Number) new Reading("1234567890123456789012345678901234567890.5")).build());
+        record(builder("held-4").withExtension("number", (Number) new Reading("NaN")).build());
+
+        List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+
+        assertThat(restored.stream().map(record -> rebuild(record).getExtension("number")).toList()).as("extensions of the rebuilt events").containsExactly(
+                Long.valueOf(1_234_567),
+                new Decimal128(new BigDecimal("1234567890.123456789")),
+                new BigDecimal("1234567890123456789012345678901234567890.5"),
+                Double.NaN);
+    }
+
+    @Test
+    void a_Decimal128_extension_is_rebuilt_as_the_same_Decimal128() throws Exception {
+        record(builder("held-1").withExtension("decimal128ext", (Number) DECIMAL).build());
+
+        List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+
+        Object rebuilt = rebuild(restored.getFirst()).getExtension("decimal128ext");
+        assertThat(rebuilt).as("extension of the rebuilt event").isInstanceOf(Decimal128.class).isEqualTo(DECIMAL);
+    }
+
+    private static final class Reading extends Number {
+        private final String text;
+
+        private Reading(String text) {
+            this.text = text;
+        }
+
+        @Override
+        public int intValue() {
+            return (int) doubleValue();
+        }
+
+        @Override
+        public long longValue() {
+            return (long) doubleValue();
+        }
+
+        @Override
+        public float floatValue() {
+            return (float) doubleValue();
+        }
+
+        @Override
+        public double doubleValue() {
+            return Double.parseDouble(text);
+        }
+
+        @Override
+        public String toString() {
+            return text;
+        }
+    }
+
+    @Test
     void every_class_of_extension_is_rebuilt_with_its_class_and_value() throws Exception {
         record(builder("held-1")
                 .withExtension("uriext", URI.create("https://example.com/a?b=c"))
@@ -389,7 +466,10 @@ class SkippedInputExportTest {
             assertThat(SagaEnvelopes.of(stateStore, null).compareAndSave(ORDER, envelope, 0)).isTrue();
         }
         StoredSaga instance = stateStore.find(ORDER).orElseThrow();
-        assertThat(stateStore.compareAndSaveSkipped(instance, instance.version(), QUARANTINE_ID, new SkippedInput(recorded, "key-" + recorded, event))).as("record " + recorded + " is written").isTrue();
+        AtomicReference<Boolean> written = new AtomicReference<>();
+        Throwable refusal = catchThrowable(() -> written.set(stateStore.compareAndSaveSkipped(instance, instance.version(), QUARANTINE_ID, new SkippedInput(recorded, "key-" + recorded, event))));
+        assertThat(refusal).as("recording record " + recorded).isNull();
+        assertThat(written.get()).as("record " + recorded + " is written").isTrue();
         recorded++;
     }
 
@@ -506,20 +586,34 @@ class SkippedInputExportTest {
                     case Integer number -> builder.withExtension(name, number);
                     case Long number -> builder.withExtension(name, number);
                     case Double number -> builder.withExtension(name, number);
+                    // The recipe: an untagged decimal128 is a Decimal128
+                    case Decimal128 number -> builder.withExtension(name, number);
                     case Boolean bool -> builder.withExtension(name, bool);
                     // The recipe: binary data is its bytes, read as a byte[] or an org.bson.types.Binary depending on the subtype
                     case Binary binary -> builder.withExtension(name, binary.getData());
                     case byte[] bytes -> builder.withExtension(name, bytes);
                     case Document tagged -> {
-                        String tag = tagged.getString("value");
+                        Object stored = tagged.get("value");
                         switch (tagged.getString("type")) {
-                            case "uri" -> builder.withExtension(name, URI.create(tag));
-                            case "timestamp" -> builder.withExtension(name, OffsetDateTime.parse(tag));
-                            case "byte" -> builder.withExtension(name, Byte.valueOf(tag));
-                            case "short" -> builder.withExtension(name, Short.valueOf(tag));
-                            case "float" -> builder.withExtension(name, Float.valueOf(tag));
-                            case "bigInteger" -> builder.withExtension(name, new BigInteger(tag));
-                            case "bigDecimal" -> builder.withExtension(name, new BigDecimal(tag));
+                            case "uri" -> builder.withExtension(name, URI.create((String) stored));
+                            case "timestamp" -> builder.withExtension(name, OffsetDateTime.parse((String) stored));
+                            case "byte" -> builder.withExtension(name, Byte.valueOf((String) stored));
+                            case "short" -> builder.withExtension(name, Short.valueOf((String) stored));
+                            case "float" -> builder.withExtension(name, Float.valueOf((String) stored));
+                            case "bigInteger" -> builder.withExtension(name, new BigInteger((String) stored));
+                            case "bigDecimal" -> builder.withExtension(name, new BigDecimal((String) stored));
+                            // The recipe: the value of utf16 is binary, the String whose UTF-16BE code units are its bytes, read without a
+                            // charset decoder, which replaces an unpaired surrogate
+                            case "utf16" -> builder.withExtension(name, ByteBuffer.wrap(bytesOf(stored)).asCharBuffer().toString());
+                            // The recipe: the value of number is a Long when it is a 64-bit integer, a Decimal128 when it is a decimal128,
+                            // a BigDecimal when it is a string and a Double when it is a double
+                            case "number" -> builder.withExtension(name, switch (stored) {
+                                case Long number -> number;
+                                case Decimal128 number -> number;
+                                case String decimal -> new BigDecimal(decimal);
+                                case Double number -> number;
+                                default -> throw new IllegalStateException("Unknown number value for '" + name + "': " + stored.getClass());
+                            });
                             default -> throw new IllegalStateException("Unknown extension type for '" + name + "': " + tagged.getString("type"));
                         }
                     }

@@ -119,15 +119,30 @@ keeps no other copy of a skipped
 event. A release converts the event again, so `SpringMongoSagaStateStore` holds an event so that a release hands the
 converter the event exactly as it was delivered. That means the same attributes, the same `CloudEventData` class,
 the same data values with the same Java classes at any depth, the same bytes, and the extensions with the same values
-and the same Java classes. A map or a list inside the data may come back as another implementation of `Map` or `List`,
-such as a `Document` for a `LinkedHashMap`. Data the record can't hold that way is held as its bytes and its class,
-and a record too large for one document is split across several, so an event a quarantined instance skips stops the
-subscription only when the record can't hold its attributes, its extensions or its key.
+and the same Java classes. The one exception is an extension that is a `Number` of a class neither BSON nor a tag in the
+record knows, such as an `AtomicLong`, which comes back with its value as another class. A map or a list inside the
+data may come back as another implementation of `Map` or `List`, such as a `Document` for a `LinkedHashMap`. Data the
+record can't hold that way is held as its bytes and its class, and a record too large for one document is split
+across several, so an event a quarantined instance skips stops the subscription only when the record can't hold its
+attributes, an extension that isn't a `String` or a `Number`, or its key.
 
 In the record, `event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A
 `URI`, an `OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a
-string with a tag that names the class, since BSON would read it back as another class. Any other extension is stored
-as it is.
+string with a tag that names the class, since BSON would read it back as another class. A `String` with an unpaired
+surrogate, which BSON's UTF-8 can't hold, is stored as its UTF-16 code units in BSON binary with the tag `utf16`, and
+comes back as the same `String`. Any other extension is stored as it is.
+
+A `Number` of any other class than `Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger`, `BigDecimal`
+and `Decimal128` is stored with the tag `number`, the name of its class, and its value. A release hands it back as the
+class that holds the value exactly, a `Long` when it's an integer that fits in one, otherwise a `Decimal128` when one
+holds it, and otherwise a `BigDecimal`, which the record stores as its decimal string. Its value is the decimal its
+`toString` writes, which is how Jackson writes such a number, and a `Number` whose `toString` isn't a decimal, such as
+`NaN`, comes back as its `doubleValue`. The store logs a `WARN` that names the instance, the input, the extension, the
+delivered class and the class a release hands back, and not the value. A release can't hand back the delivered class,
+since `Number` has no way to build one from a value, and refusing the event would stop the subscription for every
+instance of the saga. The MongoDB event store never delivers such an extension, since it hands back every extension as
+an `Integer`, a `Long`, a `Boolean` or a `String`, so such an event comes from an in-memory event store or one of your
+own.
 
 Data delivered as a `PojoCloudEventData` that holds a map, which is how the MongoDB event store delivers a JSON object,
 is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON, and a release hands the
@@ -185,7 +200,7 @@ quarantine, or by `delete(sagaId)`.
 when:
 
 - The event read back differs from the delivered one in an attribute or an extension, in its value or its Java class,
-  such as a `String` with an unpaired surrogate, which comes back as another `String`.
+  other than for a `Number` the record holds with the tag `number`.
 - Encoding, decoding or reading the record back throws even with the data held as its bytes, such as for an extension
   of a class BSON has no codec for.
 - The data is a `JsonCloudEventData` whose bytes read back as another JSON value. A `BinaryNode` is written as base64

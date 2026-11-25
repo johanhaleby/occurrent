@@ -50,6 +50,7 @@ import org.bson.codecs.Codec;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.conversions.Bson;
 import org.bson.types.Binary;
+import org.bson.types.Decimal128;
 import org.bson.types.ObjectId;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -92,6 +93,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -310,6 +312,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String EXTENSION_FLOAT = "float";
     private static final String EXTENSION_BIG_INTEGER = "bigInteger";
     private static final String EXTENSION_BIG_DECIMAL = "bigDecimal";
+    // A String with an unpaired surrogate, held as its UTF-16 code units in BSON binary
+    private static final String EXTENSION_UTF16 = "utf16";
+    // A Number of a class neither BSON nor another tag knows, held with its class as a Long, a Decimal128, a decimal
+    // string or a Double, and released as a Long, a Decimal128, a BigDecimal or a Double
+    private static final String EXTENSION_NUMBER = "number";
+    private static final String EXTENSION_CLASS = "class";
 
     /**
      * How many times a read or a write calls MongoDB before it gives up, 10, the same number
@@ -1006,9 +1014,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // BSON reads a URI, an OffsetDateTime, a Byte, a Short, a Float, a BigInteger and a BigDecimal back as another class,
-    // so they are stored as a string tagged with the class to restore. Any other value is stored as it is
+    // so they are stored as a string tagged with the class to restore. A String with an unpaired surrogate, which BSON's
+    // UTF-8 can't hold, is stored as its UTF-16 code units. A Number of a class neither BSON nor a tag knows is stored
+    // as the value releasedAs gives it, tagged with its class. Any other value is stored as it is
     private static Object heldExtension(Object value) {
         return switch (value) {
+            case String string when !isWellFormed(string) -> taggedExtension(EXTENSION_UTF16, utf16(string));
             case URI uri -> taggedExtension(EXTENSION_URI, uri.toString());
             case OffsetDateTime time -> taggedExtension(EXTENSION_TIMESTAMP, time.toString());
             case Byte number -> taggedExtension(EXTENSION_BYTE, number.toString());
@@ -1017,12 +1028,82 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             case Float number -> taggedExtension(EXTENSION_FLOAT, number.toString());
             case BigInteger number -> taggedExtension(EXTENSION_BIG_INTEGER, number.toString());
             case BigDecimal number -> taggedExtension(EXTENSION_BIG_DECIMAL, number.toString());
+            case Number number when !heldAsItsClass(number) -> {
+                Number released = releasedAs(number);
+                // A BigDecimal, which BSON writes as a Decimal128, is past what one holds, so it's stored as its decimal
+                Object stored = released instanceof BigDecimal decimal ? decimal.toString() : released;
+                yield new Document(EXTENSION_TYPE, EXTENSION_NUMBER).append(EXTENSION_CLASS, number.getClass().getName()).append(EXTENSION_VALUE, stored);
+            }
             default -> value;
         };
     }
 
-    private static Document taggedExtension(String type, String value) {
+    private static Document taggedExtension(String type, Object value) {
         return new Document(EXTENSION_TYPE, type).append(EXTENSION_VALUE, value);
+    }
+
+    // Whether BSON or a tag holds a Number of this class as that class
+    private static boolean heldAsItsClass(Number number) {
+        return number instanceof Integer || number instanceof Long || number instanceof Double || number instanceof Decimal128
+               || number instanceof Byte || number instanceof Short || number instanceof Float || number instanceof BigInteger || number instanceof BigDecimal;
+    }
+
+    // The extension a release hands back for an extension delivered as value
+    private static Object released(Object value) {
+        return value instanceof Number number && !heldAsItsClass(number) ? releasedAs(number) : value;
+    }
+
+    // The value a release hands back for a Number of a class neither BSON nor a tag knows, as the class that holds it
+    // exactly. Its value is the decimal its toString writes, which is how Jackson writes such a Number. That's a Long
+    // when it's an integer that fits, otherwise a Decimal128 when one holds it, otherwise a BigDecimal. A Number whose
+    // toString isn't a decimal, such as NaN, is its doubleValue as a Double
+    private static Number releasedAs(Number number) {
+        BigDecimal value;
+        try {
+            value = new BigDecimal(number.toString());
+        } catch (NumberFormatException e) {
+            return number.doubleValue();
+        }
+        if (value.signum() == 0 || value.stripTrailingZeros().scale() <= 0) {
+            try {
+                return value.longValueExact();
+            } catch (ArithmeticException e) {
+                // Past a Long
+            }
+        }
+        try {
+            Decimal128 decimal = new Decimal128(value);
+            if (decimal.bigDecimalValue().compareTo(value) == 0) {
+                return decimal;
+            }
+        } catch (NumberFormatException e) {
+            // Past a Decimal128, and its message quotes the value
+        }
+        return value;
+    }
+
+    // Whether every surrogate in string is part of a pair, which is what UTF-8 can encode
+    private static boolean isWellFormed(String string) {
+        for (int i = 0; i < string.length(); i++) {
+            char c = string.charAt(i);
+            if (Character.isHighSurrogate(c) && i + 1 < string.length() && Character.isLowSurrogate(string.charAt(i + 1))) {
+                i++;
+            } else if (Character.isSurrogate(c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // The UTF-16 code units of string, big-endian, which hold an unpaired surrogate where a charset decoder would replace it
+    private static byte[] utf16(String string) {
+        ByteBuffer bytes = ByteBuffer.allocate(string.length() * Character.BYTES);
+        bytes.asCharBuffer().put(string);
+        return bytes.array();
+    }
+
+    private static String fromUtf16(byte[] bytes) {
+        return ByteBuffer.wrap(bytes).asCharBuffer().toString();
     }
 
     private static void withHeldExtension(CloudEventBuilder event, String name, Object value) {
@@ -1031,19 +1112,22 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             case Integer number -> event.withExtension(name, number);
             case Long number -> event.withExtension(name, number);
             case Double number -> event.withExtension(name, number);
+            case Decimal128 number -> event.withExtension(name, number);
             case Boolean bool -> event.withExtension(name, bool);
             case Binary binary -> event.withExtension(name, binary.getData());
             case byte[] bytes -> event.withExtension(name, bytes);
             case Document tagged -> {
-                String tag = tagged.getString(EXTENSION_VALUE);
+                Object stored = tagged.get(EXTENSION_VALUE);
                 switch (tagged.getString(EXTENSION_TYPE)) {
-                    case EXTENSION_URI -> event.withExtension(name, URI.create(tag));
-                    case EXTENSION_TIMESTAMP -> event.withExtension(name, OffsetDateTime.parse(tag));
-                    case EXTENSION_BYTE -> event.withExtension(name, Byte.valueOf(tag));
-                    case EXTENSION_SHORT -> event.withExtension(name, Short.valueOf(tag));
-                    case EXTENSION_FLOAT -> event.withExtension(name, Float.valueOf(tag));
-                    case EXTENSION_BIG_INTEGER -> event.withExtension(name, new BigInteger(tag));
-                    case EXTENSION_BIG_DECIMAL -> event.withExtension(name, new BigDecimal(tag));
+                    case EXTENSION_URI -> event.withExtension(name, URI.create((String) stored));
+                    case EXTENSION_TIMESTAMP -> event.withExtension(name, OffsetDateTime.parse((String) stored));
+                    case EXTENSION_BYTE -> event.withExtension(name, Byte.valueOf((String) stored));
+                    case EXTENSION_SHORT -> event.withExtension(name, Short.valueOf((String) stored));
+                    case EXTENSION_FLOAT -> event.withExtension(name, Float.valueOf((String) stored));
+                    case EXTENSION_BIG_INTEGER -> event.withExtension(name, new BigInteger((String) stored));
+                    case EXTENSION_BIG_DECIMAL -> event.withExtension(name, new BigDecimal((String) stored));
+                    case EXTENSION_UTF16 -> event.withExtension(name, fromUtf16(stored instanceof Binary binary ? binary.getData() : (byte[]) stored));
+                    case EXTENSION_NUMBER -> event.withExtension(name, stored instanceof String decimal ? new BigDecimal(decimal) : (Number) stored);
                     default -> throw new IllegalStateException("Extension '" + name + "' of a skipped input has the unknown type '" + tagged.getString(EXTENSION_TYPE) + "'");
                 }
             }
@@ -1058,6 +1142,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * as a map, which is how the MongoDB event store delivers a JSON object, is held as a document, with its bytes beside
      * it unless they are the document's own JSON. Other data is held as its bytes in BSON binary, and a release hands it
      * to the converter as a {@link BytesCloudEventData}.
+     * <p>
+     * An extension comes back with its value and its class. A {@code String} with an unpaired surrogate, which BSON's
+     * UTF-8 can't hold, is held as its UTF-16 code units and comes back as the same {@code String}. A {@code Number} of
+     * any class other than {@code Byte}, {@code Short}, {@code Integer}, {@code Long}, {@code Float}, {@code Double},
+     * {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an {@code AtomicLong}, comes back with its
+     * value as a {@code Long} when the value is an integer that fits in one, otherwise as a {@code Decimal128} when one
+     * holds the value exactly, and otherwise as a {@code BigDecimal}. Its value is the decimal its {@code toString}
+     * writes, which is how Jackson writes such a number. When {@code toString} doesn't write a decimal, as for
+     * {@code NaN}, it comes back as its {@code doubleValue}. The store logs a warning that names the instance, the
+     * input, the extension, the delivered class and the class a release hands back, and never the value.
      * <p>
      * Before it writes anything, this encodes the record to BSON the way MongoDB stores it, decodes it, and reads the
      * event back the way a release reads it. It writes the copy of the record it checked, decoded from the record's BSON,
@@ -1084,8 +1178,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * It throws an {@link IllegalStateException} that names the instance, the input and, when it's known, where in the
      * event the difference is, when:
      * <ul>
-     *     <li>an attribute or an extension comes back as another value or as a value of another class, such as a
-     *     {@code String} with an unpaired surrogate.</li>
+     *     <li>an attribute or an extension comes back as another value or as a value of another class than the ones
+     *     above, such as a {@code UUID} that a {@code CloudEventExtension} sets as an extension.</li>
      *     <li>the data held as its bytes comes back as another class than the one a release hands the converter, or JSON
      *     data comes back with another value, such as a binary value as text.</li>
      *     <li>encoding, decoding or reading back the record throws even with the data held as its bytes.</li>
@@ -1256,6 +1350,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     sagaId, input.key(), described(restored.getData()), asDelivered);
             held = asBytes;
         }
+        for (String name : input.event().getExtensionNames()) {
+            if (input.event().getExtension(name) instanceof Number number && !heldAsItsClass(number)) {
+                log.warn("Saga instance '{}' can't hold the extension '{}' of the input '{}' it skips as a {}, so a release hands it back as a {}.",
+                        sagaId, name, input.key(), number.getClass().getName(), releasedAs(number).getClass().getName());
+            }
+        }
         if (upsertFits(filter, new Document("$setOnInsert", held), held, codecs)) {
             return new HeldRecord(held, List.of());
         }
@@ -1344,7 +1444,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // How the restored event differs from the delivered one in an attribute, an extension or, withData, its data, at any
-    // depth, or null when every value is equal and of the same class. A map or a list may come back as another
+    // depth, or null when every value is equal and of the same class. An extension is checked against the one a release
+    // promises for it, which for a Number of a class the record can't hold is releasedAs. A map or a list may come back as another
     // implementation of Map or List. Without withData the data was held as its bytes, and it's checked against the data
     // SkippedInputData promises a release hands back for them, its class and the value of JSON data
     private static @Nullable String difference(CloudEvent delivered, CloudEvent restored, boolean withData) {
@@ -1362,7 +1463,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Set<String> extensions = new LinkedHashSet<>(delivered.getExtensionNames());
         extensions.addAll(restored.getExtensionNames());
         for (String extension : extensions) {
-            Change change = change("", delivered.getExtension(extension), restored.getExtension(extension));
+            Object deliveredExtension = delivered.getExtension(extension);
+            Change change = change("", deliveredExtension == null ? null : released(deliveredExtension), restored.getExtension(extension));
             if (change != null) {
                 return "Its extension '" + extension + "'" + change.how();
             }

@@ -32,7 +32,10 @@ import java.util.Optional;
  * A store persists the {@link SkippedInput#event() event} of a record with it and returns it from
  * {@link #findSkippedInputs(String, String, int)}, for a release to replay. A release converts the event again, so a
  * store returns the event as it was delivered, with the same attributes, the same data class, the same values of the
- * same Java classes at any depth, the same bytes, and the extensions with the same values and the same classes. A map or
+ * same Java classes at any depth, the same bytes, and the extensions with the same values and the same classes. The one
+ * exception is an extension that is a {@code Number} of a class the store can't hold, such as an {@code AtomicLong},
+ * which a store may hand back with its value as a class it can hold, and then logs a warning that names both classes.
+ * {@code SpringMongoSagaStateStore} hands it back as a {@code Long}, a {@code Decimal128}, a {@code BigDecimal} or a {@code Double}. A map or
  * a list inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't
  * hold the data that way may hold its bytes instead, and then returns a {@code JsonCloudEventData} read from those
  * bytes with the same JSON value for data that was one, and a {@code BytesCloudEventData} with the same bytes for data
