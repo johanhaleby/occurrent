@@ -98,9 +98,11 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * moment, {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} store the earlier position.
  * When the storage holds a newer write version, nothing is written, the refusal is logged, and the subscription starts
  * from the checkpoint stored, since the node that stored it holds a newer lease and this node's writes are refused.
- * When the storage holds no newer version and a checkpoint it can't compare with the position read is stored, the call
- * writes nothing and answers empty. That is every stored checkpoint on {@code SpringRedisCheckpointStorage} and
- * {@code InMemoryCheckpointStorage}, and a checkpoint stored for a delivered event on the MongoDB storages. The lost race
+ * A stored checkpoint that is the position read is kept, the version is stored with it, and the subscription starts
+ * from it. When the storage holds the same version, an older one or none, and another checkpoint it can't compare with
+ * the position read is stored, the call writes nothing and answers empty. On {@code SpringRedisCheckpointStorage} and
+ * {@code InMemoryCheckpointStorage} that is every other stored checkpoint. On the MongoDB storages it is one stored for
+ * a delivered event, a generic checkpoint, and a legacy one stored under {@code subscriptionPosition}. The lost race
  * is then settled as it is without a version, below, so the subscribe is refused with
  * {@link StartPositionAlreadyPinnedException} unless the stored checkpoint is the position read, as in 0.34.0. So on
  * these four storages, once every node runs Occurrent 0.35.0 or later, a first position written with the newest version
@@ -858,8 +860,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
     }
 
-    // Read before anything is written, as for an event. When the source throws, the first position is recorded
-    // without a version and the subscription isn't refused
+    // Read before anything is written, as for an event. When the source throws a RuntimeException, the first position
+    // is recorded without a version. A checked exception a source written in Kotlin throws fails the subscribe
     private OptionalLong writeVersionOfFirstPosition(String subscriptionId) {
         try {
             return writeConditionFor(subscriptionId) instanceof CheckpointWriteCondition.NotOlderThan notOlderThan
@@ -867,7 +869,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     : OptionalLong.empty();
         } catch (RuntimeException e) {
             log.warn("Could not read the write version for subscription {}, so its first position is recorded without one. " +
-                     "Its next checkpoint write stores the version.", subscriptionId, e);
+                     "Each later checkpoint write asks for the version again.", subscriptionId, e);
             return OptionalLong.empty();
         }
     }
@@ -880,13 +882,30 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         try {
             return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint, writeVersion);
         } catch (CheckpointWriteConditionNotFulfilledException e) {
-            Checkpoint stored = readStoredPositionBack(subscriptionId, globalCheckpoint);
+            Checkpoint stored;
+            try {
+                stored = readStoredPositionBack(subscriptionId, globalCheckpoint);
+            } catch (StartPositionAlreadyPinnedException readBackFailed) {
+                throw newerVersionStoredAndNothingReadBack(subscriptionId, globalCheckpoint, writeVersion, readBackFailed);
+            }
             log.warn("Subscription {} could not record its first position {} with the write version {} of this node's lease, " +
                      "because the checkpoint storage holds a newer write version for it. The subscription starts from the " +
                      "checkpoint stored, {}, and its checkpoint writes are refused the same way.",
                     subscriptionId, globalCheckpoint.asString(), writeVersion, stored.asString(), e);
             return Optional.of(stored);
         }
+    }
+
+    // Keeps the read back's cause, so a read that failed still has one and a read that found nothing still has none
+    private static StartPositionAlreadyPinnedException newerVersionStoredAndNothingReadBack(String subscriptionId, Checkpoint positionRead, long writeVersion,
+                                                                                           StartPositionAlreadyPinnedException readBack) {
+        return new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
+                "Subscription " + subscriptionId + " could not record " + positionRead.asString() + " as its first " +
+                "position, because the checkpoint storage holds a newer write version for it than " + writeVersion +
+                ", the version of this node's lease. Reading the checkpoint stored back " +
+                (readBack.getCause() == null ? "found nothing" : "failed") + ", so there is no position to start " +
+                "from that the node holding the newer lease stored, and the start is refused.",
+                readBack.getCause());
     }
 
     // Runs inside the StartAt.dynamic supplier below, for an evaluation that gets no recorded position, so for a
@@ -910,9 +929,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
                 "No checkpoint was stored for subscription " + subscriptionId + " when its start position was " +
                 "evaluated, so recording " + positionRead.asString() + " as its first position was tried. Storage " +
-                "refused that write because a checkpoint was stored in between, and reading that checkpoint back " +
-                "did not name it. It can hold an earlier position, so starting from " + positionRead.asString() +
-                " could skip the events between the two, and the start is refused instead. Evaluating the start " +
+                "refused that write, and reading the checkpoint stored back did not name it. That checkpoint can " +
+                "hold an earlier position, so starting from " + positionRead.asString() + " could skip the events " +
+                "between the two, and the start is refused instead. Evaluating the start " +
                 "position again once storage can be read starts the subscription from the checkpoint storage holds " +
                 "then. Reading it back produced the refusal \"" + refusal.getMessage() + "\"",
                 refusal.getCause());

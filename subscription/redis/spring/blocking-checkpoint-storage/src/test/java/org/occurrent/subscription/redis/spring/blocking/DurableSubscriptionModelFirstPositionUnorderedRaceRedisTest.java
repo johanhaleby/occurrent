@@ -157,7 +157,7 @@ class DurableSubscriptionModelFirstPositionUnorderedRaceRedisTest {
     }
 
     @Test
-    void the_very_position_this_node_read_stored_by_another_node_is_started_from_and_left_as_it_was() {
+    void the_very_position_this_node_read_stored_by_another_node_is_started_from_and_gets_this_nodes_version() {
         RaceHookStorage storage = new RaceHookStorage(redis);
         storage.beforeTheResolver = () -> storage.save(subscriptionId, new StringBasedCheckpoint(FIRST_POSITION), CheckpointWriteCondition.notOlderThan(1));
         Feed feed = new Feed();
@@ -169,7 +169,7 @@ class DurableSubscriptionModelFirstPositionUnorderedRaceRedisTest {
         assertAll(
                 () -> assertThat(thrown).as("thrown by subscribe").isNull(),
                 () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo(FIRST_POSITION),
-                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(1L),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(2L),
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION)
         );
     }

@@ -168,7 +168,44 @@ class SpringRedisCheckpointStorageFirstCheckpointRaceTest {
     }
 
     @Test
-    void a_retry_after_an_attempt_that_wrote_and_lost_its_reply_answers_empty_and_leaves_what_the_first_attempt_wrote() {
+    void stores_the_version_and_answers_the_candidate_when_the_same_position_with_an_older_version_is_stored() {
+        storage.save(subscriptionId, checkpoint("candidate"), CheckpointWriteCondition.notOlderThan(1));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("candidate")),
+                () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo("candidate"),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
+        );
+    }
+
+    @Test
+    void stores_the_version_and_answers_the_candidate_when_the_same_position_with_no_version_is_stored() {
+        storage.save(subscriptionId, checkpoint("candidate"));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("candidate")),
+                () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo("candidate"),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
+        );
+    }
+
+    @Test
+    void refuses_the_same_position_stored_with_a_newer_version_and_leaves_that_version() {
+        storage.save(subscriptionId, checkpoint("candidate"), CheckpointWriteCondition.notOlderThan(3));
+
+        assertAll(
+                () -> assertThatThrownBy(() -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2))
+                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(3L)
+        );
+    }
+
+    @Test
+    void a_retry_after_an_attempt_that_wrote_and_lost_its_reply_answers_the_candidate_the_first_attempt_wrote() {
         AtomicInteger attempts = new AtomicInteger();
         StringRedisTemplate losingTheFirstReply = new StringRedisTemplate(lettuceConnectionFactory) {
             @Override
@@ -189,7 +226,7 @@ class SpringRedisCheckpointStorageFirstCheckpointRaceTest {
         assertAll(
                 () -> assertThat(failure).as("failure").isNull(),
                 () -> assertThat(attempts).as("the attempt that wrote and the retry").hasValue(2),
-                () -> assertThat(resolution[0]).as("answer").isEmpty(),
+                () -> assertThat(resolution[0]).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("candidate")),
                 () -> assertThat(retrying.read(subscriptionId).asString()).as("stored position").isEqualTo("candidate"),
                 () -> assertThat(retrying.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
         );
@@ -302,6 +339,49 @@ class SpringRedisCheckpointStorageFirstCheckpointRaceTest {
                 () -> assertThat(resolution).as("answer").isEmpty(),
                 () -> assertThat(redis.hasKey(id)).as("checkpoint key").isFalse(),
                 () -> assertThat(redis.hasKey(SpringRedisCheckpointStorage.versionKey(id))).as("version key").isFalse()
+        );
+    }
+
+    @Test
+    void a_cluster_safe_instance_refuses_an_id_cluster_cannot_put_in_one_slot_when_a_newer_version_is_stored_and_writes_nothing() {
+        String id = "{}orders-" + subscriptionId;
+        SpringRedisCheckpointStorage.forStandalone(redis).save(id, checkpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
+
+        assertAll(
+                () -> assertThatThrownBy(() -> storage.resolveFirstCheckpointRace(id, checkpoint("candidate"), 2))
+                        .isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class, e -> assertThat(e.storedVersion).as("stored version in the exception").hasValue(3L)),
+                () -> assertThat(redis.opsForValue().get(id)).as("checkpoint value").isEqualTo("newer-nodes-position"),
+                () -> assertThat(SpringRedisCheckpointStorage.forStandalone(redis).writeVersion(id)).as("stored version").hasValue(3L)
+        );
+    }
+
+    @Test
+    void a_cluster_safe_instance_answers_empty_and_writes_nothing_for_such_an_id_when_an_older_version_is_stored() {
+        String id = "{}orders-" + subscriptionId;
+        SpringRedisCheckpointStorage standalone = SpringRedisCheckpointStorage.forStandalone(redis);
+        standalone.save(id, checkpoint("stored"), CheckpointWriteCondition.notOlderThan(1));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(id, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").isEmpty(),
+                () -> assertThat(redis.opsForValue().get(id)).as("checkpoint value").isEqualTo("stored"),
+                () -> assertThat(standalone.writeVersion(id)).as("stored version").hasValue(1L)
+        );
+    }
+
+    @Test
+    void a_cluster_safe_instance_answers_empty_and_writes_nothing_for_such_an_id_when_the_stored_version_is_the_offered_one() {
+        String id = "{}orders-" + subscriptionId;
+        SpringRedisCheckpointStorage standalone = SpringRedisCheckpointStorage.forStandalone(redis);
+        standalone.save(id, checkpoint("stored"), CheckpointWriteCondition.notOlderThan(2));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(id, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").isEmpty(),
+                () -> assertThat(redis.opsForValue().get(id)).as("checkpoint value").isEqualTo("stored"),
+                () -> assertThat(standalone.writeVersion(id)).as("stored version").hasValue(2L)
         );
     }
 

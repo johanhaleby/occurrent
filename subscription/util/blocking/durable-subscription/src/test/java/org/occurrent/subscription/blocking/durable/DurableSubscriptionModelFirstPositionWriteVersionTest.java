@@ -217,7 +217,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
     }
 
     @Test
-    void the_very_position_this_node_read_stored_by_another_node_with_an_older_version_just_before_the_three_argument_resolver_is_started_from_and_left_as_it_was() {
+    void the_very_position_this_node_read_stored_by_another_node_with_an_older_version_just_before_the_three_argument_resolver_is_started_from_and_gets_this_nodes_version() {
         StorageWithAHookInTheThreeArgumentResolver storage = new StorageWithAHookInTheThreeArgumentResolver();
         storage.beforeTheThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(FIRST_POSITION), CheckpointWriteCondition.notOlderThan(1));
         Feed feed = new Feed();
@@ -229,7 +229,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
         assertAll(
                 () -> assertThat(thrown).as("thrown by subscribe").isNull(),
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(FIRST_POSITION),
-                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(1L),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION)
         );
     }

@@ -88,9 +88,10 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
 
     /**
      * Settles the first position under the same lock as {@link #save(String, Checkpoint, CheckpointWriteCondition)}.
-     * When no checkpoint is stored, {@code candidate} is stored with {@code writeVersion} and answered. This storage
-     * can't tell which of two positions is earlier, so when a checkpoint is stored, nothing is written and this answers
-     * empty.
+     * When no checkpoint is stored, {@code candidate} is stored with {@code writeVersion} and answered. When the
+     * checkpoint stored is {@code candidate} itself, {@code writeVersion} is stored with it and it is answered. This
+     * storage can't tell which of two positions is earlier, so when another checkpoint is stored, nothing is written
+     * and this answers empty.
      *
      * @throws CheckpointWriteConditionNotFulfilledException if the stored version is newer than {@code writeVersion},
      *                                                       and then nothing is written
@@ -107,10 +108,12 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
             if (stored != null && stored > writeVersion) {
                 throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
             }
-            if (checkpoints.containsKey(subscriptionId)) {
+            Checkpoint storedCheckpoint = checkpoints.get(subscriptionId);
+            if (storedCheckpoint == null) {
+                checkpoints.put(subscriptionId, candidate);
+            } else if (!storedCheckpoint.asString().equals(candidate.asString())) {
                 return Optional.empty();
             }
-            checkpoints.put(subscriptionId, candidate);
             versions.put(subscriptionId, writeVersion);
             return Optional.of(candidate);
         } finally {

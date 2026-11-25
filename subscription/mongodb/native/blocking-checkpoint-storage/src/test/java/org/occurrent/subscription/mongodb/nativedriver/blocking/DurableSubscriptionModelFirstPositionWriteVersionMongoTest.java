@@ -273,7 +273,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
     }
 
     @Test
-    void the_very_checkpoint_for_a_delivered_event_this_node_read_stored_by_another_node_is_started_from_and_left_as_it_was() {
+    void the_very_checkpoint_for_a_delivered_event_this_node_read_stored_by_another_node_is_started_from_and_gets_this_nodes_version() {
         MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
         MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
         ExecutorService executor = Executors.newCachedThreadPool();
@@ -290,7 +290,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             assertAll(
                     () -> assertThat(thrown).as("thrown by subscribe").isNull(),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
-                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(1L),
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
                     () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from")
                             .isNotEmpty().containsOnly(deliveredEvent.asString())
             );

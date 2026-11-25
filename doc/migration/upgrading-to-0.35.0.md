@@ -594,8 +594,9 @@ When two nodes record a first position at the same moment, what happens depends 
 | Stored by the other node | 0.35.0 |
 | --- | --- |
 | A newer version than this node's | The call writes nothing, a warning is logged, and the subscription starts from the stored checkpoint. 0.34.0 threw `StartPositionAlreadyPinnedException` here unless the stored checkpoint was the position it read or the MongoDB storages could order the two. |
-| An operation time on the MongoDB storages, with an older version or none | The earlier of the two positions is stored with this node's version, and the subscription starts from it. |
-| Any other checkpoint, with an older version or none | The call writes nothing, and `subscribe` throws `StartPositionAlreadyPinnedException` unless the stored checkpoint is the position it read, as in 0.34.0. On the Redis and in-memory storages this is every stored checkpoint. |
+| The position this node read, with the same version, an older one or none | This node's version is stored with it, and the subscription starts from it. |
+| Another operation time on the MongoDB storages, with the same version, an older one or none | The earlier of the two positions is stored with this node's version, and the subscription starts from it. |
+| Any other checkpoint, with the same version, an older one or none | The call writes nothing, and `subscribe` throws `StartPositionAlreadyPinnedException`, as in 0.34.0. On the Redis and in-memory storages this is every other stored checkpoint. On the MongoDB storages it is one stored for a delivered event, a generic checkpoint, and a legacy one stored under `subscriptionPosition`. |
 
 When the subscription would start from the stored checkpoint and reading it back fails or finds nothing, `subscribe`
 throws `StartPositionAlreadyPinnedException`.

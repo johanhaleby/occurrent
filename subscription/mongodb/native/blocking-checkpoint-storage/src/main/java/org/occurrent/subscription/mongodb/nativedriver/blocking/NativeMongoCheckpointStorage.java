@@ -173,19 +173,17 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
      * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
      * in the same {@code findOneAndUpdate}, see
      * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
-     * Answers empty and writes nothing when a resume token or generic checkpoint is stored, since neither can be
-     * compared with {@code candidate}, and for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint}.
+     * A {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} is stored when nothing is, and keeps a
+     * stored checkpoint equal to it. Answers empty and writes nothing when any other resume token or generic
+     * checkpoint is stored, since it can't be compared with {@code candidate}.
      */
     @Override
     public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
-        if (!(candidate instanceof MongoOperationTimeCheckpoint)) {
-            return Optional.empty();
-        }
         Document candidateDocument = generateCheckpointDocument(subscriptionId, candidate);
         Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument, writeVersion);
         // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
         Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
-        return interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion);
+        return interpretFirstCheckpointRaceResolution(subscriptionId, candidate, afterDocument, writeVersion);
     }
 
     /**

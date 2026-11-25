@@ -211,9 +211,10 @@ public interface CheckpointStorage {
      * Settles a subscription's first position and stores {@code writeVersion} with it, in one atomic write, so a caller
      * can ask this before it writes anything. The checkpoint that governs is {@code candidate} when nothing is stored
      * or the stored first position is later, and the stored checkpoint otherwise, so this never moves a stored
-     * position later. When the stored checkpoint is one this storage can't compare {@code candidate} against, such as
-     * one written for a delivered event, nothing is written and this answers {@link Optional#empty()}, as the default
-     * does.
+     * position later. A stored checkpoint that is {@code candidate} itself governs too, and {@code writeVersion} is
+     * stored with it. When the stored checkpoint is another one this storage can't compare {@code candidate} against,
+     * such as one written for a delivered event, nothing is written and this answers {@link Optional#empty()}, as the
+     * default does.
      * <p>
      * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
      * allow it. When the storage holds a newer version, whatever checkpoint is stored, nothing is written and
@@ -225,8 +226,8 @@ public interface CheckpointStorage {
      * stores no version with it, as in 0.34.0. When a checkpoint is already stored, that write is refused, and the
      * subscribe starts from the checkpoint {@link #resolveFirstCheckpointRace(String, Checkpoint)} answers. When that
      * answers empty too, the subscribe is refused with {@code StartPositionAlreadyPinnedException} unless the stored
-     * checkpoint is the position it read. The model doesn't save the position again with the version, since that save would write over
-     * whatever another node stored between the two writes. Until the next checkpoint write stores the version, a node
+     * checkpoint is the position it read. The model doesn't save the position again with the version, since that
+     * save would write over whatever another node stored between the two writes. Until the next checkpoint write stores the version, a node
      * that has lost its lease can then write over the first position, which delivers events again but skips none.
      * {@code NativeMongoCheckpointStorage}, {@code SpringMongoCheckpointStorage}, {@code SpringRedisCheckpointStorage}
      * and the blocking {@code InMemoryCheckpointStorage} override this method.

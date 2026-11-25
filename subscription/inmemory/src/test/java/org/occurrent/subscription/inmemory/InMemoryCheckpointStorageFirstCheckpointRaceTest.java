@@ -99,6 +99,55 @@ class InMemoryCheckpointStorageFirstCheckpointRaceTest {
     }
 
     @Test
+    void stores_the_version_and_answers_the_candidate_when_the_same_position_with_an_older_version_is_stored() {
+        storage.save(SUBSCRIPTION_ID, checkpoint("candidate"), CheckpointWriteCondition.notOlderThan(1));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("candidate")),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("candidate"),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
+        );
+    }
+
+    @Test
+    void stores_the_version_and_answers_the_candidate_when_the_same_position_with_no_version_is_stored() {
+        storage.save(SUBSCRIPTION_ID, checkpoint("candidate"));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("candidate")),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("candidate"),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
+        );
+    }
+
+    @Test
+    void answers_the_candidate_and_keeps_the_version_when_the_same_position_with_the_offered_version_is_stored() {
+        storage.save(SUBSCRIPTION_ID, checkpoint("candidate"), CheckpointWriteCondition.notOlderThan(2));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("candidate")),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
+        );
+    }
+
+    @Test
+    void refuses_the_same_position_stored_with_a_newer_version_and_leaves_that_version() {
+        storage.save(SUBSCRIPTION_ID, checkpoint("candidate"), CheckpointWriteCondition.notOlderThan(3));
+
+        assertAll(
+                () -> assertThatThrownBy(() -> storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, checkpoint("candidate"), 2))
+                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L)
+        );
+    }
+
+    @Test
     void refuses_a_version_older_than_the_stored_one_and_writes_nothing() {
         storage.save(SUBSCRIPTION_ID, checkpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
 
