@@ -57,6 +57,7 @@ class StreamCatchupHandoverLockAroundTheCheckTest {
     private final CountDownLatch heldAfterTheCheck = new CountDownLatch(1);
     private final CountDownLatch releaseTheReplay = new CountDownLatch(1);
     private final AtomicBoolean held = new AtomicBoolean();
+    private final AtomicInteger safeChecks = new AtomicInteger();
     private InMemoryEventStore eventStore;
     private StreamCatchupSubscriptionModel catchup;
 
@@ -94,7 +95,7 @@ class StreamCatchupHandoverLockAroundTheCheckTest {
         // When
         Thread cancel = new Thread(() -> catchup.cancelSubscription(ID));
         cancel.start();
-        await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || cancel.getState() == Thread.State.WAITING);
+        await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || cancel.getState() == Thread.State.WAITING || cancel.getState() == Thread.State.TIMED_WAITING);
         boolean cancelWaited = cancel.isAlive();
         releaseTheReplay.countDown();
         cancel.join(5000);
@@ -115,7 +116,7 @@ class StreamCatchupHandoverLockAroundTheCheckTest {
             @Override
             protected boolean isSafeToPersistFor(String subscriptionId) {
                 boolean safe = super.isSafeToPersistFor(subscriptionId);
-                if (safe && held.compareAndSet(false, true)) {
+                if (safe && safeChecks.incrementAndGet() == 2 && held.compareAndSet(false, true)) {
                     holdTheReplay();
                 }
                 return safe;
@@ -128,7 +129,7 @@ class StreamCatchupHandoverLockAroundTheCheckTest {
         // When
         Thread cancel = new Thread(() -> catchup.cancelSubscription(ID));
         cancel.start();
-        await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || cancel.getState() == Thread.State.WAITING);
+        await().atMost(Duration.ofSeconds(5)).until(() -> !cancel.isAlive() || cancel.getState() == Thread.State.WAITING || cancel.getState() == Thread.State.TIMED_WAITING);
         boolean cancelWaited = cancel.isAlive();
         releaseTheReplay.countDown();
         cancel.join(5000);

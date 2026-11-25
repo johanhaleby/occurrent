@@ -2950,8 +2950,9 @@ the catch-up is not affected.
 * A `start(..)`, `stop()` or `resumeSubscription(id)` from any other thread, made while a call an action handed over
   hasn't run yet, waits for it and takes effect after it. So when the action signals another thread to call `start(..)`
   or `resumeSubscription(id)` after its own `stop()`, the model ends up started. The call waits at most 10 seconds for
-  the action to return, and then throws `IllegalStateException` and changes nothing, so an action of one subscription
-  that never returns holds up a call for another subscription for those 10 seconds and no longer. A `resumeSubscription(id)` from a
+  the action to return, and then throws `IllegalStateException` and changes nothing. A `resumeSubscription(id)` waits
+  only for an action of `id`, or for one that handed over a call for `id`, a `start(..)` or a `stop()`, so an action of
+  another subscription that never returns doesn't keep `id` from resuming. A `resumeSubscription(id)` from a
   `CatchupListener` doesn't wait, since the call it would wait for can be waiting for the replay that runs the
   listener. It takes effect before that call, and when the model was stopped by then and the subscription is paused,
   it throws `IllegalStateException` and changes nothing, as `start(..)` does there.
@@ -3012,13 +3013,16 @@ the catch-up is not affected.
 From an action, the call can stay where it is, but code after it in the action runs before the call takes effect, so
 don't rely on the model being stopped or started, or on the subscription being resumed, there. Don't wait in the action for a call you asked another thread to
 make after it, since that call waits for the action to return and throws after 10 seconds. An action that never
-returns keeps the calls it made from taking effect. While it runs, a `start(..)`, `stop()`, `stopReplay()`,
-`resumeReplay()` or `resumeSubscription(..)` made on another thread, for any subscription, throws
-`IllegalStateException` after 10 seconds and changes nothing.
+returns keeps the calls it made from taking effect. While it runs, a `start(..)`, `stop()`, `stopReplay()` or
+`resumeReplay()` made on another thread throws `IllegalStateException` after 10 seconds and changes nothing, and so does
+a `resumeSubscription(id)` for the action's own subscription or for one it handed a call for. A resume of any other
+subscription goes ahead, unless the action handed over a `start(..)` or a `stop()`.
 
 Don't wait in a `StartAt.dynamic(..)` function or a `CatchupListener` for a `start(..)`, `stop()`, `shutdown()` or
 resume you asked another thread to make, since that call waits for the function or the listener to return and throws
-after 10 seconds. When a `shutdown()` throws that way, the wrapped model is shut down once the function or the
+after 10 seconds. That includes a listener the replay's thread tells when a replay runs again, and a `stop()` that
+throws there has stopped the model all the same. No lifecycle call waits for the predicate given to
+`andPersistCheckpointDuringCatchupPhaseWhen(..)`, so a call that predicate waits for goes ahead. When a `shutdown()` throws that way, the wrapped model is shut down once the function or the
 listener has returned, so there's no need to call it again. A `shutdown()` you do call again doesn't shut the wrapped
 model down a second time.
 

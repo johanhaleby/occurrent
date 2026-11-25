@@ -96,7 +96,7 @@ class StreamCatchupActionResumeBehindHandedCallsTest {
         // When y receives an event, and the calls the action handed over have run
         eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned").isTrue();
-        model.awaitTheHandedCalls("test");
+        model.awaitTheHandedCalls(null, "test");
 
         // Then the outcome is that of the stop followed by the resume, which finds the model stopped and x paused
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();
@@ -118,7 +118,7 @@ class StreamCatchupActionResumeBehindHandedCallsTest {
 
         // When the replay of y reaches its action, and the calls the action handed over have run
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of the replay of y returned").isTrue();
-        model.awaitTheHandedCalls("test");
+        model.awaitTheHandedCalls(null, "test");
 
         // Then the outcome is that of the stop followed by the resume, which finds the model stopped and x paused
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();
@@ -140,7 +140,7 @@ class StreamCatchupActionResumeBehindHandedCallsTest {
         // When y receives an event, and the calls the action handed over have run
         eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned").isTrue();
-        model.awaitTheHandedCalls("test");
+        model.awaitTheHandedCalls(null, "test");
 
         // Then the outcome is that of the resume followed by the pause, which finds x running
         assertThat(thrownByTheAction.get()).as("what the action threw, as the pause finds x still paused when it runs at once").isNull();
@@ -160,7 +160,7 @@ class StreamCatchupActionResumeBehindHandedCallsTest {
         // When y receives an event, and the calls the action handed over have run
         eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned").isTrue();
-        model.awaitTheHandedCalls("test");
+        model.awaitTheHandedCalls(null, "test");
 
         // Then the outcome is that of the resume followed by the cancel, so x is unknown to the model, and the resume had started it before the cancel took it away
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();
@@ -195,7 +195,7 @@ class StreamCatchupActionResumeBehindHandedCallsTest {
         // When the action starts the model and subscribes z from the beginning of time, and the calls it handed over have run
         goOn.countDown();
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of the replay of x returned").isTrue();
-        model.awaitTheHandedCalls("test");
+        model.awaitTheHandedCalls(null, "test");
 
         // Then the outcome is that of the start followed by the subscribe, so the model runs, and z replays the history and is not paused
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();

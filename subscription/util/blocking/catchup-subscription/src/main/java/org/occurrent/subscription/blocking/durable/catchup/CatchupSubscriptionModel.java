@@ -703,7 +703,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      */
     @Override
     public void pauseSubscription(String subscriptionId) {
-        if (anyCatchupModel().handedOverBehindTheCallsTheActionHandedOver(this, "pauseSubscription(" + subscriptionId + ")", () -> pauseSubscription(subscriptionId))) {
+        if (anyCatchupModel().handedOverBehindTheCallsTheActionHandedOver(this, subscriptionId, "pauseSubscription(" + subscriptionId + ")", () -> pauseSubscription(subscriptionId))) {
             return;
         }
         // The live delegate doesn't have the subscription of a replay a subscribe started, and holds the one of a replay a
@@ -734,7 +734,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
-        if (anyCatchupModel().handedOverBehindTheCallsTheActionHandedOver(this, "cancelSubscription(" + subscriptionId + ")", () -> cancelSubscription(subscriptionId))) {
+        if (anyCatchupModel().handedOverBehindTheCallsTheActionHandedOver(this, subscriptionId, "cancelSubscription(" + subscriptionId + ")", () -> cancelSubscription(subscriptionId))) {
             return;
         }
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own

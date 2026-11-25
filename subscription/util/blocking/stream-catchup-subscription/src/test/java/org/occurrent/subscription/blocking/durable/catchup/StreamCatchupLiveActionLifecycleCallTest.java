@@ -369,7 +369,7 @@ class StreamCatchupLiveActionLifecycleCallTest {
 
         // When
         run(() -> live.callTheKeptAction(ID)).awaitEnded();
-        model.awaitTheHandedCalls("test");
+        model.awaitTheHandedCalls(null, "test");
 
         // Then the outcome is that of the resumeReplay() followed by the subscribe, both after the action returned
         assertThat(thrown.get()).as("what the resumeReplay() from the action threw").isNull();

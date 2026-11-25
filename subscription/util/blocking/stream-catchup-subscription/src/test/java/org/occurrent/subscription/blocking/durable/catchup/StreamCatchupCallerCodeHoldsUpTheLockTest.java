@@ -618,7 +618,7 @@ class StreamCatchupCallerCodeHoldsUpTheLockTest {
 
     private void assertTheHandedCallsRanAndZIsStillHeld() throws Exception {
         // Behind the subscribe of z, which the lifecycle thread runs once the function returned
-        model.awaitTheHandedCalls("the test");
+        model.awaitTheHandedCalls(null, "the test");
         assertThat(handleOfZ.get()).as("the handle the subscribe of z that waited for the call returned to the action").isNotNull();
         assertThat(handleOfX.get().waitUntilStarted(WAIT)).as("whether the handle of the resume of x that the action handed over completes started").isTrue();
         assertThat(model.isRunning(X)).as("whether x runs after the resume the action handed over").isTrue();

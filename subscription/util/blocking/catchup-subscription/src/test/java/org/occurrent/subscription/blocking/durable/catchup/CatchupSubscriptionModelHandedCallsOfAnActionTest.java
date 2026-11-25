@@ -52,9 +52,9 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * A lifecycle call an action hands over reaches the lifecycle thread once that action has returned, so the thread never
- * waits for an action. A call made from another thread while an action that handed one over still runs gives up after
- * the wait for that action and changes nothing, and a call another action handed over runs although the first action
- * has not returned.
+ * waits for an action. A call made from another thread while an action that handed one over still runs of the model gives up
+ * after the wait for that action and changes nothing, while a call for another subscription runs, and a call another action
+ * handed over runs although the first action has not returned.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupSubscriptionModelHandedCallsOfAnActionTest {
@@ -93,8 +93,8 @@ class CatchupSubscriptionModelHandedCallsOfAnActionTest {
     }
 
     @Test
-    @Timeout(90)
-    void a_resume_from_another_thread_while_an_action_that_handed_a_call_over_blocks_gives_up_and_changes_nothing_and_a_resume_after_the_action_returned_runs() throws Exception {
+    @Timeout(60)
+    void a_resume_of_another_subscription_while_an_action_that_handed_a_call_over_blocks_resumes_it_and_it_receives_the_next_event() throws Exception {
         // Given b is paused, and the action of a has handed a resume over and blocks
         List<CloudEvent> receivedByB = new CopyOnWriteArrayList<>();
         model.subscribe("B", StartAt.now(), receivedByB::add);
@@ -105,31 +105,90 @@ class CatchupSubscriptionModelHandedCallsOfAnActionTest {
         // When the test thread resumes b while that action still runs
         CompletableFuture<Subscription> resumeWhileABlocks = CompletableFuture.supplyAsync(() -> model.resumeSubscription("B"));
 
-        // Then the resume gives up with nothing changed
-        assertThat(resumeWhileABlocks).as("the resume of b made while the action of a that handed a call over blocks")
+        // Then the resume runs, since the call the action of a handed over concerns a and not b
+        assertThat(resumeWhileABlocks).as("the resume of b made while the action of a that handed a call over blocks").succeedsWithin(A_CALL_THAT_IS_NOT_HELD_UP);
+        assertThat(releaseA.getCount()).as("whether the action of a still blocks").isEqualTo(1);
+        assertThat(model.isPaused("B")).as("whether b is paused after the resume").isFalse();
+
+        // And b receives what is written after the resume
+        CloudEvent written = cloudEvent();
+        eventStore.write(UUID.randomUUID().toString(), List.of(written));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(receivedByB).as("what b received after it was resumed").extracting(CloudEvent::getId).containsExactly(written.getId()));
+        assertThat(inMemory.isRunning()).as("whether the wrapped model runs as the model does").isEqualTo(model.isRunning()).isTrue();
+    }
+
+    @Test
+    @Timeout(90)
+    void a_stop_from_another_thread_while_an_action_that_handed_a_call_over_blocks_gives_up_and_changes_nothing_and_a_stop_after_the_action_returned_runs() throws Exception {
+        // Given the action of a has handed a resume over and blocks
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        assertThat(aHandedACallOver.await(5, TimeUnit.SECONDS)).as("whether the action of a handed its resume over").isTrue();
+
+        // When the test thread stops the model while that action still runs
+        CompletableFuture<Void> stopWhileABlocks = CompletableFuture.runAsync(() -> model.stop());
+
+        // Then the stop, a call of the model, waits for that action and gives up with nothing changed
+        assertThat(stopWhileABlocks).as("the stop made while the action of a that handed a call over blocks")
                 .failsWithin(A_CALL_THAT_GIVES_UP)
                 .withThrowableOfType(ExecutionException.class)
                 .havingCause().isInstanceOf(IllegalStateException.class).withMessageContaining("Nothing was changed.");
-        assertThat(model.isPaused("B")).as("whether b is paused after the resume that gave up").isTrue();
+        assertThat(model.isRunning()).as("whether the model runs after the stop that gave up").isTrue();
+        assertThat(inMemory.isRunning()).as("whether the wrapped model runs after the stop that gave up").isTrue();
 
-        // When the action of a returns, and the test thread resumes b again
+        // When the action of a returns, and the test thread stops the model again
         releaseA.countDown();
-        CompletableFuture<Subscription> resumeAfterAReturned = CompletableFuture.supplyAsync(() -> model.resumeSubscription("B"));
+        CompletableFuture<Void> stopAfterAReturned = CompletableFuture.runAsync(() -> model.stop());
 
-        // Then the resume runs, and b receives what is written after it
-        assertThat(resumeAfterAReturned).as("the resume of b made after the action of a returned").succeedsWithin(A_CALL_THAT_GIVES_UP);
-        assertThat(model.isPaused("B")).as("whether b is paused after the resume that ran").isFalse();
-        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(receivedByB).as("what b received after it was resumed").isNotEmpty());
-        assertThat(inMemory.isRunning()).as("whether the wrapped model runs as the model does").isEqualTo(model.isRunning()).isTrue();
+        // Then the stop runs
+        assertThat(stopAfterAReturned).as("the stop made after the action of a returned").succeedsWithin(A_CALL_THAT_GIVES_UP);
+        assertThat(model.isRunning()).as("whether the model runs after the stop that ran").isFalse();
+        assertThat(inMemory.isRunning()).as("whether the wrapped model runs after the stop that ran").isFalse();
 
-        // And a stop followed by a start leaves the model and the wrapped model stopped and then running, as that order does
-        model.stop();
-        assertThat(model.isRunning()).as("whether the model runs after stop()").isFalse();
-        assertThat(inMemory.isRunning()).as("whether the wrapped model runs after stop()").isFalse();
+        // And a start leaves the model and the wrapped model running
         model.start(true);
         assertThat(model.isRunning()).as("whether the model runs after start(true)").isTrue();
         assertThat(inMemory.isRunning()).as("whether the wrapped model runs after start(true)").isTrue();
+    }
+
+    @Test
+    @Timeout(60)
+    void the_calls_an_action_handed_over_run_in_order_once_it_returns_although_another_subscription_was_resumed_meanwhile() throws Exception {
+        // Given the action of d hands a resume and then a pause of d over and blocks, while the action of a blocks too
+        CountDownLatch dHandedItsCallsOver = new CountDownLatch(1);
+        CountDownLatch releaseD = new CountDownLatch(1);
+        AtomicBoolean dIsInItsAction = new AtomicBoolean();
+        List<CloudEvent> receivedByD = new CopyOnWriteArrayList<>();
+        model.subscribe("D", StartAt.now(), event -> {
+            if (dIsInItsAction.compareAndSet(false, true)) {
+                model.resumeSubscription("D");
+                model.pauseSubscription("D");
+                dHandedItsCallsOver.countDown();
+                awaitLatch(releaseD);
+            } else {
+                receivedByD.add(event);
+            }
+        });
+        List<CloudEvent> receivedByB = new CopyOnWriteArrayList<>();
+        model.subscribe("B", StartAt.now(), receivedByB::add);
+        model.pauseSubscription("B");
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        assertThat(dHandedItsCallsOver.await(5, TimeUnit.SECONDS)).as("whether the action of d handed its calls over").isTrue();
+        assertThat(aHandedACallOver.await(5, TimeUnit.SECONDS)).as("whether the action of a handed its call over").isTrue();
+
+        // When b is resumed on another thread while both actions block
+        assertThat(CompletableFuture.supplyAsync(() -> model.resumeSubscription("B"))).as("the resume of b made while the actions of a and d block").succeedsWithin(A_CALL_THAT_IS_NOT_HELD_UP);
+
+        // Then the pause d handed over has not run
+        assertThat(model.isPaused("D")).as("whether d is paused while its action blocks, before the pause it handed over has run").isFalse();
+
+        // When the actions return
+        releaseA.countDown();
+        releaseD.countDown();
+
+        // Then d ends up paused, as it does when its resume runs before its pause, and receives nothing written after
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(model.isPaused("D")).as("whether d is paused after the resume and the pause it handed over ran in that order").isTrue());
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        assertThat(receivedByD).as("what d received while paused").isEmpty();
     }
 
     @Test
