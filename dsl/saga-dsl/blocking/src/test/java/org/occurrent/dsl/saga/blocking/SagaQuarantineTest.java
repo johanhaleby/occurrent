@@ -1647,6 +1647,11 @@ class SagaQuarantineTest {
         }
 
         @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return delegate.findWithFirstSkippedInputKey(sagaId);
+        }
+
+        @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
             return delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
         }
@@ -1780,6 +1785,11 @@ class SagaQuarantineTest {
         @Override
         public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
             return delegate.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return delegate.findWithFirstSkippedInputKey(sagaId);
         }
 
     }

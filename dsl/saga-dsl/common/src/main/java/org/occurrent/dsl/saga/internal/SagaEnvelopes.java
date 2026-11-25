@@ -24,6 +24,7 @@ import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
@@ -95,12 +96,32 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
     }
 
     /**
+     * The instance and the {@code seq} and {@code key} of its first skipped input as one write left them, see
+     * {@link SagaStateStoreSkippedInputs#findWithFirstSkippedInputKey(String)}, with the instance decoded without
+     * reading its state, so neither a state nor a record that no longer decodes fails it.
+     */
+    public Optional<WithFirstSkippedInputKey<S>> findWithFirstSkippedInputKey(SagaStateStoreSkippedInputs records, String sagaId) {
+        requireNonNull(records, "records cannot be null");
+        requireNonNull(sagaId, "sagaId cannot be null");
+        return records.findWithFirstSkippedInputKey(sagaId).map(read -> new WithFirstSkippedInputKey<>(codec.decodeWithoutState(read.saga()), read.first()));
+    }
+
+    /**
      * An instance and the first record under its quarantine id, read together.
      *
      * @param envelope the instance
      * @param first    the first record under the quarantine id of {@code envelope}, or {@code null} when there is none
      */
     public record WithFirstSkippedInput<S extends @Nullable Object>(SagaEnvelope<S> envelope, @Nullable SkippedInput first) {
+    }
+
+    /**
+     * An instance and the {@code seq} and {@code key} of the first record under its quarantine id, read together.
+     *
+     * @param envelope the instance, decoded without its state
+     * @param first    the first record under the quarantine id of {@code envelope}, or {@code null} when there is none
+     */
+    public record WithFirstSkippedInputKey<S extends @Nullable Object>(SagaEnvelope<S> envelope, StoredSagaWithFirstSkippedInputKey.@Nullable RecordKey first) {
     }
 
     public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
@@ -170,10 +191,13 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
         return records.fits(new StoredSaga(written.sagaId(), written.version(), new EncodedSaga(fields), written.index()));
     }
 
-    /** End a quarantine, see {@link SagaStateStoreSkippedInputs#compareAndSaveQuarantineEnded}. The whole envelope is written. */
+    /**
+     * End a quarantine, see {@link SagaStateStoreSkippedInputs#compareAndSaveQuarantineEnded}. {@code envelope}'s state
+     * is not written, so an envelope decoded without its state ends the quarantine too.
+     */
     public boolean compareAndSaveQuarantineEnded(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope, long expectedVersion, String quarantineId) {
         requireNonNull(records, "records cannot be null");
-        return records.compareAndSaveQuarantineEnded(codec.encode(envelope), expectedVersion, quarantineId);
+        return records.compareAndSaveQuarantineEnded(codec.encodeWithoutState(envelope), expectedVersion, quarantineId);
     }
 
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {

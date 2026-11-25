@@ -508,7 +508,9 @@ class SagaReleaseTest {
                     () -> assertThat(result).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(otherResult.get()).isEqualTo(ReleaseResult.RELEASED),
                     () -> assertThat(items()).containsExactly("poison", "a", "b"),
-                    () -> assertThat(appliedStates).as("one write per entry, then the write that ends the quarantine with the state as it is").containsExactly(List.of("poison"), List.of("poison", "a"), List.of("poison", "a", "b"), List.of("poison", "a", "b"))
+                    () -> assertThat(appliedStates).as("one write per entry, and no entry applied twice").containsExactly(List.of("poison"), List.of("poison", "a"), List.of("poison", "a", "b")),
+                    () -> assertThat(store.accepted.getLast().state()).as("the write that ends the quarantine comes last and carries no state").isNull(),
+                    () -> assertThat(store.accepted.getLast().status()).isEqualTo(SagaStatus.ACTIVE)
             );
         }
     }
@@ -3042,6 +3044,27 @@ class SagaReleaseTest {
                 run(afterNextNonEmptyRead);
             }
             return found;
+        }
+
+        // Fails as findWithFirstSkippedInput does when the store is down, but not on a state that refuses to decode, since
+        // the read leaves the state out
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            RuntimeException failure = findFailure;
+            if (failure != null) {
+                throw failure;
+            }
+            if (sagaId.equals(findFailsFor)) {
+                throw new IllegalStateException("cannot read " + sagaId);
+            }
+            if (sagaId.equals(findRunsOutOfMemoryFor)) {
+                throw new OutOfMemoryError("Java heap space");
+            }
+            RuntimeException recordsFailure = findSkippedInputsFailure;
+            if (recordsFailure != null) {
+                throw recordsFailure;
+            }
+            return delegate.findWithFirstSkippedInputKey(sagaId);
         }
 
         @Override

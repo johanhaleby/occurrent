@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.blocking;
 
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -244,6 +245,11 @@ class SagaQuarantiningWriteFailureTest {
         @Override
         public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
             return inMemory.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return inMemory.findWithFirstSkippedInputKey(sagaId);
         }
 
         @Override

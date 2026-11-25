@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.blocking;
 
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
@@ -1038,6 +1039,11 @@ class SagaPendingStreamVersionTest {
         @Override
         public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
             return delegateRecords.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return delegateRecords.findWithFirstSkippedInputKey(sagaId);
         }
 
         @Override

@@ -373,6 +373,14 @@ each read that fails counts against the budget of the record the release is on, 
 `release` call on it returns `STILL_RELEASING` instead of throwing. Once the budget runs out, the instance is
 quarantined again on that record, and a later release throws the decoding failure until the state decodes.
 
+When the replay that saved that state applied the last record, no record is left to count the failure against, so the
+release ends the quarantine and returns `RELEASED`. The write that ends it writes no state, so the stored state stays as
+the replay saved it. The next input to the instance then fails on the decoding the way it fails for any `ACTIVE` instance.
+
+A held record whose event no longer decodes counts against its own budget the same way, and the failure record names it
+by its key. Once its budget runs out, the instance is quarantined again on that record, and a later release replays it
+first.
+
 ### 5. Release runs on any node, and a crashed release is resumed
 
 Release takes no lease and pauses nothing. Every step that changes the instance is a compare-and-set on its document,
@@ -466,9 +474,11 @@ applies the records in order, so the input that failed has the first record left
 first without moving anything. The failure record names the input by the key its record is under, a stream key or a
 CloudEvent key.
 
-When the read of the instance and its first record fails, the release reads them again without the state and
-records the failure against that record, as above. When that read fails too, or no record is left, the release throws
-and the instance stays releasing. On a store that answers the poller's query, the poller tries again on its next poll.
+When the read of the instance and its first record fails, the release reads the instance and the key of its first
+record again with `findWithFirstSkippedInputKey`, which decodes neither the state nor the record's event. It records the
+failure against that record, as above. When no record is left, the release ends the quarantine as in point 4. When that
+read fails too, the release throws and the instance stays releasing. On a store that answers the poller's query, the
+poller tries again on its next poll.
 
 ### 6. Timers stay held until the instance is ACTIVE
 

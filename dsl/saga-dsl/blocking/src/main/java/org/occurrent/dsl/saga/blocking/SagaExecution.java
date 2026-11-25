@@ -25,6 +25,7 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey.RecordKey;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
@@ -33,6 +34,7 @@ import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.FailureRecord;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.SkipToRecord;
+import org.occurrent.dsl.saga.internal.SkippedInputKey;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryInfo;
 import org.occurrent.retry.RetryStrategy;
@@ -695,12 +697,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     // Read whole, so an instance whose state does not decode is refused here rather than marked releasing with nothing
-    // able to apply to it. A read that fails while the instance reads fine without its state, and not whole, failed on
-    // decoding the state, and is refused with the decoding failure named, unless a release of it is running already. Then
-    // the instance read without its state is returned, and the release goes on with it and counts the failure against
-    // the budget of its first record, see recordReadFailure. Any other failure of the read, such as a record that doesn't
-    // decode, propagates as it is. A store that refuses to read where it is called read nothing, and the reads that check
-    // the decoding would run in the same place, such as inside a transaction of the caller's
+    // able to apply to it. A read that fails on an instance a release of is running already, read without its state,
+    // returns that instance, and the release goes on with it and counts the failure against the budget of its first
+    // record, or ends the quarantine when no record is left, see recordReadFailure. That holds whether the state or the
+    // record failed to decode. Otherwise a read that fails while the instance reads without its state but not with it
+    // failed on decoding the state, and is refused with the decoding failure named. Any other failure of the read, such
+    // as a record that doesn't decode, propagates as it is, and the instance stays quarantined. A store that refuses to
+    // read where it is called read nothing, and the reads that check the decoding would run in the same place, such as
+    // inside a transaction of the caller's
     private SagaEnvelopes.@Nullable WithFirstSkippedInput<S> findToRelease(SagaStateStoreSkippedInputs records, String sagaId) {
         try {
             return envelopes.findWithFirstSkippedInput(records, sagaId).orElse(null);
@@ -709,19 +713,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         } catch (Throwable readFailure) {
             rethrowIfNotTheInstances(readFailure);
             SagaEnvelope<S> withoutState = null;
-            boolean stateFails;
             try {
                 withoutState = envelopes.findWithoutState(sagaId).orElse(null);
-                stateFails = withoutState != null && failsToRead(sagaId);
             } catch (Throwable secondFailure) {
+                rethrowIfNotTheInstances(secondFailure);
                 readFailure.addSuppressed(secondFailure);
-                stateFails = false;
             }
-            if (!stateFails) {
-                rethrowAsIs(readFailure);
-            }
-            if (Objects.requireNonNull(withoutState).isReleasing()) {
+            if (withoutState != null && withoutState.isReleasing()) {
                 return new SagaEnvelopes.WithFirstSkippedInput<>(withoutState, null);
+            }
+            if (withoutState == null || !failsToRead(sagaId)) {
+                rethrowAsIs(readFailure);
             }
             throw new IllegalStateException("Saga '" + subscriptionId + "' cannot release instance '" + sagaId + "', because reading its state failed with " + readFailure + ", while reading it without its state worked. "
                                             + "Release the instance again if that error doesn't last. If its state no longer decodes, fix how it decodes and release the instance again, or delete the instance with SagaStateStore.delete(\"" + sagaId + "\"), which throws its state away.", readFailure);
@@ -790,7 +792,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * returns {@code null}.
      * <p>
      * A read of the instance and its first record that fails, such as on a state a replay saved that doesn't decode any
-     * more, counts against the budget of that record the way a replay that fails does, see {@link #recordReadFailure}.
+     * more or on a record whose event doesn't, counts against the budget of that record the way a replay that fails
+     * does. With no record left the quarantine ends instead, and the stored state stays as it is. See
+     * {@link #recordReadFailure}.
      */
     private SagaSubscription.@Nullable ReleaseResult continueRelease(String sagaId, SagaStateStoreSkippedInputs records, int maxRecords,
                                                                      @Nullable Instant leaveIfWrittenSince) {
@@ -805,7 +809,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 throw refused;
             } catch (Throwable readFailure) {
                 rethrowIfNotTheInstances(readFailure);
-                return recordReadFailure(records, sagaId, readFailure);
+                SagaSubscription.ReleaseResult afterReadFailure = recordReadFailure(records, sagaId, readFailure);
+                if (afterReadFailure != null) {
+                    return afterReadFailure;
+                }
+                lostInARow = lostAgain(sagaId, lostInARow);
+                continue;
             }
             SagaEnvelope<S> current = read == null ? null : read.envelope();
             SagaSubscription.ReleaseResult ended = resultUnlessReleasing(current);
@@ -825,13 +834,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             SkippedInput record = Objects.requireNonNull(read).first();
             Instant now = clock.get();
             if (record == null) {
-                SagaEnvelope<S> released = SagaExecutionSupport.withReleased(current, now, config.reorderWindow());
-                if (!envelopes.fits(records, released)) {
-                    return writesNothing(records, sagaId, null, "the instance released");
-                }
-                if (envelopes.compareAndSaveQuarantineEnded(records, released, current.version(), quarantineId)) {
-                    log.info("Saga '{}' instance '{}' is released and ACTIVE again.", subscriptionId, sagaId);
-                    return SagaSubscription.ReleaseResult.RELEASED;
+                SagaSubscription.ReleaseResult released = endQuarantine(records, sagaId, current, quarantineId, now);
+                if (released != null) {
+                    return released;
                 }
                 lostInARow = lostAgain(sagaId, lostInARow);
                 continue;
@@ -868,14 +873,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 }
             } catch (Throwable failure) {
                 rethrowIfNotTheInstances(failure);
-                return recordReleaseFailure(records, sagaId, quarantineId, record, meta, failure, now);
+                return recordReleaseFailure(records, sagaId, quarantineId, RecordKey.of(record), meta, failure, now);
             }
             if (deleteTooLarge) {
                 // The instance applied the record's input already, so quarantining it again on that input is not an option
-                return writesNothing(records, sagaId, record, "the instance with the record deleted");
+                return writesNothing(records, sagaId, record.key(), "the instance with the record deleted");
             }
             if (tooLarge != null) {
-                SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record, meta, current, tooLarge, "the instance with the event applied", null, now);
+                SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record.key(), meta, current, tooLarge, "the instance with the event applied", null, now);
                 if (stopped != null) {
                     return stopped;
                 }
@@ -897,12 +902,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // one with the record's pending entry and the reason, then the bare one. When neither fits, nothing
     // is written. The ERROR says whether a further release gets past the record, which it does when the store can take
     // applied with the marks trimmed. Null when the instance changed since current was read, and the caller reads it again.
-    // The caller read record as the first record under the quarantine id of current, in the read that returned current,
+    // The caller read the record of recordKey as the first record under the quarantine id of current, in the read that returned current,
     // and the write expects current's version, so it never quarantines the instance on a record another release deleted
-    private SagaSubscription.@Nullable ReleaseResult quarantineAgainTooLarge(SagaStateStoreSkippedInputs records, String sagaId, SkippedInput record, EventMeta meta,
+    private SagaSubscription.@Nullable ReleaseResult quarantineAgainTooLarge(SagaStateStoreSkippedInputs records, String sagaId, String recordKey, EventMeta meta,
                                                                            SagaEnvelope<S> current, @Nullable SagaEnvelope<S> applied, String cannotWrite,
                                                                            @Nullable Throwable failure, Instant now) {
-        IllegalStateException reason = new IllegalStateException("The release of saga instance '" + sagaId + "' stopped on the event '" + record.key()
+        IllegalStateException reason = new IllegalStateException("The release of saga instance '" + sagaId + "' stopped on the event '" + recordKey
                                                                  + "', because its state store " + records.getClass().getName() + " cannot write " + cannotWrite + ".");
         FailureRecord<S> requarantine = SagaExecutionSupport.onReleaseTooLarge(current, meta, reason, now, config.reorderWindow());
         if (requarantine == null) {
@@ -912,7 +917,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         if (!envelopes.fitsWithoutState(records, requarantine.envelope(), requarantine.expectedVersion())) {
             requarantine = Objects.requireNonNull(SagaExecutionSupport.onReleaseTooLargeBare(current, meta, reason, now, config.reorderWindow()));
             if (!envelopes.fitsWithoutState(records, requarantine.envelope(), requarantine.expectedVersion())) {
-                return writesNothing(records, sagaId, record, cannotWrite + ", nor the instance quarantined again on it");
+                return writesNothing(records, sagaId, recordKey, cannotWrite + ", nor the instance quarantined again on it");
             }
         }
         boolean fitsWhenReleasedAgain = applied == null || envelopes.fits(records,
@@ -922,23 +927,23 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
         if (applied == null) {
             log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because the event failed while it was releasing and its state store cannot write the failure record. Release the instance again to try the event again. The event and the inputs after it stay recorded.",
-                    subscriptionId, sagaId, record.key(), failure);
+                    subscriptionId, sagaId, recordKey, failure);
         } else if (fitsWhenReleasedAgain) {
             log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its state store cannot write the instance with the event applied. A release keeps every stream version it applies until it ends, and quarantining the instance again trimmed them. The store can write the event applied to the trimmed instance, so release the instance again to go on from that event. The event and the inputs after it stay recorded.",
-                    subscriptionId, sagaId, record.key());
+                    subscriptionId, sagaId, recordKey);
         } else {
             log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its state store cannot write the instance with the event applied, even with the stream versions the release applied trimmed. A further release stops on this event too. Delete the instance, or handle the event and the inputs after it by hand. They stay recorded.",
-                    subscriptionId, sagaId, record.key());
+                    subscriptionId, sagaId, recordKey);
         }
         return SagaSubscription.ReleaseResult.QUARANTINED_AGAIN;
     }
 
     // The store cannot take any write that moves the release on, so nothing is written, nothing is dispatched, and the
     // instance stays releasing. The timer poller tries it again on every poll, and logs this again
-    private SagaSubscription.ReleaseResult writesNothing(SagaStateStoreSkippedInputs records, String sagaId, @Nullable SkippedInput record, String cannotWrite) {
+    private SagaSubscription.ReleaseResult writesNothing(SagaStateStoreSkippedInputs records, String sagaId, @Nullable String recordKey, String cannotWrite) {
         log.error("Saga '{}' instance '{}' stays releasing{} and nothing is dispatched, because its state store {} cannot write {}. The timer poller tries it again on every poll. "
                   + "Delete the instance with SagaStateStore.delete(\"{}\"), which throws its state away and deletes the inputs it recorded, so export or handle those by hand first.",
-                subscriptionId, sagaId, record == null ? "" : " on the event '" + record.key() + "'", records.getClass().getName(), cannotWrite, sagaId);
+                subscriptionId, sagaId, recordKey == null ? "" : " on the event '" + recordKey + "'", records.getClass().getName(), cannotWrite, sagaId);
         return SagaSubscription.ReleaseResult.STILL_RELEASING;
     }
 
@@ -1010,13 +1015,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     // Record that the record a release was applying failed, the way any failure is recorded, and say what that left. The
     // instance stays releasing until the input's budget runs out, and is quarantined on it again then. With quarantine
-    // off there is no budget, so the release stays on the input until it succeeds.
-    private SagaSubscription.ReleaseResult recordReleaseFailure(SagaStateStoreSkippedInputs records, String sagaId, String quarantineId, SkippedInput record,
+    // off there is no budget, so the release stays on the input until it succeeds. The instance is read again without its
+    // state and with only the seq and key of its first record, so a state or an event that no longer decodes doesn't
+    // keep the failure from being recorded
+    private SagaSubscription.ReleaseResult recordReleaseFailure(SagaStateStoreSkippedInputs records, String sagaId, String quarantineId, RecordKey record,
                                                                 EventMeta meta, Throwable failure, Instant now) {
         Duration quarantineAfter = config.quarantineAfter().orElse(ChronoUnit.FOREVER.getDuration());
         try {
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
-                SagaEnvelopes.WithFirstSkippedInput<S> read = envelopes.findWithFirstSkippedInputWithoutState(records, sagaId).orElse(null);
+                SagaEnvelopes.WithFirstSkippedInputKey<S> read = envelopes.findWithFirstSkippedInputKey(records, sagaId).orElse(null);
                 if (read == null) {
                     return SagaSubscription.ReleaseResult.NOT_FOUND;
                 }
@@ -1040,7 +1047,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     break;
                 }
                 if (!envelopes.fitsWithoutState(records, failureRecord.envelope(), failureRecord.expectedVersion())) {
-                    SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record, meta, current, null,
+                    SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record.key(), meta, current, null,
                             "the failure record of the event", failure, now);
                     if (stopped != null) {
                         return stopped;
@@ -1069,15 +1076,18 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         return SagaSubscription.ReleaseResult.STILL_RELEASING;
     }
 
-    // Record that reading a releasing instance and its first record failed, such as on a state a replay saved that
-    // doesn't decode any more, against the budget of that record, the way a failed replay is recorded. The instance and
-    // its first record are read again without the state for it. When that read fails too, the store read nothing to
-    // charge and the failure propagates as it is. So does it for an instance with no record left, since there is no input
-    // whose budget it could count against, and the next poll tries again
-    private SagaSubscription.ReleaseResult recordReadFailure(SagaStateStoreSkippedInputs records, String sagaId, Throwable readFailure) {
-        SagaEnvelopes.WithFirstSkippedInput<S> read = null;
+    // Record that reading a releasing instance and its first record failed against the budget of that record, the way a
+    // failed replay is recorded. That covers a state a replay saved that doesn't decode any more, and a record whose
+    // event doesn't. The instance is read again without its state, and its first record with its event when that
+    // decodes, so the failure record names the input the way a failed replay names it, or by its seq and key alone when
+    // it doesn't. An instance with no record left has nothing more to replay, so its quarantine ends with the stored state
+    // left as it is, and a state that doesn't decode fails the next input the way it fails any input of an active
+    // instance. When the read by seq and key fails too, the store read nothing to charge and the failure propagates as
+    // it is, and the next poll tries again. Null when the write that ends the quarantine lost, and the caller reads again
+    private SagaSubscription.@Nullable ReleaseResult recordReadFailure(SagaStateStoreSkippedInputs records, String sagaId, Throwable readFailure) {
+        SagaEnvelopes.WithFirstSkippedInputKey<S> read = null;
         try {
-            read = envelopes.findWithFirstSkippedInputWithoutState(records, sagaId).orElse(null);
+            read = envelopes.findWithFirstSkippedInputKey(records, sagaId).orElse(null);
         } catch (Throwable secondFailure) {
             rethrowIfNotTheInstances(secondFailure);
             readFailure.addSuppressed(secondFailure);
@@ -1090,21 +1100,74 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     subscriptionId, sagaId, ended, readFailure);
             return ended;
         }
-        String quarantineId = Objects.requireNonNull(current).quarantineId();
-        SkippedInput record = Objects.requireNonNull(read).first();
-        if (quarantineId == null || record == null) {
-            rethrowAsIs(readFailure);
+        // SagaCodec refuses to read a releasing instance without a quarantine id
+        String quarantineId = Objects.requireNonNull(Objects.requireNonNull(current).quarantineId(), "quarantineId");
+        RecordKey first = Objects.requireNonNull(read).first();
+        if (first == null) {
+            log.warn("Saga '{}' failed to read instance '{}' while it was releasing, with no recorded input left to replay. Its quarantine ends with the stored state left as it is.",
+                    subscriptionId, sagaId, readFailure);
+            return endQuarantine(records, sagaId, current, quarantineId, clock.get());
         }
-        return recordReleaseFailure(records, sagaId, Objects.requireNonNull(quarantineId), Objects.requireNonNull(record), extractMeta(record.event()).meta(), readFailure, clock.get());
+        return recordReleaseFailure(records, sagaId, quarantineId, first, metaOfRecord(records, sagaId, first, readFailure), readFailure, clock.get());
+    }
+
+    // End the quarantine of current, which the read that returned it found with no record left, and leave the stored
+    // state as it is, so a state that no longer decodes doesn't keep a release from ending. Null when the write lost, and
+    // the caller reads again
+    private SagaSubscription.@Nullable ReleaseResult endQuarantine(SagaStateStoreSkippedInputs records, String sagaId, SagaEnvelope<S> current, String quarantineId, Instant now) {
+        SagaEnvelope<S> released = SagaExecutionSupport.withReleased(current, now, config.reorderWindow());
+        if (!envelopes.fitsWithoutState(records, released, current.version())) {
+            return writesNothing(records, sagaId, null, "the instance released");
+        }
+        if (!envelopes.compareAndSaveQuarantineEnded(records, released, current.version(), quarantineId)) {
+            return null;
+        }
+        log.info("Saga '{}' instance '{}' is released and ACTIVE again.", subscriptionId, sagaId);
+        return SagaSubscription.ReleaseResult.RELEASED;
+    }
+
+    // The delivery metadata of the record first, read off its event when the record reads with it, and otherwise built
+    // from its key, which names the stream id and version, or the CloudEvent id and source, its budget is counted under.
+    // The event type and the position are known only from the event, so a record whose event doesn't decode is counted
+    // without them
+    private EventMeta metaOfRecord(SagaStateStoreSkippedInputs records, String sagaId, RecordKey first, Throwable readFailure) {
+        try {
+            SkippedInput read = envelopes.findWithFirstSkippedInputWithoutState(records, sagaId).map(SagaEnvelopes.WithFirstSkippedInput::first).orElse(null);
+            if (read != null && isSameRecord(RecordKey.of(read), first)) {
+                return extractMeta(read.event()).meta();
+            }
+        } catch (Throwable recordFailure) {
+            rethrowIfNotTheInstances(recordFailure);
+            if (recordFailure != readFailure) {
+                readFailure.addSuppressed(recordFailure);
+            }
+        }
+        SkippedInputKey key;
+        try {
+            key = SkippedInputKey.parse(first.key());
+        } catch (IllegalArgumentException notAKeyTheSagaWrote) {
+            // A key the saga never writes names no input to count against, as for a store that read nothing
+            readFailure.addSuppressed(notAKeyTheSagaWrote);
+            rethrowAsIs(readFailure);
+            throw notAKeyTheSagaWrote;
+        }
+        return switch (key) {
+            case SkippedInputKey.StreamKey stream -> new EventMeta(stream.streamId(), stream.streamVersion(), null, null);
+            case SkippedInputKey.CloudEventKey cloudEvent -> new EventMeta(null, null, null, null, cloudEvent.id(), cloudEvent.source());
+        };
     }
 
     // Matched by seq and key, not by the event, since a store reads a record back as a new event and a byte array in it
     // never equals the one read before
-    private static boolean isSameRecord(@Nullable SkippedInput first, SkippedInput record) {
-        return first != null && first.seq() == record.seq() && first.key().equals(record.key());
+    private static boolean isSameRecord(@Nullable RecordKey first, RecordKey record) {
+        return first != null && first.equals(record);
     }
 
-    private void logMovedOn(String sagaId, SkippedInput record, SagaSubscription.ReleaseResult result, Throwable failure) {
+    private static boolean isSameRecord(@Nullable SkippedInput first, SkippedInput record) {
+        return first != null && isSameRecord(RecordKey.of(first), RecordKey.of(record));
+    }
+
+    private void logMovedOn(String sagaId, RecordKey record, SagaSubscription.ReleaseResult result, Throwable failure) {
         log.info("Saga '{}' instance '{}' failed on the event '{}' while it was releasing, but another call or node moved the release on and it is {} now.",
                 subscriptionId, sagaId, record.key(), result, failure);
     }

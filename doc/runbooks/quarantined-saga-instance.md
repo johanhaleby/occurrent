@@ -379,6 +379,8 @@ release on it dispatches the commands of an input whose write the store then fai
 
 - The instance was quarantined by 0.34.0, which recorded none of the inputs it skipped.
 - The instance's state doesn't decode, and no release of it is running. The message names the decoding failure.
+- The event of a held record doesn't decode, and no release of it is running. `release` throws the failure of the read
+  as the store threw it.
 - The state store doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface. `release`
   throws for it even when the store doesn't hold the saga id, instead of returning `NOT_FOUND`.
 - The instance is stored as `QUARANTINED_RECORDING` without its failure input, quarantine id or skip count, which a
@@ -389,6 +391,8 @@ release on it dispatches the commands of an input whose write the store then fai
 
 The first can't be released at all. Its message names `SagaStateStore.delete(sagaId)`, and step 6 is what is left.
 For the second, fix how the state decodes, as in step 4, and release the instance again, or delete it in step 6.
+For a record that doesn't decode, restore the event class or repair the converter the same way, and release the
+instance again, or delete it in step 6.
 For the last, fix the store so it persists every field. An instance it already wrote stays without the field, so set
 the field on it by hand or delete it in step 6. Until then every delivery to the instance throws the same refusal, and
 so does a `findByStatus` page that holds it. For a missing record, restore the records from the same backup as the
@@ -397,7 +401,14 @@ instance and release it again, or delete it in step 6.
 An instance whose state stops decoding while it is releasing stays releasing, and each poll that fails to read it
 counts against the budget of the record the release is on, the way an input that fails again does. A `release` call
 on it returns `STILL_RELEASING` instead of throwing. Once the budget runs out, the instance is quarantined again on
-that record, and `release` throws the decoding failure until the state decodes.
+that record, and `release` throws the decoding failure until the state decodes. A held record whose event stops
+decoding while the instance is releasing counts against its own budget the same way, and the instance is quarantined
+again on it once that budget runs out.
+
+When the replay that saved the state that no longer decodes applied the last record, no record is left to count the
+failure against. The release then ends the quarantine and returns `RELEASED`. It writes no state, so the stored state
+stays as the replay saved it. The instance is `ACTIVE`, and its next input fails on the decoding the way it does for any `ACTIVE` instance,
+so it can be quarantined again on that input, as [Why an instance stops](#why-an-instance-stops) describes.
 
 **Checking on a release.** `SagaInstance.failure().isReleasing()` is `true` while a release is under way, and
 `failure().releasedAt()` says when it started. Against MongoDB:

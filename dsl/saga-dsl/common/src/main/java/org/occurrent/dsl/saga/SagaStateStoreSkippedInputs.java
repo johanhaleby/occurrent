@@ -44,8 +44,9 @@ import java.util.Optional;
  * records together, in one atomic write. The instance is saved only when its stored version is the expected one, and
  * when it is not, the method returns {@code false} and writes nothing at all, neither the instance nor a record. So the
  * records under a quarantine id change only in a write that also changes the version of the instance. A release reads
- * the instance and its first record with {@link #findWithFirstSkippedInput(String)}, and every write it makes for them
- * expects the version that read returned, so a write that wins was made on the records the read saw.
+ * the instance and its first record with {@link #findWithFirstSkippedInput(String)}, or with
+ * {@link #findWithFirstSkippedInputKey(String)} when that read failed, and every write it makes for them expects the
+ * version that read returned, so a write that wins was made on the records the read saw.
  * <p>
  * A call that returns normally has made its write survive a failover, because the executor acknowledges the input right
  * after it. On a replicated database that means the write is on a majority of the members, in their journals, before
@@ -62,8 +63,8 @@ import java.util.Optional;
  * a record that a later version of the instance deleted, or miss one it recorded. A release would then send the
  * commands of a record another release applied already, and when that replay fails, quarantine the instance again on a
  * record that is gone, with a compare-and-set on the version it read that still wins. So
- * {@link #findWithFirstSkippedInput(String)} returns the instance and its first record as one write left them, and a
- * release reads them with nothing else.
+ * {@link #findWithFirstSkippedInput(String)} and {@link #findWithFirstSkippedInputKey(String)} return the instance and
+ * its first record as one write left them, and a release reads them with nothing else.
  * <p>
  * A store that implements this removes, in {@link SagaStateStore#delete(String)}, the records under the quarantine id of
  * the instance it deletes, in the same atomic write as the instance. It has to persist the quarantine id and the skip
@@ -155,6 +156,20 @@ public interface SagaStateStoreSkippedInputs {
     Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId);
 
     /**
+     * As {@link #findWithFirstSkippedInput(String)}, under the same rules, but with only the {@code seq} and {@code key}
+     * of the first record, and without reading its event. A release reads this when the read with the event failed,
+     * such as on a record whose event no longer decodes or a state a replay saved that no longer does, so it can count
+     * the failure against the budget of that record, or end the quarantine when no record is left. So the store decodes
+     * nothing of the record but the two, and may leave out the state of the instance, since the release decodes the
+     * instance without it.
+     *
+     * @return the instance and the {@code seq} and {@code key} of its first record, or empty when the store does not
+     * hold the instance
+     * @throws SagaReadRefusedException when the store can't read the two from one moment where it is called
+     */
+    Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId);
+
+    /**
      * Save {@code saga} and record that the quarantined instance skipped {@code input}, in one atomic write.
      * {@code saga} holds no state, and is saved under the rule of
      * {@link SagaStateStore#compareAndSaveWithoutState(StoredSaga, long)}, which leaves the stored state where it is.
@@ -192,10 +207,13 @@ public interface SagaStateStoreSkippedInputs {
     boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed);
 
     /**
-     * Save the whole {@code saga}, under the rule of {@link SagaStateStore#compareAndSave(StoredSaga, long)}, and delete
-     * every record under the quarantine {@code quarantineId} of its saga id, in one atomic write. A release calls this
-     * when it turns the instance active after {@link #findWithFirstSkippedInput(String)} returned no record. A replayed
-     * record that completes the instance goes through {@link #compareAndSaveReplayed} instead.
+     * Save {@code saga} and delete every record under the quarantine {@code quarantineId} of its saga id, in one atomic
+     * write. {@code saga} holds no state, and is saved under the rule of
+     * {@link SagaStateStore#compareAndSaveWithoutState(StoredSaga, long)}, which leaves the stored state where it is,
+     * since ending a quarantine changes nothing of the state. So a release ends it on an instance whose state no longer
+     * decodes too. A release calls this when it turns the instance active after {@link #findWithFirstSkippedInput(String)}
+     * or {@link #findWithFirstSkippedInputKey(String)} returned no record. A replayed record that completes the instance
+     * goes through {@link #compareAndSaveReplayed} instead.
      * <p>
      * The write takes place only while no record is under {@code quarantineId}. The store checks inside the atomic
      * write, against every record written before it, so the write never deletes an input the instance skipped and never

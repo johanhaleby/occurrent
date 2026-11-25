@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.blocking;
 
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -414,6 +415,11 @@ class SagaRefusesAnInputItCannotRecordTest {
         public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
             reads.incrementAndGet();
             return inMemory.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return inMemory.findWithFirstSkippedInputKey(sagaId);
         }
 
         @Override

@@ -972,7 +972,12 @@ instances before you erase an event.
 inputs it skipped, and for an instance whose state no longer decodes, with a message that names the decoding failure.
 An instance whose state stops decoding while it is releasing stays releasing, and each poll that fails to read it
 counts against the budget of the record the release is on, the way an input that fails again does. Once the budget
-runs out, it's quarantined again on that record. The runbook covers what is left for those.
+runs out, it's quarantined again on that record. A held record whose event no longer decodes counts against its own
+budget the same way. The runbook covers the instances quarantined again on such a record.
+
+When the replay that saved a state that no longer decodes applied the last record, no record is left to count the
+failure against. The release then ends the quarantine and returns `RELEASED`. It writes no state, so the stored state
+stays as the replay saved it. The next input to the instance fails on the decoding the way it does for any `ACTIVE` instance.
 
 ### Stored saga state for a release
 
@@ -1054,7 +1059,9 @@ compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplay
 conflict returns `false` and writes neither. `compareAndSaveReplayed` also returns `false` and writes neither when
 the record it replays is gone or has another `seq`, since another release applied that input already. When the
 instance it saves is completed, it deletes every record under the quarantine id. `compareAndSaveQuarantineEnded`
-returns `false` and writes neither while a record is under the quarantine id. The write that quarantines an instance is a `compareAndSaveSkipped` too,
+returns `false` and writes neither while a record is under the quarantine id. It's given an instance without its state
+and saves it under the rule of `compareAndSaveWithoutState`, so it doesn't change the stored state, and a release ends
+the quarantine on an instance whose state no longer decodes too. The write that quarantines an instance is a `compareAndSaveSkipped` too,
 and with an expected version of 0 it inserts an instance the store doesn't hold yet. In `delete(sagaId)` it deletes the records under
 the quarantine id of the instance it removes, in the same atomic write as the instance. A call that returns normally
 has to have made its write survive a failover, since the runner acknowledges the input right after it. It implements
@@ -1066,7 +1073,10 @@ one transaction that sees both as they were at the same moment. An empty result 
 before it reads anything, as `SpringMongoSagaStateStore` does inside a MongoDB transaction of the caller's and inside a
 Spring transaction of another resource that synchronizes its resources. `release`
 throws that exception as it is. For a plain `IllegalStateException` it reads the instance again first, to tell whether
-its state decodes. It implements `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
+its state decodes. It implements `findWithFirstSkippedInputKey(sagaId)`, which reads as `findWithFirstSkippedInput`
+under the same rules but returns only the `seq` and `key` of the first record and may leave out the instance's state. A
+release reads with it when the read with the event failed, such as on a record whose event no longer decodes, so it
+can count the failure against that record, or end the quarantine when no record is left. It implements `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
 set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
 poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
 one listed and from the first id again once a poll lists fewer than `limit`. It implements `requireAtomicTransitions()`,

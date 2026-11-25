@@ -520,8 +520,9 @@ public final class SagaExecutionSupport {
      * The releasing instance {@code current} released, {@link SagaStatus#ACTIVE} with no failure record, no quarantine
      * id and no skip count. Save it with
      * {@code SagaStateStoreSkippedInputs.compareAndSaveQuarantineEnded(..., current.version(), ...)}, and only when
-     * the {@code SagaStateStoreSkippedInputs.findWithFirstSkippedInput} that returned {@code current} returned no record
-     * with it. A skip records its input in a write that raises the version, so a skip recorded after that read makes
+     * the {@code SagaStateStoreSkippedInputs.findWithFirstSkippedInput} or {@code findWithFirstSkippedInputKey} that
+     * returned {@code current} returned no record with it. The state is left out of that write, so {@code current} can
+     * be decoded without it. A skip records its input in a write that raises the version, so a skip recorded after that read makes
      * this write lose, and the release reads again.
      * <p>
      * The released instance keeps no more applied versions per stream and event type than {@code reorderWindow}, as

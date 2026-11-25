@@ -263,6 +263,15 @@ class SagaReleaseStaleRecordsReadTest {
         }
 
         @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            Optional<StoredSagaWithFirstSkippedInputKey> read = inMemory.findWithFirstSkippedInputKey(sagaId);
+            if (hidesRecords) {
+                return read.map(whole -> new StoredSagaWithFirstSkippedInputKey(whole.saga(), null));
+            }
+            return read;
+        }
+
+        @Override
         public void delete(String sagaId) {
             inMemory.delete(sagaId);
         }

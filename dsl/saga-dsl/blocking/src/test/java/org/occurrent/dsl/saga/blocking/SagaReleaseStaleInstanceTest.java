@@ -230,6 +230,11 @@ class SagaReleaseStaleInstanceTest {
         }
 
         @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return inMemory.findWithFirstSkippedInputKey(sagaId);
+        }
+
+        @Override
         public void delete(String sagaId) {
             inMemory.delete(sagaId);
         }

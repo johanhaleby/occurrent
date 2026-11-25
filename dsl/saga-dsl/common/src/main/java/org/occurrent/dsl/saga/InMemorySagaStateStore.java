@@ -153,8 +153,8 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
     public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
-        // The quarantine ends only with no record left, as the SPI says
-        return compareAndSet(saga, expectedVersion, existing -> indexed(saga.encoded(), saga), quarantineId,
+        // The quarantine ends only with no record left, as the SPI says, and the stored state stays where it is
+        return compareAndSet(saga, expectedVersion, withoutState(saga, expectedVersion), quarantineId,
                 Map::isEmpty, records -> Map.of());
     }
 
@@ -297,6 +297,23 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 .map(record -> copyOf(sagaId, record))
                 .orElse(null);
         return Optional.of(new StoredSagaWithFirstSkippedInput(saga, first));
+    }
+
+    @Override
+    public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        // One get, as findWithFirstSkippedInput reads, and no copy of the event
+        Instance instance = instances.get(sagaId);
+        StoredSaga saga = instance == null ? null : instance.saga();
+        if (saga == null) {
+            return Optional.empty();
+        }
+        String quarantineId = saga.index().quarantineId();
+        StoredSagaWithFirstSkippedInputKey.RecordKey first = quarantineId == null ? null : instance.records().getOrDefault(quarantineId, Map.of()).values().stream()
+                .min(SkippedInput.ORDER)
+                .map(StoredSagaWithFirstSkippedInputKey.RecordKey::of)
+                .orElse(null);
+        return Optional.of(new StoredSagaWithFirstSkippedInputKey(saga, first));
     }
 
     private static final Set<Class<?>> UNCHANGEABLE = Set.of(String.class, Boolean.class, Character.class, Byte.class, Short.class,

@@ -61,6 +61,7 @@ import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
@@ -788,6 +789,24 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // CALLERS_TRANSACTION_MESSAGE
     @Override
     public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+        return findWithFirstRecord(sagaId, true).map(read -> new StoredSagaWithFirstSkippedInput(toStoredSaga(read.instance()), read.first() == null ? null
+                : toSkippedInput(whole(read.first().record(), (keyFilter, count) -> read.first().chunks(), skippedInputCodecs()))));
+    }
+
+    // Read as findWithFirstSkippedInput reads, without the chunks. Only the seq and key of the record are decoded, and the
+    // instance is returned without its state, since a flow saga's state is decoded on the way out of the store
+    @Override
+    public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+        return findWithFirstRecord(sagaId, false).map(read -> {
+            Document withoutState = new Document(read.instance());
+            withoutState.remove(STATE);
+            StoredRecord first = read.first();
+            return new StoredSagaWithFirstSkippedInputKey(toStoredSaga(withoutState), first == null ? null
+                    : new StoredSagaWithFirstSkippedInputKey.RecordKey(((Number) first.record().get(SKIPPED_SEQ)).longValue(), first.record().getString(SKIPPED_KEY)));
+        });
+    }
+
+    private Optional<InstanceWithFirstRecord> findWithFirstRecord(String sagaId, boolean withChunks) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         // A Spring transaction of another resource is refused too, since a template with SessionSynchronization.ALWAYS
         // starts a MongoDB transaction in it at the release's first write, and the template doesn't say how it
@@ -798,10 +817,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Query byId = Query.query(where(ID).is(sagaId));
         if (deployment == MongoDeployment.OTHER) {
             Document found = retried(() -> readInstance(null, byId, ReadConcern.MAJORITY));
-            return withFirstSkippedInput(found, document -> retried(() -> firstSkippedInput(
-                    MongoDatabaseUtils.getDatabase(databaseFactory).withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary()), sagaId, document)));
+            if (found == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new InstanceWithFirstRecord(found, retried(() -> firstSkippedInput(
+                    MongoDatabaseUtils.getDatabase(databaseFactory).withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary()), sagaId, found, withChunks))));
         }
-        Optional<StoredSagaWithFirstSkippedInput> found = inSnapshot(sagaId, byId, null);
+        Optional<InstanceWithFirstRecord> found = inSnapshot(sagaId, byId, null, withChunks);
         if (found.isPresent()) {
             return found;
         }
@@ -814,12 +836,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             if (retried(() -> readInstance(linearizable, byId, ReadConcern.LINEARIZABLE)) == null) {
                 return Optional.empty();
             }
-            return inSnapshot(sagaId, byId, linearizable);
+            return inSnapshot(sagaId, byId, linearizable, withChunks);
         }
     }
 
     // With after, the snapshot starts after every read made in that session
-    private Optional<StoredSagaWithFirstSkippedInput> inSnapshot(String sagaId, Query byId, @Nullable ClientSession after) {
+    private Optional<InstanceWithFirstRecord> inSnapshot(String sagaId, Query byId, @Nullable ClientSession after, boolean withChunks) {
         // Decoded after the transaction, so a stored instance that no longer reads back throws once instead of being retried
         @Nullable Object[] read = retried(() -> {
             try {
@@ -829,31 +851,28 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     }
                     MongoDatabase database = MongoDatabaseUtils.getDatabase(databaseFactory);
                     Document found = instances(database).find(byId.getQueryObject()).first();
-                    return new Object[]{found, found == null ? null : firstSkippedInput(database, sagaId, found)};
+                    return new Object[]{found, found == null ? null : firstSkippedInput(database, sagaId, found, withChunks)};
                 }));
             } catch (RuntimeException e) {
                 throw translated(e);
             }
         });
-        return withFirstSkippedInput((Document) read[0], document -> (StoredRecord) read[1]);
+        Document found = (Document) read[0];
+        return found == null ? Optional.empty() : Optional.of(new InstanceWithFirstRecord(found, (StoredRecord) read[1]));
     }
 
-    private Optional<StoredSagaWithFirstSkippedInput> withFirstSkippedInput(@Nullable Document instance, Function<Document, @Nullable StoredRecord> firstSkippedInput) {
-        if (instance == null) {
-            return Optional.empty();
-        }
-        StoredRecord first = firstSkippedInput.apply(instance);
-        return Optional.of(new StoredSagaWithFirstSkippedInput(toStoredSaga(instance), first == null ? null
-                : toSkippedInput(whole(first.record(), (keyFilter, count) -> first.chunks(), skippedInputCodecs()))));
+    // The instance and its first record as they are stored, decoded once the read is over
+    private record InstanceWithFirstRecord(Document instance, @Nullable StoredRecord first) {
     }
 
     // A record as it is stored, with its chunks when it is split across them, read together and decoded later
     private record StoredRecord(Document record, List<Document> chunks) {
     }
 
-    // The chunks are read with their record, in the same transaction on a replica set or a mongos. A standalone server
-    // refuses the transaction every write of a record takes, so there records and chunks don't change
-    private @Nullable StoredRecord firstSkippedInput(MongoDatabase database, String sagaId, Document instance) {
+    // The chunks are read with their record, in the same transaction on a replica set or a mongos, unless withChunks is
+    // false for a read of the record's seq and key alone. A standalone server refuses the transaction every write of a
+    // record takes, so there records and chunks don't change
+    private @Nullable StoredRecord firstSkippedInput(MongoDatabase database, String sagaId, Document instance, boolean withChunks) {
         String quarantineId = instance.getString(FAILURE_QUARANTINE_ID);
         if (quarantineId == null) {
             return null;
@@ -865,7 +884,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 return null;
             }
             Object chunks = first.get(SKIPPED_CHUNKS);
-            List<Document> read = chunks == null ? List.of()
+            List<Document> read = chunks == null || !withChunks ? List.of()
                     : skippedInputChunks(database).find(Filters.and(skippedInputFilter(sagaId, quarantineId, first.getString(SKIPPED_KEY)), Filters.lt(CHUNK_INDEX, ((Number) chunks).intValue())))
                     .sort(Sorts.ascending(CHUNK_INDEX)).into(new ArrayList<>());
             return new StoredRecord(first, read);
@@ -1112,13 +1131,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
         return joiningCallersTransaction(() -> {
             Objects.requireNonNull(saga, "saga cannot be null");
-            Document document = toDocument(saga);
+            if (expectedVersion == 0) {
+                throw new IllegalArgumentException("compareAndSaveQuarantineEnded cannot insert saga " + saga.sagaId() + ", since it holds no state.");
+            }
+            Bson update = withoutState(saga);
             Document filter = quarantineFilter(saga.sagaId(), quarantineId);
             // The quarantine ends only with no record left, checked in the transaction against everything the primary
             // has, whatever the release read before. A record written after that check changes the instance too, so the
-            // replaceOne then conflicts and the transaction runs again
+            // update then conflicts and the transaction runs again. The stored state stays where it is
             return transition(database -> skippedInputs(database).find(filter).first() == null
-                                          && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+                                          && instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
                     database -> deleteRecords(database, filter));
         });
     }
