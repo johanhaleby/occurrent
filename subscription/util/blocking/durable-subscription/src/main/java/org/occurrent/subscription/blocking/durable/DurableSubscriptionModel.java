@@ -1261,7 +1261,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * An action still running when the subscription was paused, because the wrapped model stopped waiting for it,
      * doesn't store the checkpoint of its event once it returns, when the resume asked the wrapped model to resume at
      * the stored checkpoint, whatever the wrapped model's {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
-     * answers for it. When the resume went on from the wrapped model's own position without a checkpoint, it doesn't
+     * answers for it. That holds for an action whose event was read before this call when the subscription isn't
+     * paused too, since a pause on another thread can come before the wrapped model resumes. A restart before a later
+     * event stores its checkpoint delivers that event again, and none is skipped. When the resume went on from the wrapped model's own position without a checkpoint, it doesn't
      * store it once the resumed subscription has started saving the checkpoint of one of its own events or a quiet
      * position, or has stored the position it restarts from after its history was lost. Neither does a quiet position
      * read before the pause. So the stored checkpoint doesn't move back. A quiet position read after a resume to the
@@ -1293,10 +1295,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 // below, or makes the version read below differ from the one read at subscribe
                 CheckpointRegistration registration = registrations.get(subscriptionId);
                 StoredBefore before = registration == null ? null : registration.storedBeforeOwnStartUnlessItStoredOne();
-                // Read under the deliveryLocks and saveLocks of a paused subscription, so no save comes between the read
-                // and moving the count, the checkpoint noted as stored is the one the resume goes to, and no delivery
-                // ends before the quiet saves are decided from it
-                List<CheckpointRegistration> writing = getWrappedSubscriptionModel().isPaused(subscriptionId) ? registrationsWritingFor(subscriptionId) : List.of();
+                // Read under the deliveryLocks and saveLocks of every registration of the id, so no save comes between
+                // the read and moving the count, the checkpoint noted as stored is the one the resume goes to, and no
+                // delivery ends before the quiet saves are decided from it. The count moves for a subscription that
+                // isn't paused too, since pauseSubscription takes no id lock and a pause on another thread can come
+                // before the wrapped model resumes. A save read before the count moved is then refused, which delivers
+                // an event again on a restart but skips none
+                boolean paused = getWrappedSubscriptionModel().isPaused(subscriptionId);
+                List<CheckpointRegistration> writing = registrationsWritingFor(subscriptionId);
                 AtomicReference<@Nullable Checkpoint> resumeAt = new AtomicReference<>();
                 List<ReentrantLock> locks = new ArrayList<>(deliveryLocksOf(writing));
                 locks.addAll(saveLocksOf(writing));
@@ -1308,9 +1314,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                         // waiting for, or a quiet position handed out before, would store a checkpoint of the run
                         // this replaces over it, so their saves are refused whatever restartsAt answers. Another
                         // node can have stored the checkpoint while the subscription was paused, so a quiet save
-                        // compares with it rather than with what this node stored last
-                        boolean restartsThere = repositionable.get().restartsAt(checkpoint);
-                        writing.forEach(paused -> paused.resumedAtStored(checkpoint, restartsThere));
+                        // compares with it rather than with what this node stored last. The stored checkpoint covers
+                        // the deliveries read before only when the subscription was paused. The MongoDB models throw
+                        // SubscriptionAlreadyRunningException for one that is running, which then delivers none of
+                        // them again
+                        boolean restartsThere = paused && repositionable.get().restartsAt(checkpoint);
+                        writing.forEach(writer -> writer.resumedAtStored(checkpoint, restartsThere));
                         writing.forEach(CheckpointRegistration::decideQuietTicks);
                         resumeAt.set(checkpoint);
                     }

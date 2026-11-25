@@ -482,7 +482,10 @@ still be running when the resume stores the position. Once it returns, the check
 that position, and neither is a quiet position read before the resume. A restart then resumes from the position you
 asked for. A plain `resumeSubscription(id)` drops those saves the same way when it asks the wrapped model to resume at
 the stored checkpoint. That includes a catch-up's position or a time on the MongoDB models, which go on from their own
-position for those checkpoints. After such a resume, when the wrapped model goes on from its own position, no quiet
+position for those checkpoints. It also includes a subscription the wrapped model doesn't report as paused when the
+resume checks, since `pauseSubscription(id)` on another thread can come between that check and the wrapped model's
+resume. When the subscription really was running, a restart before a later event stores its checkpoint delivers again
+the events whose saves were dropped, and none is skipped. After such a resume, when the wrapped model goes on from its own position, no quiet
 position is saved over a checkpoint another node stored during the pause until the resumed subscription stores the
 checkpoint of an event. An evaluation of the start position that found no checkpoint stored before such a resume, or
 a restart after a lost history, stored a position records no first position over it. It throws `IllegalStateException`, and evaluating again

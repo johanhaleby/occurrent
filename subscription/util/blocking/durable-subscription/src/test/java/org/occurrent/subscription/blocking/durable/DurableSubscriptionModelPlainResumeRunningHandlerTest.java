@@ -23,14 +23,17 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,6 +44,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 
 /**
@@ -163,6 +167,144 @@ class DurableSubscriptionModelPlainResumeRunningHandlerTest {
                 () -> assertThat(storedAfterTheHandlerReturned).as("checkpoint stored after the handler the pause stopped waiting for returned").isEqualTo(GLOBAL_STORED_BY_ANOTHER_NODE),
                 () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored after a delivery of the resumed run").isEqualTo(EVENT_AFTER_THE_RESUME)
         );
+    }
+
+    /**
+     * The wrapped model reports the subscription as running when the resume checks, and a pause on another thread comes
+     * before the wrapped model resumes, so it restarts at the stored checkpoint. The handler read before the resume is
+     * the run that restart replaces, so its checkpoint is not stored over the one the resume went to.
+     */
+    @Test
+    void a_plain_resume_of_a_subscription_the_wrapped_model_reports_as_running_refuses_the_late_save_of_a_handler_read_before_the_resume() throws Exception {
+        // Given
+        RepositionableQuietPositionReportingModel wrapped = new RepositionableQuietPositionReportingModel();
+        RecordingStorage recordingStorage = new RecordingStorage();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, recordingStorage, new DurableSubscriptionModelConfig(everyEvent()).neverSaveQuietPosition());
+        AtomicBoolean holdTheHandler = new AtomicBoolean();
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(START), cloudEvent -> {
+            if (holdTheHandler.get()) {
+                handlerStarted.countDown();
+                awaitQuietly(handlerMayReturn);
+            }
+        });
+        wrapped.deliver(SUBSCRIPTION_ID, EVENT_BEFORE_THE_PAUSE);
+        holdTheHandler.set(true);
+        CompletableFuture<Void> handler = CompletableFuture.runAsync(() -> wrapped.deliver(SUBSCRIPTION_ID, EVENT_OF_THE_RUNNING_HANDLER), handlerThreads);
+        assertThat(awaitQuietly(handlerStarted)).as("handler started").isTrue();
+        recordingStorage.save(SUBSCRIPTION_ID, STORED_BY_ANOTHER_NODE);
+        recordingStorage.saved.clear();
+        assertThat(wrapped.isPaused(SUBSCRIPTION_ID)).as("subscription paused when the resume checks").isFalse();
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        handlerMayReturn.countDown();
+        handler.get(10, SECONDS);
+
+        // Then
+        assertAll(
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_BY_ANOTHER_NODE),
+                () -> assertThat(recordingStorage.saved).as("checkpoints saved after the resume").isEmpty(),
+                () -> assertThat(recordingStorage.read(SUBSCRIPTION_ID)).as("checkpoint stored after the handler read before the resume returned").isEqualTo(STORED_BY_ANOTHER_NODE)
+        );
+    }
+
+    /**
+     * A resume of a subscription that is not paused does not claim that the stored checkpoint covers the deliveries read
+     * before it, since a wrapped model that is running throws instead of restarting there. So a quiet position is not
+     * saved over a checkpoint another node stored, even though the wrapped model answers true to {@code restartsAt}.
+     */
+    @Test
+    void a_plain_resume_of_a_subscription_the_wrapped_model_reports_as_running_saves_no_quiet_position_over_the_checkpoint_stored_by_another_node() throws Exception {
+        // Given
+        RepositionableQuietPositionReportingModel wrapped = new RepositionableQuietPositionReportingModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(START), cloudEvent -> {
+        });
+        wrapped.deliver(SUBSCRIPTION_ID, EVENT_BEFORE_THE_PAUSE);
+        storage.save(SUBSCRIPTION_ID, STORED_BY_ANOTHER_NODE);
+        assertThat(wrapped.isPaused(SUBSCRIPTION_ID)).as("subscription paused when the resume checks").isFalse();
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        Consumer<Checkpoint> saver = saverWhenWanted(wrapped);
+        if (saver != null) {
+            saver.accept(QUIET_BEFORE_E_IS_DELIVERED_AGAIN);
+        }
+
+        // Then
+        assertAll(
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_BY_ANOTHER_NODE),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored after a quiet position read after the resume").isEqualTo(STORED_BY_ANOTHER_NODE)
+        );
+    }
+
+    /**
+     * The save of a delivery is in progress, holding the lock of its registration, when a plain resume of the running
+     * subscription and a pause on a third thread are made. The pause takes no lock of the subscription, and the resume
+     * waits for the save, so all three finish once the save is released.
+     */
+    @Test
+    void a_plain_resume_and_a_pause_made_while_a_save_is_in_progress_finish_once_the_save_is_released() {
+        // Given
+        RepositionableQuietPositionReportingModel wrapped = new RepositionableQuietPositionReportingModel();
+        BlockingSaveStorage blockingStorage = new BlockingSaveStorage();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, blockingStorage, new DurableSubscriptionModelConfig(everyEvent()).neverSaveQuietPosition());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(START), cloudEvent -> {
+        });
+        wrapped.deliver(SUBSCRIPTION_ID, EVENT_BEFORE_THE_PAUSE);
+        blockingStorage.blockSaves();
+        CompletableFuture<Void> delivery = CompletableFuture.runAsync(() -> wrapped.deliver(SUBSCRIPTION_ID, EVENT_OF_THE_RUNNING_HANDLER), handlerThreads);
+        assertThat(blockingStorage.awaitSaveStarted()).as("save started").isTrue();
+
+        // When
+        CompletableFuture<String> resume = CompletableFuture.supplyAsync(() -> model.resumeSubscription(SUBSCRIPTION_ID).id(), handlerThreads);
+        CompletableFuture<Void> pause = CompletableFuture.runAsync(() -> model.pauseSubscription(SUBSCRIPTION_ID), handlerThreads);
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> pause.get(), "pause while a save is in progress");
+        blockingStorage.releaseSaves();
+
+        // Then
+        assertAll(
+                () -> assertThat(assertTimeoutPreemptively(Duration.ofSeconds(10), () -> resume.get())).as("subscription the resume returned").isEqualTo(SUBSCRIPTION_ID),
+                () -> assertTimeoutPreemptively(Duration.ofSeconds(10), () -> delivery.get()),
+                () -> assertThat(blockingStorage.read(SUBSCRIPTION_ID)).as("checkpoint stored by the save that was in progress").isEqualTo(EVENT_OF_THE_RUNNING_HANDLER)
+        );
+    }
+
+    private static final class RecordingStorage extends InMemoryCheckpointStorage {
+        final List<Checkpoint> saved = new CopyOnWriteArrayList<>();
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            saved.add(checkpoint);
+            return super.save(subscriptionId, checkpoint, condition);
+        }
+    }
+
+    private static final class BlockingSaveStorage extends InMemoryCheckpointStorage {
+        private volatile boolean blocking;
+        private final CountDownLatch saveStarted = new CountDownLatch(1);
+        private final CountDownLatch saveMayReturn = new CountDownLatch(1);
+
+        void blockSaves() {
+            blocking = true;
+        }
+
+        void releaseSaves() {
+            saveMayReturn.countDown();
+        }
+
+        boolean awaitSaveStarted() {
+            return awaitQuietly(saveStarted);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (blocking) {
+                saveStarted.countDown();
+                awaitQuietly(saveMayReturn);
+            }
+            return super.save(subscriptionId, checkpoint, condition);
+        }
     }
 
     // Reads until a listener wants the quiet position, which the 1 ms interval allows after a moment. Null when none does
