@@ -122,8 +122,8 @@ other sections compile fine and behave differently, so read them first.
   keeps a position and reads after it through `readInPositionOrder(..)` or `afterPosition(..)` still compiles, and can
   skip an event.
 - [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint).
-  `RepositionableSubscriptions.findIn(durableModel)` finds the durable model, which stores the position before it
-  resumes there. Compiles unchanged.
+  `RepositionableSubscriptions.findIn(durableModel)` finds the durable model, which stores a position the model it
+  wraps restarts at before it resumes there. Compiles unchanged.
 - [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
   A `CheckpointStorage` of your own that answers `false` from `evaluatesWriteConditionsFor` fails a new subscription
   at the model default, where 0.34.0 wrote its first position unconditionally with a warning. Compiles unchanged.
@@ -457,14 +457,16 @@ durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34
 position or the quiet save. That section stays as it was released, and over a durable model it no longer holds.
 
 A blocking catch-up model with checkpoint storage that resumes a subscription at a checkpoint or at now also replaces a
-stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate. So a
-`resumeSubscription(subscriptionId)` after a later pause doesn't replay from that position, as it could in 0.34.0. At
-now it stores the present position, and throws `IllegalStateException` when it can read none. At a time after the
-beginning without a live start, a stream catch-up stores that time with the present position as its live start, in the
-`position:time;v:2;` form that
+stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate, when a restart
+can start from what it stores instead. So a `resumeSubscription(subscriptionId)` after a later pause doesn't replay
+from that position, as it could in 0.34.0. At now it stores the present position, and throws `IllegalStateException`
+when it can read none. At a time after the beginning without a live start, a stream catch-up stores that time with the
+present position as its live start, in the `position:time;v:2;` form that
 [A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores)
 describes, and 0.34 refuses that form. While a replay that `subscribe(..)` started is still running for a subscription
 paused during that replay, it stores nothing and reads no present position.
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) lists
+the positions such a resume stores and the ones it doesn't.
 
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
 position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
@@ -3114,14 +3116,19 @@ the present. The same goes for a subscription in code that starts from `StartAt.
 `StartAt.subscriptionModelDefault()`.
 
 A `resumeSubscription(id, startAt)` at a position, on a blocking catch-up subscription model you call directly,
-resumes the subscription only on the instance you call it on. Through a `DurableSubscriptionModel` it stores the
-position as the checkpoint every instance reads, also when another instance has stored a newer one. An instance that
-restarts before a newer checkpoint is stored starts from that position, so the events another instance already
-handled after it are delivered again.
+resumes the subscription only on the instance you call it on. At a resume token, through a `DurableSubscriptionModel`
+it stores the token as the checkpoint every instance reads, also when another instance has stored a newer one. An
+instance that restarts before a newer checkpoint is stored starts from that token, so the events another instance
+already handled after it are delivered again. When the durable model writes with a version, such as the fencing token
+of a lease, and another instance stored the checkpoint with a newer version, the checkpoint storage refuses the token
+and the resume throws `CheckpointWriteConditionNotFulfilledException`, as
+[A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint)
+describes. A catch-up position or a time is stored only as
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) says.
 
 Another instance that paused the subscription when it lost the history too stays paused, and its
 `resumeSubscription(id)` keeps throwing `CatchupCannotResumeException`. Restart it with a start that reads the stored
-checkpoint, such as the subscription model default, and it goes on after the checkpoint the resumed instance stored.
+checkpoint, such as the subscription model default, and it goes on from the stored checkpoint.
 
 When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
 instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its

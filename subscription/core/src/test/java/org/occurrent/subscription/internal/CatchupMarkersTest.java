@@ -56,7 +56,7 @@ class CatchupMarkersTest {
     }
 
     @Test
-    void the_refusal_of_a_checkpoint_that_is_not_a_position_says_how_to_change_what_is_stored_and_when_a_new_id_is_enough_when_several_instances_run_it() {
+    void the_refusal_of_a_checkpoint_that_is_not_a_position_says_how_to_change_what_is_stored_and_what_a_new_id_repeats_and_depends_on_when_several_instances_run_it() {
         Throwable refused = catchThrowable(() -> CatchupMarkers.positionOf("proj", new StringBasedCheckpoint("resume-token-xyz")));
 
         assertThat(refused).hasMessageEndingWith(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " " + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT);

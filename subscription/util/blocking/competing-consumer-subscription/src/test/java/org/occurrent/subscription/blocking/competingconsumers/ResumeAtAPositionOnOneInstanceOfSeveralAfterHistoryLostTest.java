@@ -289,7 +289,8 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         assertThat(storedRightAfterTheCancel).as("a cancel deletes the checkpoint stored for the subscription id, which A reads as well, so a restart of every instance at this point starts from now and skips what is written meanwhile").isEqualTo("nothing");
         assertThat(label(checkpointStorage.read(subscriptionId))).as("A stores the position of w3, the next event it delivers, in the checkpoint B's cancel deleted").isEqualTo("token of w3");
         assertThat(a.ids()).as("A is not cancelled, so it delivers w3").containsExactly("gap", "w1", "w2", "w3");
-        assertThat(b.ids()).as("B is cancelled").isEmpty();
+        assertThat(b.catchup.isPaused(subscriptionId)).as("B no longer holds the subscription, so it is not paused any more, which it was before the cancel").isFalse();
+        assertThat(b.ids()).as("B was paused when A delivered gap, w1, w2 and w3, so it delivered none of them").isEmpty();
     }
 
     @Test

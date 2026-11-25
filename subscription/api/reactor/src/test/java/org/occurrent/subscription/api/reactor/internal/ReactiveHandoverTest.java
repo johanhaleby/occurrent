@@ -4869,7 +4869,7 @@ class ReactiveHandoverTest {
     }
 
     @Test
-    void a_marker_that_cannot_be_forgotten_logs_how_to_change_what_is_stored_and_when_a_new_id_is_enough_when_several_instances_run_it() {
+    void a_marker_that_cannot_be_forgotten_logs_how_to_change_what_is_stored_and_what_a_new_id_repeats_and_depends_on_when_several_instances_run_it() {
         try (CapturedLog captured = new CapturedLog()) {
             ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(new CopyOnWriteArrayList<>(), Map.of());
             FakeSource source = source(List.of("R1"), false);
