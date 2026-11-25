@@ -123,6 +123,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // the same dispatcher
     private final Executor lifecycleThread;
     private final AtomicInteger handedCallsNotReturned;
+    private final Set<CompletableFuture<@Nullable Void>> actionsHoldingHandedCalls;
     private final AtomicLong shutdownsHandedOver;
     private final AtomicLong handedShutdownsReturned;
     private final AtomicLong callersCodeUnderTheLockSince;
@@ -151,8 +152,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // The actions of live calls and replays that run on this thread, so a start(..), stop() or shutdown() from inside
     // one doesn't wait for a call that can be waiting for the action
     private static final ThreadLocal<@Nullable ActionOnThread> IN_AN_ACTION = new ThreadLocal<>();
-    // What a call handed to the lifecycle thread by a thread in no action waits for before it runs
-    private static final CompletableFuture<@Nullable Void> NOTHING_TO_WAIT_FOR = CompletableFuture.completedFuture(null);
     // The threads that run a shutdown a held-up shutdown() hands over, at most one at a time for each model
     private static final ThreadFactory HANDED_SHUTDOWN_THREADS = Thread.ofPlatform().daemon().name("occurrent-catchup-handed-shutdown")
             .inheritInheritableThreadLocals(false).factory();
@@ -320,6 +319,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.modelLock = sharedState.modelLock;
         this.lifecycleThread = sharedState.lifecycleThread;
         this.handedCallsNotReturned = sharedState.handedCallsNotReturned;
+        this.actionsHoldingHandedCalls = sharedState.actionsHoldingHandedCalls;
         this.shutdownsHandedOver = sharedState.shutdownsHandedOver;
         this.handedShutdownsReturned = sharedState.handedShutdownsReturned;
         this.callersCodeUnderTheLockSince = sharedState.callersCodeUnderTheLockSince;
@@ -357,9 +357,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // It inherits no inheritable thread-local, such as a logging context, from the thread that happens to create it
         private final Executor lifecycleThread = new ThreadPoolExecutor(0, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<>(),
                 Thread.ofPlatform().daemon().name("occurrent-catchup-lifecycle").inheritInheritableThreadLocals(false).factory());
-        // The calls given to lifecycleThread, and the shutdowns a held-up shutdown() gave a thread of their own, that
-        // haven't returned yet, so a call from another thread made meanwhile runs behind them on lifecycleThread
+        // The calls handed over from an action or given to lifecycleThread, and the shutdowns a held-up shutdown() gave a
+        // thread of their own, that haven't returned yet, so a call from another thread made meanwhile runs behind them on
+        // lifecycleThread
         private final AtomicInteger handedCallsNotReturned = new AtomicInteger();
+        // For each action that handed a call over and hasn't returned yet, a future completed once the calls it handed
+        // over have reached lifecycleThread. A call from another thread waits for those first, so it takes effect after
+        // them
+        private final Set<CompletableFuture<@Nullable Void>> actionsHoldingHandedCalls = ConcurrentHashMap.newKeySet();
         // The shutdowns a held-up shutdown() gave a thread of their own, and those of them that have returned, so a call
         // under modelLock can tell whether one hadn't returned when the call was made
         private final AtomicLong shutdownsHandedOver = new AtomicLong();
@@ -848,7 +853,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // runInTurn and shutDownInTurn don't wait there for a call that can itself be waiting for the action to return
     private void acceptInAnAction(Consumer<CloudEvent> action, CloudEvent event) {
         ActionOnThread outer = IN_AN_ACTION.get();
-        ActionOnThread call = new ActionOnThread(modelLock, outer);
+        ActionOnThread call = new ActionOnThread(modelLock, lifecycleThread, actionsHoldingHandedCalls, outer);
         IN_AN_ACTION.set(call);
         try {
             action.accept(event);
@@ -4450,20 +4455,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * it returns at once without running {@code body}, since a start, stop or shutdown holding the lock can be waiting
      * for that action to return, in the live delegate or for the replay it parks. A replay's action is in the middle of
      * a decision for its subscription, so the call would also wait for a per-id call that can only finish once the
-     * action returns. The lifecycle thread the children share runs {@code body} instead, once the
-     * action has returned and the lock is free, in the order the calls handed to it came. So the call takes effect once
-     * the action has returned, and an action that never returns keeps it, and every call handed over after it, from
-     * taking effect. It doesn't run {@code body} when a {@code shutdown()} has begun by then, and logs an {@code ERROR}
-     * naming {@code model} for what {@code body} throws. So the call gets the same outcome whether or not another thread
-     * holds the lock when it is made.
+     * action returns. The lifecycle thread the children share runs {@code body} instead, once the action has returned
+     * and the lock is free. It gets the calls an action handed over when that action returns, in the order the action
+     * made them, so calls handed over from two actions run in the order the actions returned. So the call takes effect
+     * once the action has returned, and an action that never returns keeps the calls handed over from it from taking
+     * effect, but no call handed over from another action. It doesn't run {@code body} when a {@code shutdown()} has
+     * begun by then, and logs an {@code ERROR} naming {@code model} for what {@code body} throws. So the call gets the
+     * same outcome whether or not another thread holds the lock when it is made.
      * <p>
-     * Called from any other thread while a call handed to the lifecycle thread, or the shutdown a held-up
-     * {@code shutdown()} handed over, hasn't returned, it hands {@code body} to
-     * the lifecycle thread too, waits for it to run there after those calls, and throws what it throws. So a call made
-     * after the action that handed one over signalled the calling thread takes effect after the one handed over. Like a
-     * handed call, it doesn't run {@code body} when a {@code shutdown()} has begun by then, and returns normally. The
-     * calling thread runs no action of these children, so the actions those calls wait for run on other threads. An
-     * action that, after handing a call over, waits for a call it asked another thread to make never returns.
+     * Called from any other thread while a call handed over, or the shutdown a held-up {@code shutdown()} handed over,
+     * hasn't returned, it waits for every action that handed a call over and hasn't returned, hands {@code body} to the
+     * lifecycle thread too, waits for it to run there after those calls, and throws what it throws. So a call made after
+     * the action that handed one over signalled the calling thread takes effect after the one handed over. Like a handed
+     * call, it doesn't run {@code body} when a {@code shutdown()} has begun by then, and returns normally. The calling
+     * thread runs no action of these children, so the actions it waits for run on other threads. An action that, after
+     * handing a call over, waits for a call it asked another thread to make would then never return, so the wait for
+     * the actions gives up after {@link #LIFECYCLE_WAIT} and the call throws {@link IllegalStateException} without
+     * running {@code body}. So an action of one subscription that doesn't return holds up a call for another
+     * subscription for at most that long.
      * <p>
      * A call made before the shutdown a held-up {@code shutdown()} handed over has returned doesn't run {@code body} on
      * any thread, and returns normally. This includes a call that found no handed call pending and took the lock only
@@ -4483,7 +4492,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      *                               the same dispatcher outside the subscriber's action, such as in a
      *                               {@link CatchupListener}, or holds the {@link #claim} for one of their
      *                               subscriptions outside such an action, or when code a caller supplied holds the
-     *                               lock up as described above. Nothing was changed then.
+     *                               lock up, or an action that handed a call over doesn't return, as described
+     *                               above. Nothing was changed then.
      */
     void runInTurn(Object model, String call, Runnable body) {
         ActionOnThread action = outermostActionOnTheCallingThread();
@@ -4564,7 +4574,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     private @Nullable Subscription resumeOnceTheActionHasReturned(ActionOnThread action, Object model, String call, String subscriptionId, Supplier<Subscription> resume) {
         CompletableFuture<Subscription> resumed = new CompletableFuture<>();
-        handToTheLifecycleThread(action.returned(), () -> underTheModelLock(() -> {
+        handToTheLifecycleThread(action, () -> underTheModelLock(() -> {
             if (shuttingDown) {
                 resumed.cancel(false);
             } else {
@@ -4579,7 +4589,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     // Runs body on the lifecycle thread once the action has returned, after the calls handed over before it
     private void handOver(ActionOnThread action, Object model, String call, Runnable body) {
-        handToTheLifecycleThread(action.returned(), () -> underTheModelLock(() -> {
+        handToTheLifecycleThread(action, () -> underTheModelLock(() -> {
             if (!shuttingDown) {
                 body.run();
             }
@@ -4590,7 +4600,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // once the action has returned, so it hasn't run yet
     private @Nullable ActionOnThread actionThatHandedACallOver() {
         ActionOnThread action = outermostActionOnTheCallingThread();
-        return action != null && action.returned != null ? action : null;
+        return action != null && action.handedACallOver() ? action : null;
     }
 
     // Runs body under the lock on the calling thread, or on the lifecycle thread after the calls handed to it when one
@@ -4643,8 +4653,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * hold one of them, as a replay run again does while it tells its listener.
      *
      * @throws IllegalStateException when code the caller supplied, such as a {@code StartAt.dynamic} function, runs
-     *                               under the model lock for {@link #LIFECYCLE_WAIT} while this waits, since that code
-     *                               can be waiting for {@code call}. Nothing was changed then.
+     *                               under the model lock for {@link #LIFECYCLE_WAIT} while this waits, or an action that
+     *                               handed a call over doesn't return within it, since that code or that action can be
+     *                               waiting for {@code call}. Nothing was changed then.
      */
     void awaitTheHandedCalls(String call) {
         if (handedCallsNotReturned.get() == 0 || modelLock.isHeldByCurrentThread() || outermostActionOnTheCallingThread() != null
@@ -4655,12 +4666,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         });
     }
 
-    // The lifecycle thread runs what it is handed in the order it came, so body runs after every call handed over before
-    // it. Until body begins, also while the lifecycle thread waits for the lock for it, the calling thread withdraws it
-    // once code a caller supplied holds it up as heldUpByCallersCode describes, and body never runs then
+    // The lifecycle thread runs what it is handed in the order it came, and body reaches it only once every action that
+    // had handed a call over when this was called has returned, so body runs after every call handed over before it.
+    // The wait for those actions gives up as actionsHeldUp describes, and until body begins, also while the lifecycle
+    // thread waits for the lock for it, the calling thread withdraws it once code a caller supplied holds it up as
+    // heldUpByCallersCode describes. Body never runs then
     private void runOnTheLifecycleThreadAndWait(String call, boolean underTheLock, Runnable body) {
+        long waitingSince = System.nanoTime();
+        if (!theActionsHoldingHandedCallsReturnWithin(LIFECYCLE_WAIT)) {
+            throw actionsHeldUp(call);
+        }
         WaitedCall waited = new WaitedCall();
-        handToTheLifecycleThread(NOTHING_TO_WAIT_FOR, () -> {
+        handToTheLifecycleThread(null, () -> {
             if (underTheLock) {
                 runUnderTheLockUnlessWithdrawn(waited, body);
             } else if (waited.begin()) {
@@ -4668,7 +4685,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             }
             waited.ran.complete(null);
         }, waited.ran::completeExceptionally);
-        long waitingSince = System.nanoTime();
         while (!completesWithin(waited.ran, CALLERS_CODE_POLL)) {
             if (heldUpByCallersCode(waitingSince) && waited.withdraw()) {
                 throw callersCodeHeldUp(call);
@@ -4679,6 +4695,25 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         } catch (CompletionException e) {
             throw thrownAsItIs(e.getCause() == null ? e : e.getCause());
         }
+    }
+
+    // Whether every action of these children that had handed a call over and not returned when this was called returns
+    // within timeout. An action that returns gives the lifecycle thread the calls it handed over before this sees it
+    // return, so a call this thread then gives the lifecycle thread runs behind them
+    private boolean theActionsHoldingHandedCallsReturnWithin(Duration timeout) {
+        CompletableFuture<?>[] holding = actionsHoldingHandedCalls.toArray(CompletableFuture<?>[]::new);
+        return holding.length == 0 || completesWithin(CompletableFuture.allOf(holding), timeout);
+    }
+
+    // An action is code the caller supplied too, and one that handed a call over can be waiting for the call that waits
+    // for it here, so that call gives up once it has waited LIFECYCLE_WAIT for such an action. An action that never
+    // returns then holds up the calls of other subscriptions for that long rather than for good
+    private IllegalStateException actionsHeldUp(String call) {
+        log.error("{} waited {} ms for the action of a live call or a replay that handed a lifecycle call over to return, and gives up. {}",
+                call, LIFECYCLE_WAIT.toMillis(), NOTHING_CHANGED);
+        return new IllegalStateException("Cannot run " + call + ", because the action of a live call or a replay that handed a lifecycle call over before this call was made didn't return within "
+                + LIFECYCLE_WAIT.toMillis() + " ms, and this call takes effect after the calls handed over. That action may be waiting for this call. Don't wait inside an action for a"
+                + " lifecycle call made on another thread. " + NOTHING_CHANGED);
     }
 
     // Polls for the lock rather than waiting on it, so a call its caller withdrew meanwhile doesn't keep the lifecycle
@@ -4985,7 +5020,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * run without the lock only when a start was in the live delegate's {@code start(..)}, which the exception says.
      * Before it throws, it starts a thread of its own that runs a {@code shutDownTheLiveDelegate} under the model lock.
      * That thread waits for the lock with no deadline and for nothing else, so it runs once that code has returned, with
-     * no further call, also while a call queued on the lifecycle thread waits for an action that waits for this shutdown.
+     * no further call, also while a call queued on the lifecycle thread waits for the lock that code holds.
      * So when nobody calls {@code shutdown()} again, as when a closing Spring context made it, the live delegate is still
      * shut down. When that code never returns, the handed one waits for good. A second {@code shutdown()} held up the
      * same way before it runs hands over no second one. A {@code shutdown()} that gets the lock first shuts the live
@@ -5017,7 +5052,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             shutDownTheLiveDelegateInTurn(model, shutDownTheLiveDelegate, true);
             return;
         }
-        handToTheLifecycleThread(action == null ? NOTHING_TO_WAIT_FOR : action.returned(), () -> shutDownTheLiveDelegateInTurn(model, shutDownTheLiveDelegate, false),
+        handToTheLifecycleThread(action, () -> shutDownTheLiveDelegateInTurn(model, shutDownTheLiveDelegate, false),
                 e -> logHandedCallThrew(model, "shutdown()", e));
     }
 
@@ -5082,8 +5117,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // one over, which then counts in calls.shutdowns until it has run, so a start in between doesn't start the live
     // delegate, and in handedCallsNotReturned, so a call from another thread made meanwhile runs behind it on the
     // lifecycle thread and changes nothing, and in shutdownsHandedOver, so one that found nothing pending changes
-    // nothing either. Not the lifecycle thread itself, since a call queued there ahead of it can
-    // wait for an action that waits for this shutdown. So it waits for the model lock and nothing else
+    // nothing either. Not the lifecycle thread itself, since a call queued there ahead of it can wait for the model lock
+    // that the code holding this shutdown up holds. So it waits for the model lock and nothing else
     private boolean finishOnAThreadOfItsOwn(Object model, LiveDelegateCalls calls, Runnable shutDownTheLiveDelegate) {
         synchronized (calls) {
             if (calls.shutdownHandedOver) {
@@ -5129,23 +5164,28 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    // The lifecycle thread waits for the action to return before it runs body, which takes the lock itself, so a call it
-    // runs never waits for the thread that handed it over. No thread that holds the lock waits for the lifecycle thread
-    private void handToTheLifecycleThread(CompletableFuture<@Nullable Void> actionReturned, Runnable body, Consumer<Throwable> whenBodyThrows) {
+    // Body reaches the lifecycle thread once the action that handed it over has returned, after the calls that action
+    // handed over before it, and at once when no action handed it over. So the lifecycle thread never waits for an
+    // action, and an action that doesn't return holds up only the calls handed over from it, not those of another
+    // subscription's action. Body takes the lock itself, so a call the lifecycle thread runs never waits for the thread
+    // that handed it over. No thread that holds the lock waits for the lifecycle thread
+    private void handToTheLifecycleThread(@Nullable ActionOnThread action, Runnable body, Consumer<Throwable> whenBodyThrows) {
         handedCallsNotReturned.incrementAndGet();
-        lifecycleThread.execute(() -> {
+        Runnable call = () -> {
             try {
-                actionReturned.join();
-                try {
-                    body.run();
-                } catch (Throwable e) {
-                    // Every Throwable, since one thrown out of here reaches nobody, and a caller waiting for body would wait for good
-                    whenBodyThrows.accept(e);
-                }
+                body.run();
+            } catch (Throwable e) {
+                // Every Throwable, since one thrown out of here reaches nobody, and a caller waiting for body would wait for good
+                whenBodyThrows.accept(e);
             } finally {
                 handedCallsNotReturned.decrementAndGet();
             }
-        });
+        };
+        if (action == null) {
+            lifecycleThread.execute(call);
+        } else {
+            action.handOver(call);
+        }
     }
 
     private void logHandedCallThrew(Object model, String call, Throwable e) {
@@ -5168,25 +5208,47 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // reads or writes it
     private static final class ActionOnThread {
         private final ReentrantLock modelLock;
+        private final Executor lifecycleThread;
+        private final Set<CompletableFuture<@Nullable Void>> actionsHoldingHandedCalls;
         private final @Nullable ActionOnThread outer;
-        // Made by the first call from inside the action that is handed to the lifecycle thread, and completed once the
-        // action returns
+        // The calls handed over from inside the action, in the order it made them, which reach the lifecycle thread once
+        // the action returns. Made by the first of them
+        private @Nullable List<Runnable> handedOver;
+        // Made with handedOver, kept in actionsHoldingHandedCalls until the action returns, and completed once the calls
+        // handed over from it have reached the lifecycle thread
         private @Nullable CompletableFuture<@Nullable Void> returned;
 
-        private ActionOnThread(ReentrantLock modelLock, @Nullable ActionOnThread outer) {
+        private ActionOnThread(ReentrantLock modelLock, Executor lifecycleThread, Set<CompletableFuture<@Nullable Void>> actionsHoldingHandedCalls,
+                               @Nullable ActionOnThread outer) {
             this.modelLock = modelLock;
+            this.lifecycleThread = lifecycleThread;
+            this.actionsHoldingHandedCalls = actionsHoldingHandedCalls;
             this.outer = outer;
         }
 
-        private CompletableFuture<@Nullable Void> returned() {
-            if (returned == null) {
-                returned = new CompletableFuture<>();
-            }
-            return returned;
+        private boolean handedACallOver() {
+            return handedOver != null;
         }
 
+        private void handOver(Runnable call) {
+            if (handedOver == null || returned == null) {
+                handedOver = new ArrayList<>();
+                returned = new CompletableFuture<>();
+                actionsHoldingHandedCalls.add(returned);
+            }
+            handedOver.add(call);
+        }
+
+        // The lifecycle thread gets the calls before returned completes, so a call from another thread that waited for
+        // returned queues behind them
         private void actionReturned() {
-            if (returned != null) {
+            if (handedOver == null || returned == null) {
+                return;
+            }
+            try {
+                handedOver.forEach(lifecycleThread::execute);
+            } finally {
+                actionsHoldingHandedCalls.remove(returned);
                 returned.complete(null);
             }
         }

@@ -2924,8 +2924,9 @@ the catch-up is not affected.
 * A `start(..)` or `stop()` from the action of a replay or a live call returns at once, without waiting for another
   `start(..)`, `stop()` or `shutdown()` of the model, since the call under way can be waiting for that action to
   return. A lifecycle thread, shared by the models of one dispatcher, runs the call once the action has returned and
-  no other of the three calls is under way, in the order the calls came. It doesn't run the call once a `shutdown()`
-  has begun, and logs an `ERROR` naming the model when the call throws.
+  no other of the three calls is under way. The calls of one action run in the order the action made them, and calls
+  from two actions run in the order the actions returned. It doesn't run the call once a `shutdown()` has begun, and
+  logs an `ERROR` naming the model when the call throws.
 * A `resumeSubscription(id)` from the action of a replay or a live call returns at once as well, whether the model is
   stopped or runs. The lifecycle thread resumes the subscription once the action has returned, after the calls the
   action handed over before it, and starts the model first when the model is stopped and the subscription is paused.
@@ -2948,7 +2949,9 @@ the catch-up is not affected.
   Spring Boot starter sets up.
 * A `start(..)`, `stop()` or `resumeSubscription(id)` from any other thread, made while a call an action handed over
   hasn't run yet, waits for it and takes effect after it. So when the action signals another thread to call `start(..)`
-  or `resumeSubscription(id)` after its own `stop()`, the model ends up started. A `resumeSubscription(id)` from a
+  or `resumeSubscription(id)` after its own `stop()`, the model ends up started. The call waits at most 10 seconds for
+  the action to return, and then throws `IllegalStateException` and changes nothing, so an action of one subscription
+  that never returns holds up a call for another subscription for those 10 seconds and no longer. A `resumeSubscription(id)` from a
   `CatchupListener` doesn't wait, since the call it would wait for can be waiting for the replay that runs the
   listener. It takes effect before that call, and when the model was stopped by then and the subscription is paused,
   it throws `IllegalStateException` and changes nothing, as `start(..)` does there.
@@ -2965,8 +2968,8 @@ the catch-up is not affected.
   state.
 * `shutdown()` doesn't throw. From an action, or from a thread on which the model is in the middle of a call for one of
   its subscriptions, it doesn't wait. It forgets the catch-ups at once, and returns before the wrapped model is shut
-  down. The lifecycle thread shuts the wrapped model down once the action has returned and the calls handed over before
-  it have run, and logs an `ERROR` naming the model when that throws. From any other thread it doesn't wait for the
+  down. The lifecycle thread shuts the wrapped model down once the action has returned and the calls it handed over
+  before have run, and logs an `ERROR` naming the model when that throws. From any other thread it doesn't wait for the
   calls handed over, or for a `start(..)` or `stop()` from another thread that waits behind them, and then none of
   them changes anything. A `start(..)` under way resumes no subscription after the `shutdown()`
   began. Once the wrapped model's `shutdown()` has returned normally, a later `shutdown()` doesn't call it again. After
@@ -3008,8 +3011,10 @@ the catch-up is not affected.
 
 From an action, the call can stay where it is, but code after it in the action runs before the call takes effect, so
 don't rely on the model being stopped or started, or on the subscription being resumed, there. Don't wait in the action for a call you asked another thread to
-make after it, since that call waits for the action to return. An action that never returns keeps the call it made,
-and every call made after it, from taking effect.
+make after it, since that call waits for the action to return and throws after 10 seconds. An action that never
+returns keeps the calls it made from taking effect. While it runs, a `start(..)`, `stop()`, `stopReplay()`,
+`resumeReplay()` or `resumeSubscription(..)` made on another thread, for any subscription, throws
+`IllegalStateException` after 10 seconds and changes nothing.
 
 Don't wait in a `StartAt.dynamic(..)` function or a `CatchupListener` for a `start(..)`, `stop()`, `shutdown()` or
 resume you asked another thread to make, since that call waits for the function or the listener to return and throws
