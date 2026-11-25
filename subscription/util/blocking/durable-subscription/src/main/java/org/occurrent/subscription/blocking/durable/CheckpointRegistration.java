@@ -37,11 +37,12 @@ final class CheckpointRegistration {
     // is saved one interval after the subscribe
     final AtomicLong lastWrite = new AtomicLong(System.nanoTime());
     // Held while a delivery starts or finishes, while a quiet position is saved, while a resume at a position that
-    // failed puts back what was stored before it, while a resume of a paused subscription reads the checkpoint stored
-    // and goes to it, and while the position a restart after a lost history starts from is written, so no quiet
-    // position is saved while a delivery of any run of this subscribe is under way. Taken
-    // before saveLock. A resume and that restart take the deliveryLocks of the tracked and the untracked
-    // registration of an id in that order, under the lock for the id, and before their saveLocks
+    // failed puts back what was stored before it, while a plain resume, of a paused subscription or not, reads the
+    // checkpoint stored and notes it here, and while the position a restart after a lost history starts from is
+    // written, so no quiet position is saved while a delivery of any run of this subscribe is under way. The wrapped
+    // model resumes after the plain resume has released it. Taken before saveLock. A resume and that restart take the
+    // deliveryLocks of the tracked and the untracked registration of an id in that order, under the lock for the id,
+    // and before their saveLocks
     final ReentrantLock deliveryLock = new ReentrantLock();
     // True only while no delivery is under way and the checkpoint stored covers the current delivery that ended
     // last, or isn't known, in which case a quiet save reads it first. Written holding deliveryLock
@@ -95,11 +96,11 @@ final class CheckpointRegistration {
     private long latestSave;
     // Held while the checkpoint for an event, a quiet position, the position of a resume or of a restart after a lost
     // history, a first position an evaluation records outside the settled outcome, or the version an evaluation stores
-    // with the checkpoint it read is written, while a resume of a paused subscription reads the checkpoint stored and
-    // goes to it, by a cancel while it marks this registration cancelled and, unless the checkpoint is kept, deletes
-    // it, and by a replacement or a shutdown while it marks this registration cancelled. No other lock of this model is
-    // taken while it is held, apart from the saveLock of an untracked registration of the same id, which a resume and a
-    // restart after a lost history take inside the tracked one
+    // with the checkpoint it read is written, while a plain resume, of a paused subscription or not, reads the
+    // checkpoint stored and notes it here, by a cancel while it marks this registration cancelled and, unless the
+    // checkpoint is kept, deletes it, and by a replacement or a shutdown while it marks this registration cancelled. No
+    // other lock of this model is taken while it is held, apart from the saveLock of an untracked registration of the
+    // same id, which a resume and a restart after a lost history take inside the tracked one
     final ReentrantLock saveLock = new ReentrantLock();
     private boolean cancelled;
     // Counts the resumes at a position, the resumes at the checkpoint stored, the put-backs after a resume at a

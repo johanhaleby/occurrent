@@ -134,7 +134,9 @@ public class DurableSubscriptionModelConfig {
      * always returns {@code false} it has no position stored for an event or a quiet read. The position it restarts from
      * is still stored when the wrapped model reports that its checkpoint is no longer in the model's history. Once that
      * restart position is stored, the quiet position is saved after it, whatever the predicate decided for the events
-     * before it.
+     * before it. The same holds for the position of a
+     * {@link DurableSubscriptionModel#resumeSubscription(String, org.occurrent.subscription.StartAt)} that the
+     * resume stores, which it does for a position the wrapped model restarts at.
      * <p>
      * The position is not saved while the event the running subscription most recently gave the action is one the
      * predicate declined to store, and not while an event is being delivered. After a pause and a resume, an action of
