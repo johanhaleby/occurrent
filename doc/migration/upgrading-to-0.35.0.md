@@ -3060,7 +3060,8 @@ when the token you kept is from a live event and the oplog still has it. Call
 `resumeSubscription(id, StartAt.checkpoint(new StringBasedCheckpoint(token)))` on the catch-up model. It runs the
 paused subscription again from that token, and a later `resumeSubscription(id)` no longer throws. This resume never
 replays, so a checkpoint from a replayed event doesn't work here. When the catch-up model wraps a
-`DurableSubscriptionModel`, that model stores the token as the subscription's checkpoint.
+`DurableSubscriptionModel`, that model stores the token as the subscription's checkpoint, which every instance reads.
+So with more than one instance, stop every instance and recover with the steps above instead.
 
 The blocking Spring Boot starter puts a `CompetingConsumerSubscriptionModel` around the catch-up model, and that model
 has no resume at a position, see [#1304](https://github.com/johanhaleby/occurrent/issues/1304). So in Spring Boot,

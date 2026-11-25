@@ -109,4 +109,40 @@ class HistoryLossMessagesTest {
     void the_refusal_to_resume_a_subscription_whose_live_start_was_lost_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
         assertThat(HistoryLossMessages.liveStartLostOnResume("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
+
+    private static final String SHARED_CHECKPOINT_DELETE_STEP = " " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT;
+
+    @Test
+    void the_log_for_a_subscription_paused_after_a_loss_says_the_cancel_deletes_any_stored_checkpoint() {
+        assertThat(HistoryLossMessages.TERMINAL_FAILURE_LOG).contains("To get every event, cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + SHARED_CHECKPOINT_DELETE_STEP);
+    }
+
+    @Test
+    void the_log_for_a_subscription_paused_after_a_live_start_loss_says_the_cancel_deletes_any_stored_checkpoint() {
+        assertThat(HistoryLossMessages.LIVE_START_LOST_LOG).contains("To get every event, cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + SHARED_CHECKPOINT_DELETE_STEP);
+    }
+
+    @Test
+    void the_refusal_to_resume_a_subscription_says_the_cancel_deletes_any_stored_checkpoint() {
+        assertThat(HistoryLossMessages.historyLost("id", CHECKPOINT)).hasMessageContaining("Cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + SHARED_CHECKPOINT_DELETE_STEP);
+    }
+
+    @Test
+    void the_refusal_to_resume_a_subscription_whose_live_start_was_lost_says_the_cancel_deletes_any_stored_checkpoint() {
+        assertThat(HistoryLossMessages.liveStartLostOnResume("id", CHECKPOINT)).hasMessageContaining("Cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + SHARED_CHECKPOINT_DELETE_STEP);
+    }
+
+    @Test
+    void the_refusal_to_resume_an_unnamed_subscription_still_says_the_cancel_deletes_any_stored_checkpoint() {
+        assertThat(HistoryLossMessages.historyLost(null, CHECKPOINT)).hasMessageContaining("Cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to.");
+    }
+
+    @Test
+    void the_refusal_to_resume_an_unnamed_subscription_whose_live_start_was_lost_still_says_the_cancel_deletes_any_stored_checkpoint() {
+        assertThat(HistoryLossMessages.liveStartLostOnResume(null, CHECKPOINT)).hasMessageContaining("Cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to.");
+    }
 }

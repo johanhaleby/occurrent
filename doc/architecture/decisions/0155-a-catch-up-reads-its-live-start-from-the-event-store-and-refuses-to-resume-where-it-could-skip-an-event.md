@@ -300,7 +300,11 @@ Where this section says a start is refused, a blocking Spring Boot subscription 
 
 On a blocking catch-up model the application calls directly, `resumeSubscription(id, startAt)` at a resume token the
 application stored with its own state, while the oplog still has it, resumes the paused subscription without a cancel.
-At a token newer than the one the application stored, it skips the events between the two. Cancelling the
+Through a `DurableSubscriptionModel` the resume stores the token as the checkpoint every instance reads, so when more
+than one instance runs the subscription, someone stops every instance and starts them all again from that token
+instead, as
+[the upgrade guide](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. At a token newer than the one the application stored, it skips the events between the two. Cancelling the
 subscription and subscribing again from now skips every event since the lost token.
 
 ## Alternatives considered
