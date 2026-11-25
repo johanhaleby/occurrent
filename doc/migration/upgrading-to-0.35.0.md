@@ -584,22 +584,36 @@ first position of a subscription that starts at the model default with no checkp
 In 0.34.0 that first position was written with `CheckpointWriteCondition.ifAbsent()` and no write version, so a node
 that had lost its lease could write over it until the new lease holder saved its next checkpoint. From 0.35.0 the
 model first calls the new `CheckpointStorage.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion)`,
-which stores the first position and the version in one write. When the storage holds a newer version, the call writes
-nothing and the subscription starts from the checkpoint stored. When reading that checkpoint back fails or finds
-nothing, `subscribe` throws `StartPositionAlreadyPinnedException`. `NativeMongoCheckpointStorage`,
-`SpringMongoCheckpointStorage`, `SpringRedisCheckpointStorage` and `InMemoryCheckpointStorage` implement it, so there
-the old lease holder's writes are refused from the first write on, once every node runs 0.35.0. During a rolling
-upgrade, a 0.34.0 node that has lost its lease settles a lost race without a version, so on the MongoDB storages it
-can replace a first position a 0.35.0 node stored with an earlier one, which delivers events again but skips none.
+which stores the first position and the version in one write. `NativeMongoCheckpointStorage`,
+`SpringMongoCheckpointStorage`, `SpringRedisCheckpointStorage` and `InMemoryCheckpointStorage` implement it, so once
+every node runs 0.35.0, a first position stored with the newest version refuses the old lease holder's writes from
+then on.
+
+When two nodes record a first position at the same moment, what happens depends on what the other node stored:
+
+| Stored by the other node | 0.35.0 |
+| --- | --- |
+| A newer version than this node's | The call writes nothing, a warning is logged, and the subscription starts from the stored checkpoint. 0.34.0 threw `StartPositionAlreadyPinnedException` here unless the stored checkpoint was the position it read or the MongoDB storages could order the two. |
+| An operation time on the MongoDB storages, with an older version or none | The earlier of the two positions is stored with this node's version, and the subscription starts from it. |
+| Any other checkpoint, with an older version or none | The call writes nothing, and `subscribe` throws `StartPositionAlreadyPinnedException` unless the stored checkpoint is the position it read, as in 0.34.0. On the Redis and in-memory storages this is every stored checkpoint. |
+
+When the subscription would start from the stored checkpoint and reading it back fails or finds nothing, `subscribe`
+throws `StartPositionAlreadyPinnedException`.
+
+During a rolling upgrade, a 0.34.0 node that has lost its lease settles a lost race without a version, so on the
+MongoDB storages it can replace a first position a 0.35.0 node stored with an earlier one, which delivers events
+again but skips none.
 
 ### What to do
 
-Nothing, unless you implement `CheckpointStorage` yourself. A storage of your own that doesn't override the
-three-argument `resolveFirstCheckpointRace`, or answers it empty, gets the `ifAbsent()` write and no version, as in
-0.34.0. Until the next checkpoint write stores the version, a node that had lost its lease can write over the first
-position, which delivers events again but skips none. To get the version stored with the first position in one write,
-override the three-argument `resolveFirstCheckpointRace` as its javadoc describes. There is no OpenRewrite recipe for
-this.
+If you catch `StartPositionAlreadyPinnedException` from `subscribe` to alert or to subscribe again, it is no longer
+thrown when the storage holds a newer version, and the subscription starts instead.
+
+A storage of your own that doesn't override the three-argument `resolveFirstCheckpointRace`, or answers it empty,
+gets the `ifAbsent()` write and no version, as in 0.34.0. Until the next checkpoint write stores the version, a node
+that had lost its lease can write over the first position, which delivers events again but skips none. To get the
+version stored with the first position in one write, override the three-argument `resolveFirstCheckpointRace` as its
+javadoc describes. There is no OpenRewrite recipe for this.
 
 ## A capability that acts on a subscription is not found past a wrapper
 

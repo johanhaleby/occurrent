@@ -154,8 +154,8 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
     /**
      * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
      * in the same {@code findOneAndUpdate}, see {@link MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
-     * A stored resume token or generic checkpoint is kept and answered, and gets {@code writeVersion} too. Answers
-     * empty, writing nothing, only for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint}.
+     * Answers empty and writes nothing when a resume token or generic checkpoint is stored, since neither can be
+     * compared with {@code candidate}, and for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint}.
      */
     @Override
     public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
@@ -166,7 +166,7 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
         Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument, writeVersion);
         // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
         Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
-        return Optional.of(MongoCommons.interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion));
+        return MongoCommons.interpretFirstCheckpointRaceResolution(subscriptionId, afterDocument, writeVersion);
     }
 
     /**

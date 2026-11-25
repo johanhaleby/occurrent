@@ -241,38 +241,50 @@ class NativeMongoCheckpointStorageFirstCheckpointRaceTest {
     }
 
     @Test
-    void a_stored_resume_token_checkpoint_is_kept_and_is_the_answer_and_the_version_is_stored() {
+    void a_stored_resume_token_checkpoint_with_no_version_answers_empty_and_stays_without_one() {
         MongoResumeTokenCheckpoint stored = resumeTokenCheckpoint();
         storage.save(subscriptionId, stored);
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(500), 3);
 
-        assertThat(resolution).hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo(stored.asString()));
+        assertThat(resolution).isEmpty();
         assertThat(storage.read(subscriptionId).asString()).isEqualTo(stored.asString());
-        assertThat(storage.writeVersion(subscriptionId)).hasValue(3L);
+        assertThat(storage.writeVersion(subscriptionId)).as("stored version").isEmpty();
     }
 
     @Test
-    void a_stored_resume_token_checkpoint_with_an_older_version_is_kept_and_the_version_is_raised() {
+    void a_stored_resume_token_checkpoint_with_an_older_version_answers_empty_and_keeps_that_version() {
         MongoResumeTokenCheckpoint stored = resumeTokenCheckpoint();
         storage.save(subscriptionId, stored, CheckpointWriteCondition.notOlderThan(1));
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(500), 3);
 
-        assertThat(resolution).hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo(stored.asString()));
+        assertThat(resolution).isEmpty();
         assertThat(storage.read(subscriptionId).asString()).isEqualTo(stored.asString());
-        assertThat(storage.writeVersion(subscriptionId)).hasValue(3L);
+        assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(1L);
     }
 
     @Test
-    void a_stored_generic_checkpoint_is_kept_and_is_the_answer_and_the_version_is_stored() {
-        storage.save(subscriptionId, new StringBasedCheckpoint("a-caller-supplied-position"));
+    void a_stored_resume_token_checkpoint_with_a_version_equal_to_the_offered_one_answers_empty_and_stays_as_it_was() {
+        MongoResumeTokenCheckpoint stored = resumeTokenCheckpoint();
+        storage.save(subscriptionId, stored, CheckpointWriteCondition.notOlderThan(3));
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(500), 3);
 
-        assertThat(resolution).hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo("a-caller-supplied-position"));
-        assertThat(storage.read(subscriptionId).asString()).isEqualTo("a-caller-supplied-position");
-        assertThat(storage.writeVersion(subscriptionId)).hasValue(3L);
+        assertThat(resolution).isEmpty();
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(stored.asString());
+        assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(3L);
+    }
+
+    @Test
+    void a_stored_generic_checkpoint_answers_empty_and_is_left_exactly_as_it_was_with_its_version() {
+        storage.save(subscriptionId, new StringBasedCheckpoint("a-caller-supplied-position"), CheckpointWriteCondition.notOlderThan(1));
+        Document before = database.getCollection(COLLECTION).find(eq(ID_FIELD, subscriptionId)).first();
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(500), 3);
+
+        assertThat(resolution).isEmpty();
+        assertThat(database.getCollection(COLLECTION).find(eq(ID_FIELD, subscriptionId)).first()).as("stored document").isEqualTo(before);
     }
 
     @Test

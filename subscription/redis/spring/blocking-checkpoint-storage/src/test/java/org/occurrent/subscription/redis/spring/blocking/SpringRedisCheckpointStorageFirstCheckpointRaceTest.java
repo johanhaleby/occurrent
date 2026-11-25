@@ -104,50 +104,94 @@ class SpringRedisCheckpointStorageFirstCheckpointRaceTest {
     }
 
     @Test
-    void keeps_and_answers_a_stored_checkpoint_with_an_older_version_and_stores_the_new_version() {
+    void answers_empty_and_writes_nothing_when_a_checkpoint_with_an_older_version_is_stored() {
         storage.save(subscriptionId, checkpoint("stored"), CheckpointWriteCondition.notOlderThan(1));
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
 
         assertAll(
-                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("stored")),
+                () -> assertThat(resolution).as("answer").isEmpty(),
                 () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo("stored"),
-                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(1L)
         );
     }
 
     @Test
-    void keeps_and_answers_a_stored_checkpoint_with_no_version_and_stores_the_version() {
+    void answers_empty_and_writes_nothing_when_a_checkpoint_with_no_version_is_stored() {
         storage.save(subscriptionId, checkpoint("stored"));
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
 
         assertAll(
-                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("stored")),
+                () -> assertThat(resolution).as("answer").isEmpty(),
+                () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo("stored"),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").isEmpty()
+        );
+    }
+
+    @Test
+    void a_checkpoint_written_by_a_plain_save_is_left_exactly_as_it_was() {
+        String written = "operation time 1 \"quoted\" åäö";
+        storage.save(subscriptionId, checkpoint(written));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").isEmpty(),
+                () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo(written)
+        );
+    }
+
+    @Test
+    void a_candidate_with_quotes_and_non_ascii_characters_is_stored_and_answered_exactly() {
+        String candidate = "operation time 1 \"quoted\" åäö";
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint(candidate), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo(candidate)),
+                () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo(candidate)
+        );
+    }
+
+    @Test
+    void answers_empty_and_writes_nothing_when_a_checkpoint_with_a_version_equal_to_the_offered_one_is_stored() {
+        storage.save(subscriptionId, checkpoint("stored"), CheckpointWriteCondition.notOlderThan(2));
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
+
+        assertAll(
+                () -> assertThat(resolution).as("answer").isEmpty(),
                 () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo("stored"),
                 () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
         );
     }
 
     @Test
-    void a_checkpoint_written_by_a_plain_save_is_answered_back_exactly() {
-        String written = "operation time 1 \"quoted\" åäö";
-        storage.save(subscriptionId, checkpoint(written));
+    void a_retry_after_an_attempt_that_wrote_and_lost_its_reply_answers_empty_and_leaves_what_the_first_attempt_wrote() {
+        AtomicInteger attempts = new AtomicInteger();
+        StringRedisTemplate losingTheFirstReply = new StringRedisTemplate(lettuceConnectionFactory) {
+            @Override
+            public <T> T execute(RedisScript<T> script, RedisSerializer<?> argsSerializer, RedisSerializer<T> resultSerializer, List<String> keys, Object... args) {
+                T reply = super.execute(script, argsSerializer, resultSerializer, keys, args);
+                if (attempts.getAndIncrement() == 0) {
+                    throw new RedisConnectionFailureException("Connection lost after the script ran");
+                }
+                return reply;
+            }
+        };
+        losingTheFirstReply.afterPropertiesSet();
+        SpringRedisCheckpointStorage retrying = new SpringRedisCheckpointStorage(losingTheFirstReply, RetryStrategy.fixed(1L).maxAttempts(3));
 
-        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
-
-        assertThat(resolution).hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo(written));
-    }
-
-    @Test
-    void accepts_a_version_equal_to_the_stored_one() {
-        storage.save(subscriptionId, checkpoint("stored"), CheckpointWriteCondition.notOlderThan(2));
-
-        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2);
+        Optional<Checkpoint>[] resolution = new Optional[1];
+        Throwable failure = catchThrowable(() -> resolution[0] = retrying.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 2));
 
         assertAll(
-                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("stored")),
-                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
+                () -> assertThat(failure).as("failure").isNull(),
+                () -> assertThat(attempts).as("the attempt that wrote and the retry").hasValue(2),
+                () -> assertThat(resolution[0]).as("answer").isEmpty(),
+                () -> assertThat(retrying.read(subscriptionId).asString()).as("stored position").isEqualTo("candidate"),
+                () -> assertThat(retrying.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
         );
     }
 
@@ -174,12 +218,14 @@ class SpringRedisCheckpointStorageFirstCheckpointRaceTest {
                 () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version after the refusal").hasValue(9007199254740993L),
                 () -> assertThat(storage.resolveFirstCheckpointRace(subscriptionId, checkpoint("candidate"), 9007199254740993L))
                         .as("an offered version equal to the stored one")
-                        .hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("stored"))
+                        .isEmpty(),
+                () -> assertThat(storage.read(subscriptionId).asString()).as("stored position after the equal version").isEqualTo("stored"),
+                () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version after the equal version").hasValue(9007199254740993L)
         );
     }
 
     @Test
-    void concurrent_callers_with_the_same_version_are_all_answered_the_one_checkpoint_that_is_stored() throws Exception {
+    void of_concurrent_callers_with_the_same_version_exactly_one_is_answered_and_the_rest_are_answered_empty() throws Exception {
         int callers = 8;
         List<String> candidates = new ArrayList<>();
         for (int i = 0; i < callers; i++) {
@@ -202,7 +248,9 @@ class SpringRedisCheckpointStorageFirstCheckpointRaceTest {
 
             assertAll(
                     () -> assertThat(candidates).as("the stored position is one of the candidates").contains(storage.read(subscriptionId).asString()),
-                    () -> assertThat(answered).as("answers").hasSize(callers).containsOnly(Optional.of(storage.read(subscriptionId).asString())),
+                    () -> assertThat(answered).as("answers").hasSize(callers).containsOnlyOnce(Optional.of(storage.read(subscriptionId).asString())),
+                    () -> assertThat(answered).as("answers other than the stored position").filteredOn(Optional::isPresent).hasSize(1),
+                    () -> assertThat(answered).as("empty answers").filteredOn(Optional::isEmpty).hasSize(callers - 1),
                     () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(2L)
             );
         } finally {

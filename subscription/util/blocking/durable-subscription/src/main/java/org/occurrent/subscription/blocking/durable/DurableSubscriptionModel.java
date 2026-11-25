@@ -94,15 +94,19 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * <p>
  * With a {@code CheckpointWriteVersionSource} that answers a version, the first position is settled through
  * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint, long)}, which stores it and the version in one
- * write. A checkpoint stored for a delivered event is never overwritten, and the subscription starts from the
- * checkpoint the call answers. Of two nodes recording one at the same moment, {@code NativeMongoCheckpointStorage} and
- * {@code SpringMongoCheckpointStorage} store the earlier position, and {@code SpringRedisCheckpointStorage} and
- * {@code InMemoryCheckpointStorage} keep the checkpoint already stored. When the storage holds a newer write version,
- * nothing is written, the refusal is logged, and the subscription starts from the checkpoint stored. So on these four
- * storages, once every node runs Occurrent 0.35.0 or later, the writes of a node with an older version are refused from
- * the moment the first position is written. A node on 0.34.0 settles a lost race without a version, and on the MongoDB
- * storages it can replace a first position stored with a version with an earlier one, which delivers events again but
- * skips none.
+ * write, and the subscription starts from the checkpoint the call answers. Of two nodes recording one at the same
+ * moment, {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} store the earlier position.
+ * When the storage holds a newer write version, nothing is written, the refusal is logged, and the subscription starts
+ * from the checkpoint stored, since the node that stored it holds a newer lease and this node's writes are refused.
+ * When the storage holds no newer version and a checkpoint it can't compare with the position read is stored, the call
+ * writes nothing and answers empty. That is every stored checkpoint on {@code SpringRedisCheckpointStorage} and
+ * {@code InMemoryCheckpointStorage}, and a checkpoint stored for a delivered event on the MongoDB storages. The lost race
+ * is then settled as it is without a version, below, so the subscribe is refused with
+ * {@link StartPositionAlreadyPinnedException} unless the stored checkpoint is the position read, as in 0.34.0. So on
+ * these four storages, once every node runs Occurrent 0.35.0 or later, a first position written with the newest version
+ * refuses the writes of every node with an older one from then on. A node on 0.34.0 settles a lost race without a
+ * version, and on the MongoDB storages it can replace a first position stored with a version with an earlier one, which
+ * delivers events again but skips none.
  * Without a version, or for a storage that answers that call empty, the first position is written with
  * {@link CheckpointWriteCondition#ifAbsent()} and no write version, as in 0.34.0, so of two nodes recording one at the
  * same moment, only one write is stored. This model doesn't save the position again with the version, since that save
@@ -819,9 +823,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // wrote in between. A storage able to compare the two settles a lost race by position instead, through
     // resolveFirstCheckpointRace. One that cannot falls back to reading the stored position back and checking it
     // is the one this node itself computed. With a write version, the three-argument resolveFirstCheckpointRace
-    // settles it first and stores the version in the same write. A storage that answers that empty gets the
-    // ifAbsent() write and no version, as in 0.34.0, since a second save of the version would write over whatever
-    // another node stored between the two writes
+    // settles it first and stores the version in the same write. When it answers empty, which it does for a stored
+    // checkpoint it can't order, the ifAbsent() write and the read back settle it with no version, as in
+    // 0.34.0, since a second save of the version would write over whatever another node stored between the two writes
     private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so two nodes recording a
@@ -870,8 +874,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // One write settles the first position and stores the version, so no write of another node falls between the two
     // and nothing stored is moved later. A newer version stored means this node's lease moved on and nothing was
-    // written, so the subscription starts from what is stored. Anything else the storage throws fails the recording
-    // like a failed ifAbsent() write
+    // written, so the subscription starts from what the newer lease holder stored and every write of this node is
+    // refused. Anything else the storage throws fails the recording like a failed ifAbsent() write
     private Optional<Checkpoint> settleWithWriteVersion(String subscriptionId, Checkpoint globalCheckpoint, long writeVersion) {
         try {
             return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint, writeVersion);

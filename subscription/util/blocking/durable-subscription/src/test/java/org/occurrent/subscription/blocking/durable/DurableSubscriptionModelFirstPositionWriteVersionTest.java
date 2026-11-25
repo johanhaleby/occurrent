@@ -26,6 +26,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -172,6 +173,64 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("newer-nodes-position"),
                 () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L),
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly("newer-nodes-position")
+        );
+    }
+
+    @Test
+    void a_different_first_position_another_node_stored_with_an_older_version_just_before_the_three_argument_resolver_refuses_the_subscribe_and_is_left_as_it_was() {
+        StorageWithAHookInTheThreeArgumentResolver storage = new StorageWithAHookInTheThreeArgumentResolver();
+        storage.beforeTheThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale-nodes-position"), CheckpointWriteCondition.notOlderThan(1));
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, e -> {
+                    assertThat(e.positionRead.asString()).as("position read").isEqualTo(FIRST_POSITION);
+                    assertThat(e.positionStored.map(Checkpoint::asString)).as("position stored").hasValue("stale-nodes-position");
+                }),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("stale-nodes-position"),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(1L),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
+        );
+    }
+
+    @Test
+    void a_different_first_position_another_node_stored_with_no_version_just_before_the_three_argument_resolver_refuses_the_subscribe_and_is_left_as_it_was() {
+        StorageWithAHookInTheThreeArgumentResolver storage = new StorageWithAHookInTheThreeArgumentResolver();
+        storage.beforeTheThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("other-nodes-position"));
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class,
+                        e -> assertThat(e.positionStored.map(Checkpoint::asString)).as("position stored").hasValue("other-nodes-position")),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("other-nodes-position"),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty(),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
+        );
+    }
+
+    @Test
+    void the_very_position_this_node_read_stored_by_another_node_with_an_older_version_just_before_the_three_argument_resolver_is_started_from_and_left_as_it_was() {
+        StorageWithAHookInTheThreeArgumentResolver storage = new StorageWithAHookInTheThreeArgumentResolver();
+        storage.beforeTheThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(FIRST_POSITION), CheckpointWriteCondition.notOlderThan(1));
+        Feed feed = new Feed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("thrown by subscribe").isNull(),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(FIRST_POSITION),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(1L),
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly(FIRST_POSITION)
         );
     }
 

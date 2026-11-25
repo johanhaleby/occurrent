@@ -60,39 +60,40 @@ class InMemoryCheckpointStorageFirstCheckpointRaceTest {
     }
 
     @Test
-    void keeps_and_answers_a_stored_checkpoint_with_an_older_version_and_stores_the_new_version() {
+    void answers_empty_and_writes_nothing_when_a_checkpoint_with_an_older_version_is_stored() {
         storage.save(SUBSCRIPTION_ID, checkpoint("stored"), CheckpointWriteCondition.notOlderThan(1));
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, checkpoint("candidate"), 2);
 
         assertAll(
-                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("stored")),
+                () -> assertThat(resolution).as("answer").isEmpty(),
                 () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("stored"),
-                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(1L)
         );
     }
 
     @Test
-    void keeps_and_answers_a_stored_checkpoint_with_no_version_and_stores_the_version() {
+    void answers_empty_and_writes_nothing_when_a_checkpoint_with_no_version_is_stored() {
         storage.save(SUBSCRIPTION_ID, checkpoint("stored"));
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, checkpoint("candidate"), 2);
 
         assertAll(
-                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("stored")),
+                () -> assertThat(resolution).as("answer").isEmpty(),
                 () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("stored"),
-                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty()
         );
     }
 
     @Test
-    void accepts_a_version_equal_to_the_stored_one() {
+    void answers_empty_and_writes_nothing_when_a_checkpoint_with_a_version_equal_to_the_offered_one_is_stored() {
         storage.save(SUBSCRIPTION_ID, checkpoint("stored"), CheckpointWriteCondition.notOlderThan(2));
 
         Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(SUBSCRIPTION_ID, checkpoint("candidate"), 2);
 
         assertAll(
-                () -> assertThat(resolution).as("answer").hasValueSatisfying(c -> assertThat(c.asString()).isEqualTo("stored")),
+                () -> assertThat(resolution).as("answer").isEmpty(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("stored"),
                 () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
         );
     }
@@ -110,7 +111,7 @@ class InMemoryCheckpointStorageFirstCheckpointRaceTest {
     }
 
     @Test
-    void concurrent_callers_with_the_same_version_are_all_answered_the_one_checkpoint_that_is_stored() throws Exception {
+    void of_concurrent_callers_with_the_same_version_exactly_one_is_answered_and_the_rest_are_answered_empty() throws Exception {
         int callers = 8;
         List<String> candidates = new ArrayList<>();
         for (int i = 0; i < callers; i++) {
@@ -133,7 +134,9 @@ class InMemoryCheckpointStorageFirstCheckpointRaceTest {
 
             assertAll(
                     () -> assertThat(candidates).as("the stored position is one of the candidates").contains(storage.read(SUBSCRIPTION_ID).asString()),
-                    () -> assertThat(answered).as("answers").hasSize(callers).containsOnly(Optional.of(storage.read(SUBSCRIPTION_ID).asString())),
+                    () -> assertThat(answered).as("answers").hasSize(callers).containsOnlyOnce(Optional.of(storage.read(SUBSCRIPTION_ID).asString())),
+                    () -> assertThat(answered).as("answers other than the stored position").filteredOn(Optional::isPresent).hasSize(1),
+                    () -> assertThat(answered).as("empty answers").filteredOn(Optional::isEmpty).hasSize(callers - 1),
                     () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
             );
         } finally {

@@ -39,7 +39,7 @@ import static java.util.Objects.requireNonNull;
  * {@link CheckpointWriteCondition} is evaluated for real, not refused. The checkpoint and its version are two
  * separate maps, since {@link CheckpointWriteCondition#any()} writes the former and leaves the latter untouched.
  * {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} takes the same lock as a save, so a first position and
- * its write version are stored together, and a checkpoint already stored is kept.
+ * its write version are stored together, and a checkpoint already stored is never overwritten.
  */
 @NullMarked
 public class InMemoryCheckpointStorage implements CheckpointStorage {
@@ -88,11 +88,13 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
 
     /**
      * Settles the first position under the same lock as {@link #save(String, Checkpoint, CheckpointWriteCondition)}.
-     * This storage can't tell which of two positions is earlier, so a stored checkpoint is kept and answered, and
-     * {@code writeVersion} is stored with it. {@code candidate} is stored only when no checkpoint is. Never answers
+     * When no checkpoint is stored, {@code candidate} is stored with {@code writeVersion} and answered. This storage
+     * can't tell which of two positions is earlier, so when a checkpoint is stored, nothing is written and this answers
      * empty.
      *
-     * @throws IllegalArgumentException if {@code writeVersion} is negative
+     * @throws CheckpointWriteConditionNotFulfilledException if the stored version is newer than {@code writeVersion},
+     *                                                       and then nothing is written
+     * @throws IllegalArgumentException                      if {@code writeVersion} is negative
      */
     @Override
     public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
@@ -105,9 +107,12 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
             if (stored != null && stored > writeVersion) {
                 throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
             }
-            Checkpoint governing = checkpoints.computeIfAbsent(subscriptionId, ignored -> candidate);
+            if (checkpoints.containsKey(subscriptionId)) {
+                return Optional.empty();
+            }
+            checkpoints.put(subscriptionId, candidate);
             versions.put(subscriptionId, writeVersion);
-            return Optional.of(governing);
+            return Optional.of(candidate);
         } finally {
             lock.unlock();
         }

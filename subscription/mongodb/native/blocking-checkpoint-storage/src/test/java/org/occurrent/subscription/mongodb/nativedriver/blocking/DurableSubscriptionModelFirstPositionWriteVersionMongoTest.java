@@ -38,6 +38,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -66,6 +67,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.tck.ConformanceEvents.event;
@@ -187,24 +189,110 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
     }
 
     @Test
-    void a_node_whose_first_position_is_recorded_after_another_node_stored_a_checkpoint_for_a_delivered_event_keeps_that_checkpoint_and_starts_from_it() {
+    void a_checkpoint_for_a_delivered_event_another_node_stored_with_an_older_version_refuses_the_subscribe_and_is_left_as_it_was() {
         MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
         MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
         ExecutorService executor = Executors.newCachedThreadPool();
-        NativeMongoSubscriptionModel nativeModel = new NativeMongoSubscriptionModel(database, eventCollection.getNamespace().getCollectionName(), RFC_3339_STRING, executor);
+        EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
         try {
             MongoResumeTokenCheckpoint deliveredEvent = resumeTokenOfAWrittenEvent(eventStore, eventCollection);
             RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, deliveredEvent, CheckpointWriteCondition.notOlderThan(1)));
             DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
 
-            durable.subscribe(SUBSCRIPTION_ID, __ -> {
-            }).waitUntilStarted();
+            Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            }));
 
             assertAll(
+                    () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class,
+                            e -> assertThat(e.positionStored.map(Checkpoint::asString)).as("position stored").hasValue(deliveredEvent.asString())),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
-                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
-                    () -> assertThat(storage.answered.get()).as("the checkpoint this node starts from")
-                            .isNotNull().extracting(Checkpoint::asString).isEqualTo(deliveredEvent.asString())
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(1L),
+                    () -> assertThat(storage.answered.get()).as("the checkpoint the resolution answered").isNull(),
+                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from").isEmpty()
+            );
+        } finally {
+            nativeModel.shutdown();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void a_checkpoint_for_a_delivered_event_another_node_stored_with_no_version_refuses_the_subscribe_and_is_left_as_it_was() {
+        MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
+        MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
+        ExecutorService executor = Executors.newCachedThreadPool();
+        EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
+        try {
+            MongoResumeTokenCheckpoint deliveredEvent = resumeTokenOfAWrittenEvent(eventStore, eventCollection);
+            RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, deliveredEvent));
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
+
+            Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            }));
+
+            assertAll(
+                    () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class,
+                            e -> assertThat(e.positionStored.map(Checkpoint::asString)).as("position stored").hasValue(deliveredEvent.asString())),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty(),
+                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from").isEmpty()
+            );
+        } finally {
+            nativeModel.shutdown();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void a_checkpoint_for_a_delivered_event_another_node_stored_with_a_newer_version_is_started_from_and_nothing_is_written() {
+        MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
+        MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
+        ExecutorService executor = Executors.newCachedThreadPool();
+        EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
+        try {
+            MongoResumeTokenCheckpoint deliveredEvent = resumeTokenOfAWrittenEvent(eventStore, eventCollection);
+            RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, deliveredEvent, CheckpointWriteCondition.notOlderThan(3)));
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
+
+            Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            }).waitUntilStarted());
+
+            assertAll(
+                    () -> assertThat(thrown).as("thrown by subscribe").isNull(),
+                    () -> assertThat(storage.refused.get()).as("the write of this node, older than the stored version, was refused")
+                            .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L),
+                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from")
+                            .isNotEmpty().containsOnly(deliveredEvent.asString())
+            );
+        } finally {
+            nativeModel.shutdown();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void the_very_checkpoint_for_a_delivered_event_this_node_read_stored_by_another_node_is_started_from_and_left_as_it_was() {
+        MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
+        MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
+        ExecutorService executor = Executors.newCachedThreadPool();
+        EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
+        try {
+            MongoResumeTokenCheckpoint deliveredEvent = resumeTokenOfAWrittenEvent(eventStore, eventCollection);
+            nativeModel.answers = deliveredEvent;
+            RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, deliveredEvent, CheckpointWriteCondition.notOlderThan(1)));
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
+
+            Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            }).waitUntilStarted());
+
+            assertAll(
+                    () -> assertThat(thrown).as("thrown by subscribe").isNull(),
+                    () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
+                    () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(1L),
+                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from")
+                            .isNotEmpty().containsOnly(deliveredEvent.asString())
             );
         } finally {
             nativeModel.shutdown();

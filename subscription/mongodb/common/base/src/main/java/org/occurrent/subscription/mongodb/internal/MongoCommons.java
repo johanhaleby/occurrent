@@ -436,8 +436,8 @@ public class MongoCommons {
      * <p>
      * Writes only when {@code notOlderThan(writeVersion)} allows it, and then always with {@code writeVersion}. It
      * writes {@code candidateDocument} when nothing is stored or the stored {@link #OPERATION_TIME} is later, and
-     * keeps the stored checkpoint otherwise. That includes a stored resume token or generic checkpoint, which is
-     * never overwritten. A newer stored version keeps the document as it is.
+     * keeps the stored operation time otherwise. A stored resume token or generic checkpoint can't be compared with
+     * {@code candidateDocument}, so the document is left as it is, and so is one with a newer stored version.
      *
      * @param candidateDocument The document {@link #generateCheckpointDocument(String, Checkpoint)} built for the
      *                          candidate position, which must contain {@link #OPERATION_TIME}
@@ -454,9 +454,10 @@ public class MongoCommons {
         Document candidateWithVersion = new Document("$mergeObjects", asList(
                 new Document("$literal", candidateDocument),
                 new Document(WRITE_VERSION, writeVersion)));
-        Document storedWithVersion = new Document("$mergeObjects", asList(
-                "$$ROOT",
-                new Document(WRITE_VERSION, writeVersion)));
+        Document storedWithVersion = new Document("$cond", new Document(Map.of(
+                "if", fieldExistsExpr(OPERATION_TIME),
+                "then", new Document("$mergeObjects", asList("$$ROOT", new Document(WRITE_VERSION, writeVersion))),
+                "else", "$$ROOT")));
 
         Document written = new Document("$cond", new Document(Map.of(
                 "if", takeCandidate,
@@ -474,22 +475,27 @@ public class MongoCommons {
     /**
      * What {@code findOneAndUpdate} returned for {@link #buildFirstCheckpointRaceResolution(Document, long)} means.
      * <p>
-     * A successful write stores exactly {@code writeVersion}, so any other stored version means a newer version
-     * refused the write, whatever kind of checkpoint is stored. Otherwise {@code afterDocument} is the checkpoint that
-     * governs.
+     * A stored version newer than {@code writeVersion} refused the write, whatever kind of checkpoint is stored. A
+     * write stores exactly {@code writeVersion} and an {@link #OPERATION_TIME}, so a document with both is the
+     * checkpoint that governs. Any other document is a stored resume token or generic checkpoint the pipeline left as
+     * it was.
      *
      * @param subscriptionId The id of the subscription the write was for
      * @param afterDocument  The document {@code findOneAndUpdate} returned
      * @param writeVersion   The version the write offered
-     * @return The checkpoint that now governs the subscription's first position
+     * @return The checkpoint that now governs the subscription's first position, or empty when the pipeline wrote
+     * nothing because the stored checkpoint can't be compared with the candidate
      * @throws CheckpointWriteConditionNotFulfilledException if a newer stored version refused the write
      */
-    public static Checkpoint interpretFirstCheckpointRaceResolution(String subscriptionId, Document afterDocument, long writeVersion) {
+    public static Optional<Checkpoint> interpretFirstCheckpointRaceResolution(String subscriptionId, Document afterDocument, long writeVersion) {
         OptionalLong storedVersion = extractWriteVersion(afterDocument);
-        if (storedVersion.isEmpty() || storedVersion.getAsLong() != writeVersion) {
+        if (storedVersion.isPresent() && storedVersion.getAsLong() > writeVersion) {
             throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, CheckpointWriteCondition.notOlderThan(writeVersion));
         }
-        return calculateCheckpointFromMongoStreamPositionDocument(afterDocument);
+        if (storedVersion.isEmpty() || storedVersion.getAsLong() != writeVersion || !afterDocument.containsKey(OPERATION_TIME)) {
+            return Optional.empty();
+        }
+        return Optional.of(calculateCheckpointFromMongoStreamPositionDocument(afterDocument));
     }
 
     /**

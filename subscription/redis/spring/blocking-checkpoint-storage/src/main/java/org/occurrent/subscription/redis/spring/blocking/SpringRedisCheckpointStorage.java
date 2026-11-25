@@ -33,7 +33,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -67,9 +66,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * by a Lua script that compares the stored version and writes both keys in one round trip, so no other writer can
  * land between the comparison and the write. {@link CheckpointWriteCondition#any()} needs no comparison and keeps
  * writing through {@code opsForValue().set}, exactly as before, leaving the version key untouched.
- * {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} runs one Lua script the same way. When the stored
- * version is newer it writes nothing. Otherwise it keeps a stored checkpoint, or stores the candidate when none is
- * stored, and stores the version.
+ * {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} runs one Lua script the same way. It stores the
+ * candidate and the version only when no checkpoint is stored and the stored version isn't newer, and writes nothing
+ * otherwise.
  * <p>
  * <strong>Redis Cluster.</strong> The version key carries a hash tag built from whatever the checkpoint key itself
  * hashes on, so Cluster places both keys in the same slot and the scripts above are never refused for crossing
@@ -225,25 +224,26 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
     // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = candidate checkpoint value, ARGV[2] = write version as
     // plain decimal digits. A stored version greater than the one offered refuses the call and nothing is written,
-    // whatever checkpoint is stored. Otherwise a stored checkpoint is kept, the candidate is stored when there is none,
-    // and the version is stored with it. Returns 'r' followed by the stored version, or 'g' followed by the checkpoint
-    // that governs, as raw bytes, since the value serializer encoded the checkpoint
+    // whatever checkpoint is stored. Otherwise a stored checkpoint is left as it is, and the candidate and the version
+    // are stored when there is none. Returns 'r' followed by the stored version, 's' when a checkpoint is stored, or
+    // 'w' when it wrote
     private static final RedisScript<byte[]> FIRST_CHECKPOINT_RACE_SCRIPT = RedisScript.of(VERSION_IS_GREATER + """
             local storedVersion = redis.call('GET', KEYS[2])
             if storedVersion and versionIsGreater(storedVersion, ARGV[2]) then
                 return 'r' .. storedVersion
             end
-            local stored = redis.call('GET', KEYS[1])
-            if not stored then
-                redis.call('SET', KEYS[1], ARGV[1])
-                stored = ARGV[1]
+            if redis.call('EXISTS', KEYS[1]) == 1 then
+                return 's'
             end
+            redis.call('SET', KEYS[1], ARGV[1])
             redis.call('SET', KEYS[2], ARGV[2])
-            return 'g' .. stored
+            return 'w'
             """, byte[].class);
 
     // The first byte FIRST_CHECKPOINT_RACE_SCRIPT returns when a newer stored version refused the call
     private static final byte REFUSED = 'r';
+    // The first byte FIRST_CHECKPOINT_RACE_SCRIPT returns when a checkpoint is stored and it wrote nothing
+    private static final byte ALREADY_STORED = 's';
 
     private final RedisOperations<String, String> redis;
     private final RetryStrategy retryStrategy;
@@ -432,9 +432,10 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
     /**
      * Settles the first position in one Lua script that compares the stored version and writes both keys, the way a
-     * conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save} does. This storage can't tell which
-     * of two positions is earlier, so a stored checkpoint is kept and answered, and {@code writeVersion} is stored with
-     * it. {@code candidate} is stored only when no checkpoint is.
+     * conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save} does. When no checkpoint is stored,
+     * {@code candidate} is stored with {@code writeVersion} and answered. This storage can't tell which of two positions
+     * is earlier, so when a checkpoint is stored, nothing is written and this answers empty. That includes a retry whose
+     * first attempt wrote and lost its reply.
      * <p>
      * In Cluster-safe mode, for the subscription id shape the class javadoc names Redis Cluster cannot align a slot
      * for, this answers empty and writes nothing. A conditional {@code save} throws {@link IllegalArgumentException}
@@ -457,12 +458,11 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
                 List.of(subscriptionId, versionKey(subscriptionId)), candidate.asString(), Long.toString(writeVersion).getBytes(StandardCharsets.UTF_8));
         // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
         byte[] reply = requireNonNull(executeWithRetry(resolve, e -> !shutdown && !isClusterSlotMismatch(e), retryStrategy).get());
-        byte[] value = Arrays.copyOfRange(reply, 1, reply.length);
         if (reply[0] == REFUSED) {
-            long storedVersion = Long.parseLong(new String(value, StandardCharsets.UTF_8));
+            long storedVersion = Long.parseLong(new String(reply, 1, reply.length - 1, StandardCharsets.UTF_8));
             throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(storedVersion), condition);
         }
-        return Optional.of(new StringBasedCheckpoint(requireNonNull((String) redis.getValueSerializer().deserialize(value))));
+        return reply[0] == ALREADY_STORED ? Optional.empty() : Optional.of(candidate);
     }
 
     // The checkpoint key is subscriptionId itself, unprefixed, and every version key starts with VERSION_KEY_PREFIX,
