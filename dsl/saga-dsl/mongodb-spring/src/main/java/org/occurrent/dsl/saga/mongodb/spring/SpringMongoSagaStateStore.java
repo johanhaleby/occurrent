@@ -98,6 +98,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -169,7 +170,11 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * transaction is thrown at once, and so is a server's refusal of a transaction or of journaling on any call, whatever
  * the strategy retries, a {@code RetryStrategy} you implement yourself included.
  * <p>
- * The constructor asks the server for its deployment once, with {@code hello}. On a standalone server
+ * The constructor asks the server for its deployment once, with {@code hello}, and the store keeps that answer. So a
+ * standalone server converted to a replica set while the application runs is still a standalone server to the store,
+ * which keeps refusing quarantine and skips the {@code linearizable} read of an instance it doesn't find, so an
+ * election before a restart can let an input addressed to an instance be skipped as if the instance didn't exist.
+ * Restart the application after the conversion. On a standalone server
  * {@link #requireAtomicTransitions()} throws, so a saga with quarantine on refuses to start. With quarantine off a saga
  * runs there, as long as the server journals its writes, since every write asks for {@code j: true}. The delivery of
  * an input that an instance quarantined earlier, such as one in data restored from a replica set, has to record as
@@ -1073,6 +1078,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * chunks are written before the record that points at them, in the same transaction, and a release joins them
      * again.
      * <p>
+     * Neither the warning nor the exception below quotes the event. A value in the data is named by its position, such
+     * as {@code entry 2 > element 0}, and its class, and never by a key or its value.
+     * <p>
      * It throws an {@link IllegalStateException} that names the instance, the input and, when it's known, where in the
      * event the difference is, when:
      * <ul>
@@ -1144,17 +1152,17 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         });
     }
 
-    private boolean deleteRecords(MongoDatabase database, Document filter) {
+    private long deleteRecords(MongoDatabase database, Document filter) {
         return deleteRecords(database, filter, filter);
     }
 
     // The records before the chunks they point at, so no record is left without its chunks. Chunks that no record points
     // at any more, such as those of a record a transaction of the caller's committed without after a failed write, go
-    // with the records of their key or their quarantine id
-    private boolean deleteRecords(MongoDatabase database, Document recordFilter, Document chunkFilter) {
-        skippedInputs(database).deleteMany(recordFilter);
+    // with the records of their key or their quarantine id. Returns how many records it deleted
+    private long deleteRecords(MongoDatabase database, Document recordFilter, Document chunkFilter) {
+        long deleted = skippedInputs(database).deleteMany(recordFilter).getDeletedCount();
         skippedInputChunks(database).deleteMany(chunkFilter);
-        return true;
+        return deleted;
     }
 
     @Override
@@ -1227,7 +1235,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             held = detached(held, codecs);
             asDelivered = difference(input.event(), roundTripped(filter, held, codecs).event(), true);
         } catch (RuntimeException e) {
-            asDelivered = "Its data can't be written to BSON and read back" + failingValue(held, codecs) + ", since " + e;
+            asDelivered = "Its data can't be written to BSON and read back" + failingValue(held, codecs) + ", since it throws " + e.getClass().getName();
         }
         if (asDelivered != null) {
             Document asBytes = new Document(SKIPPED_SEQ, input.seq());
@@ -1239,7 +1247,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 restored = roundTripped(filter, asBytes, codecs).event();
                 difference = difference(input.event(), restored, false);
             } catch (RuntimeException e) {
-                throw cannotRecord(sagaId, input.key(), "Its record can't be written to BSON and read back" + failingValue(asBytes, codecs) + ", since " + e + ".");
+                throw cannotRecord(sagaId, input.key(), "Its record can't be written to BSON and read back" + failingValue(asBytes, codecs) + ", since it throws " + e.getClass().getName() + ".");
             }
             if (difference != null) {
                 throw cannotRecord(sagaId, input.key(), difference + ", so a release would hand the converter another event than the one it was delivered.");
@@ -1312,15 +1320,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private static @Nullable Change failingPath(String path, @Nullable Object value, CodecRegistry codecs) {
         if (value instanceof Map<?, ?> map) {
+            int position = 0;
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                Change failing = failingPath(path.isEmpty() ? String.valueOf(entry.getKey()) : path + "." + entry.getKey(), entry.getValue(), codecs);
+                Change failing = failingPath(SkippedInputData.pathTo(path, "entry", position++), entry.getValue(), codecs);
                 if (failing != null) {
                     return failing;
                 }
             }
         } else if (value instanceof List<?> list) {
             for (int i = 0; i < list.size(); i++) {
-                Change failing = failingPath(path + "[" + i + "]", list.get(i), codecs);
+                Change failing = failingPath(SkippedInputData.pathTo(path, "element", i), list.get(i), codecs);
                 if (failing != null) {
                     return failing;
                 }
@@ -1377,17 +1386,22 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return Arrays.equals(deliveredData.toBytes(), restoredData.toBytes()) ? null : "Its data comes back as other bytes";
     }
 
-    // A value at its path inside a map or a list, and how it changed or which class failed
+    // A value at its path inside a map or a list, and how it changed or which class failed. The path and how name
+    // positions, counts and classes, never a key or a value, since the event can hold personal data that an erasure
+    // from the event store doesn't reach in a log
     private record Change(String path, String how) {
     }
 
     private static @Nullable Change change(String path, @Nullable Object delivered, @Nullable Object restored) {
         if (delivered instanceof Map<?, ?> deliveredMap && restored instanceof Map<?, ?> restoredMap) {
-            if (!deliveredMap.keySet().equals(restoredMap.keySet())) {
-                return new Change(path, " comes back with the keys " + restoredMap.keySet() + " where it was delivered with " + deliveredMap.keySet());
+            Object missing = deliveredMap.keySet().stream().filter(key -> !restoredMap.containsKey(key)).findFirst().orElse(null);
+            if (missing != null || deliveredMap.size() != restoredMap.size()) {
+                return new Change(path, " comes back with " + restoredMap.size() + " keys where it was delivered with " + deliveredMap.size()
+                        + (missing == null ? "" : ", and a key that is " + described(missing) + " doesn't come back"));
             }
+            int position = 0;
             for (Map.Entry<?, ?> entry : deliveredMap.entrySet()) {
-                Change change = change(path.isEmpty() ? String.valueOf(entry.getKey()) : path + "." + entry.getKey(), entry.getValue(), restoredMap.get(entry.getKey()));
+                Change change = change(SkippedInputData.pathTo(path, "entry", position++), entry.getValue(), restoredMap.get(entry.getKey()));
                 if (change != null) {
                     return change;
                 }
@@ -1399,7 +1413,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 return new Change(path, " comes back with " + restoredList.size() + " elements where it was delivered with " + deliveredList.size());
             }
             for (int i = 0; i < deliveredList.size(); i++) {
-                Change change = change(path + "[" + i + "]", deliveredList.get(i), restoredList.get(i));
+                Change change = change(SkippedInputData.pathTo(path, "element", i), deliveredList.get(i), restoredList.get(i));
                 if (change != null) {
                     return change;
                 }
@@ -1625,14 +1639,21 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 return null;
             }
             FindOneAndDeleteOptions quarantineIdOnly = new FindOneAndDeleteOptions().projection(Projections.include(FAILURE_QUARANTINE_ID));
+            // Set by the attempt that commits, since a transaction run again overwrites what an attempt that aborted set
+            AtomicReference<String> deletedQuarantineId = new AtomicReference<>();
+            AtomicLong deletedRecords = new AtomicLong();
             inTransaction(database -> {
                 Document removed = instances(database).findOneAndDelete(Filters.eq(ID, sagaId), quarantineIdOnly);
                 String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
-                if (quarantineId != null) {
-                    deleteRecords(database, quarantineFilter(sagaId, quarantineId));
-                }
+                deletedQuarantineId.set(quarantineId);
+                deletedRecords.set(quarantineId == null ? 0 : deleteRecords(database, quarantineFilter(sagaId, quarantineId)));
                 return true;
             });
+            // Inside a transaction of the caller's this logs a delete the caller may still roll back
+            if (deletedQuarantineId.get() != null) {
+                log.warn("Saga instance '{}' is deleted while it is quarantined, and with it the {} inputs it recorded as skipped under quarantine '{}'. "
+                         + "No release can replay them any more.", sagaId, deletedRecords.get(), deletedQuarantineId.get());
+            }
             return null;
         });
     }

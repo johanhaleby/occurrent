@@ -197,6 +197,11 @@ when:
 The message names the instance, the input and, when it's known, where in the event the difference is. A subscription
 that retries such an event stops on it.
 
+Neither that message nor the warning quotes the event. They name an attribute or an extension by its name, and a value
+in the data by its position, such as `entry 2 > element 0`, and its class. A key in a map, a field name in JSON and a
+value are left out, since they can be personal data, and a log line keeps them after the event is erased from the
+event store.
+
 The methods that read and write the records are on an interface of their own, `SagaStateStoreSkippedInputs`, which a
 store implements next to `SagaStateStore`, the way it implements `SagaStateStoreQueries`. It has no state type
 parameter, since its methods take and return an instance as a `StoredSaga`, with the state encoded already, and none
@@ -721,12 +726,15 @@ The upgrade guide has the procedure for operators, in
   in the store, and nothing reads or deletes them, since a release, a completion and a delete all go by the instance's
   current quarantine id. A 0.34.0 `delete` after a downgrade removes none of the records.
 - Deleting a quarantined instance deletes the only copy the saga has of the events it skipped. On a push source that
-  can be the only copy there is.
+  can be the only copy there is. The MongoDB store logs a WARN with the number of records it deleted. A TTL index or a
+  job that removes instances in the database deletes none of their records. The records and their chunks stay in the
+  database with no instance, where no release can replay them and nothing deletes them.
 - An event erased from the event store while an instance holds it, for a GDPR request for example, stays in its record
   until a release replays it or the instance is deleted. Erasing an event means releasing or deleting the quarantined
   instances that hold it as well. The same goes for an event redacted in place with `EventStoreOperations.updateEvent`.
   The record keeps the event as it was when the instance skipped it, and a release replays that copy, not the redacted
-  one.
+  one. Since quarantine is on by default, an application that erases or redacts events has this copy after an upgrade
+  from 0.34.0 without having changed anything.
 - A record of an input without a stream id and version, taken under `RedeliveryDetection.BEST_EFFORT`, is still
   replayed after a switch to `REQUIRED`, since `REQUIRED` refuses such an event only when it's delivered live. The
   release applies the record once, because the write that applies it takes place only while the record is there.

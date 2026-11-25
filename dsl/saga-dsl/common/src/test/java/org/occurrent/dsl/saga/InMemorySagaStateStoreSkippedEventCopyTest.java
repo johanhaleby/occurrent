@@ -64,6 +64,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -377,6 +378,25 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
 
         assertThatThrownBy(() -> skip(delivered)).isInstanceOf(IllegalStateException.class);
         assertNothingWasRecorded();
+    }
+
+    @Test
+    void the_refusal_of_json_data_names_the_position_and_the_classes_of_the_value_and_neither_a_field_name_nor_a_value_of_the_event() {
+        quarantinedInstance();
+        ObjectNode inner = new ObjectMapper().createObjectNode();
+        inner.putArray("inner-name-7c1e").add("value-4d2f").add(new byte[]{1, 2, 3});
+        ObjectNode node = new ObjectMapper().createObjectNode();
+        node.set("outer-name-9a3b", inner);
+        CloudEvent delivered = CloudEventBuilder.v1().withId("e1").withSource(URI.create("urn:test")).withType("t")
+                .withDataContentType("application/json").withData(JsonCloudEventData.wrap(node)).build();
+
+        Throwable thrown = catchThrowable(() -> skip(delivered));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("The value at 'field 0 > field 0 > element 1' of its JSON data")
+                .hasMessageContaining("BinaryNode")
+                .hasMessageContaining("TextNode")
+                .message().doesNotContain("outer-name-9a3b").doesNotContain("inner-name-7c1e").doesNotContain("value-4d2f");
     }
 
     @Test

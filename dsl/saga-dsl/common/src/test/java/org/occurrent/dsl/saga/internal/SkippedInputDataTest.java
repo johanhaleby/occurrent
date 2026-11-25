@@ -187,6 +187,57 @@ class SkippedInputDataTest {
         assertThatThrownBy(() -> SkippedInputData.fromBytes(JSON_CLOUD_EVENT_DATA, bytes)).isInstanceOf(IllegalStateException.class);
     }
 
+    @Test
+    void a_path_names_a_position_of_a_kind_inside_the_path_before_it_and_never_a_key() {
+        assertAll(
+                () -> assertThat(SkippedInputData.pathTo("", "entry", 2)).isEqualTo("entry 2"),
+                () -> assertThat(SkippedInputData.pathTo("entry 2", "element", 0)).isEqualTo("entry 2 > element 0")
+        );
+    }
+
+    @Test
+    void a_difference_in_the_number_of_fields_names_the_counts_and_no_field_name() {
+        ObjectNode delivered = new ObjectMapper().createObjectNode().put("name-5e1a", 1).put("name-8b4c", 2);
+        ObjectNode held = new ObjectMapper().createObjectNode().put("name-5e1a", 1);
+
+        String difference = SkippedInputData.difference(JsonCloudEventData.wrap(delivered), JsonCloudEventData.wrap(held));
+
+        assertThat(difference).isEqualTo("Its JSON data comes back with 1 fields where it was delivered with 2");
+    }
+
+    @Test
+    void a_number_that_comes_back_as_another_value_is_named_by_its_position_and_node_classes_and_not_by_either_value() {
+        ObjectNode delivered = new ObjectMapper().createObjectNode().put("amount-5e1a", 4242.5);
+        ObjectNode held = new ObjectMapper().createObjectNode().put("amount-5e1a", 1717.5);
+
+        String difference = SkippedInputData.difference(JsonCloudEventData.wrap(delivered), JsonCloudEventData.wrap(held));
+
+        assertThat(difference).isEqualTo("The value at 'field 0' of its JSON data, a com.fasterxml.jackson.databind.node.DoubleNode, comes back as a com.fasterxml.jackson.databind.node.DoubleNode of another value");
+    }
+
+    @Test
+    void a_value_that_comes_back_as_another_value_of_the_same_class_is_named_by_its_position_and_class_and_not_by_either_value() {
+        ObjectNode delivered = new ObjectMapper().createObjectNode().put("name-5e1a", "text-aa77");
+        ObjectNode held = new ObjectMapper().createObjectNode().put("name-5e1a", "text-bb88");
+
+        String difference = SkippedInputData.difference(JsonCloudEventData.wrap(delivered), JsonCloudEventData.wrap(held));
+
+        assertThat(difference).isEqualTo("The value at 'field 0' of its JSON data, a com.fasterxml.jackson.databind.node.TextNode, comes back as another value");
+    }
+
+    @Test
+    void json_bytes_that_cannot_be_read_are_refused_naming_the_exception_class_and_the_byte_and_neither_their_content_nor_a_cause() {
+        byte[] bytes = "{\"secret-key-5d1c\": not-json".getBytes(UTF_8);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> SkippedInputData.fromBytes(JSON_CLOUD_EVENT_DATA, bytes));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessageStartingWith("A skipped input's JSON data can't be read back from its bytes, since reading them throws com.fasterxml.jackson.core.")
+                .hasMessageContaining(" at byte ")
+                .hasNoCause()
+                .message().doesNotContain("secret-key-5d1c").doesNotContain("not-json");
+    }
+
     // Duplicate keys can't be held by an ObjectNode, so there is no delivered JsonCloudEventData to rebuild from
 
     private static ObjectNode nested(int levels) {

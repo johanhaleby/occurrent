@@ -45,6 +45,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -102,7 +103,7 @@ class SagaRecordedTheSkipTest {
     private final List<Object> dispatched = new CopyOnWriteArrayList<>();
     private final AtomicInteger eventIds = new AtomicInteger();
     private final InMemorySagaStateStore<Order> inMemory = new InMemorySagaStateStore<>();
-    private final UndecodableStore store = new UndecodableStore();
+    private final UndecodableStore store = new UndecodableStore(false);
     private final SagaEnvelopes<Order> envelopes = SagaEnvelopes.of(inMemory, null);
     private final SagaExecution<OrderEvent, Order, Object> execution =
             new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
@@ -215,11 +216,52 @@ class SagaRecordedTheSkipTest {
         );
     }
 
+    @Test
+    void on_a_store_that_cannot_record_skips_refuses_the_input_with_the_refusal_suppressed_on_the_load_failure_and_changes_nothing() {
+        quarantinedWithAnUndecodableState();
+        UndecodableStore standalone = new UndecodableStore(true);
+        standalone.undecodable = true;
+        SagaExecution<OrderEvent, Order, Object> onStandalone = new SagaExecution<>("orders", saga(), standalone, dispatched::add, converter, CONFIG, now::get);
+        StoredSaga before = inMemory.findWithoutState(ORDER).orElseThrow();
+        List<SkippedInput> recordedBefore = inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE);
+        CloudEvent live = append(new ItemAdded(nextEventId(), ORDER, "live"));
+
+        Throwable thrown = catchThrowable(() -> onStandalone.onCloudEvent(live));
+
+        StoredSaga after = inMemory.findWithoutState(ORDER).orElseThrow();
+        Throwable loadFailure = loadFailureIn(thrown);
+        assertAll(
+                () -> assertThat(thrown).as("the delivery is refused, so the subscription does not move past the input").isNotNull(),
+                () -> assertThat(loadFailure).as("the load failure propagates. " + thrown).isNotNull(),
+                () -> assertThat(Objects.requireNonNull(loadFailure).getSuppressed()).as("the refusal to record the skip is suppressed on it")
+                        .anySatisfy(suppressed -> assertThat(suppressed).isInstanceOf(IllegalStateException.class).hasMessageContaining("cannot skip the input")),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).as("nothing is recorded").isEqualTo(recordedBefore),
+                () -> assertThat(after.version()).as("the instance is unchanged").isEqualTo(before.version()),
+                () -> assertThat(standalone.skips.get()).as("no skip was written").isZero(),
+                () -> assertThat(dispatched).as("the input is not applied").doesNotContain(new Pack(ORDER, "live"))
+        );
+    }
+
+    private static @Nullable Throwable loadFailureIn(@Nullable Throwable thrown) {
+        for (Throwable t = thrown; t != null; t = t.getCause()) {
+            if (DECODE_FAILURE.equals(t.getMessage())) {
+                return t;
+            }
+        }
+        return null;
+    }
+
     private final class UndecodableStore implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
         volatile boolean undecodable;
         volatile boolean losesEverySkip;
         final AtomicInteger skips = new AtomicInteger();
         private final AtomicReference<@Nullable Runnable> beforeTheNextSkip = new AtomicReference<>();
+        // As a standalone MongoDB reports itself, which holds the data of a replica set restored onto it
+        private final boolean standalone;
+
+        UndecodableStore(boolean standalone) {
+            this.standalone = standalone;
+        }
 
         void beforeTheNextSkip(Runnable action) {
             beforeTheNextSkip.set(action);
@@ -237,6 +279,9 @@ class SagaRecordedTheSkipTest {
 
         @Override
         public void requireAtomicTransitions() {
+            if (standalone) {
+                throw new IllegalStateException("a standalone server cannot write a skip and its record atomically");
+            }
             inMemory.requireAtomicTransitions();
         }
 

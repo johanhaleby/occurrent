@@ -899,6 +899,11 @@ and the issue is [#1259](https://github.com/johanhaleby/occurrent/issues/1259).
   saga.
 - A saga on a standalone MongoDB server, with no replica set or sharded cluster, when quarantine is on. It refuses to
   start, so set `occurrent.saga.quarantine-enabled=false` or call `SagaRunnerConfig.disableQuarantine()`.
+- An application that erases or redacts events with the `deleteEventStream`, `deleteEvent`, `delete` or `updateEvent`
+  methods of `EventStoreOperations`, such as for a GDPR request. A quarantined instance now keeps a copy of every event
+  it skips, in `<collection>_skipped_inputs` and `<collection>_skipped_input_chunks`, and erasing the event from the
+  event store doesn't delete that copy. Release or delete the quarantined instances that hold an event before you
+  erase it, as [the quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes.
 - A `SagaStateStore` of your own.
 - An instance that 0.34.0 quarantined.
 - A record pattern over `SagaFailure` or `SagaEnvelope`.
@@ -965,8 +970,10 @@ deadline that cancels or re-arms the timer means the timeout never fires.
 
 The records are the only copy of the skipped events that the saga keeps. Deleting a quarantined instance with
 `SagaStateStore.delete(sagaId)` deletes its records with it, so release the instance first when the events it skipped
-matter. Erasing an event from the event store doesn't erase its copy in a record, so release or delete the quarantined
-instances before you erase an event.
+matter. The MongoDB store logs a `WARN` with the number of records it deleted. A TTL index or a retention job that
+removes quarantined instances from the collection deletes none of their records. The records stay with no instance,
+where no release can replay them and nothing deletes them, so keep quarantined instances out of such a job. Erasing an event from the event store doesn't erase its copy in a
+record, so release or delete the quarantined instances before you erase an event.
 
 `release` throws an `IllegalStateException` for an instance that 0.34.0 quarantined, since it recorded none of the
 inputs it skipped, and for an instance whose state no longer decodes, with a message that names the decoding failure.
@@ -1556,9 +1563,12 @@ timeout. The store retries a transaction that fails with the `TransientTransacti
 an `UnknownTransactionCommitResult`, both with its `RetryStrategy`. The store throws any other failure of the
 transaction at once, whatever the strategy retries, and that includes a strategy you implement yourself.
 
-The store asks the server for its deployment once, with `hello`, when it is constructed. On a standalone server,
-`SagaRunner.run` throws an `IllegalStateException` when quarantine is on, before the saga gets its first input, and a
-`@Saga` with quarantine on fails the same way while the application context starts, a push saga under
+The store asks the server for its deployment once, with `hello`, when it is constructed. So restart the application
+after you convert a standalone server to a replica set. Until then the store still refuses quarantine and skips the
+second read of an instance it doesn't find, which right after an election can make it miss an instance that exists.
+
+On a standalone server, `SagaRunner.run` throws an `IllegalStateException` when quarantine is on, before the saga
+gets its first input, and a `@Saga` with quarantine on fails the same way while the application context starts, a push saga under
 `occurrent.subscription.mode=manual` included. The message says to run MongoDB as a replica set, which can
 have a single member, or as a sharded cluster, or to turn quarantine off with `occurrent.saga.quarantine-enabled=false`
 on Spring Boot or `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner`. With quarantine off a saga runs on a
@@ -1566,10 +1576,10 @@ standalone server that journals its writes, since the runner then makes none of 
 
 An instance 0.35.0 quarantined while the data was on a replica set, such as data restored from one onto the standalone
 server, can't record the inputs it skips there. The delivery of an input it has to record as skipped fails, so
-the input isn't acknowledged and is delivered again. An input it needs no record for, such as a redelivery of one it
-applied before it was quarantined, is skipped and acknowledged as on a replica set. A subscription that delivers an
-event again before any later one, as a MongoDB subscription does, holds up every later event of that saga subscription
-meanwhile, for every instance of the saga, not only the events of the quarantined instance. That lasts until you move
+the input isn't acknowledged and is delivered again. That includes a redelivery of an input it recorded as skipped on
+the replica set, which a replica set acknowledges. A redelivery of an input it applied before it was quarantined needs
+no record, so it's skipped and acknowledged as on a replica set. A subscription that delivers an event again before
+any later one, as a MongoDB subscription does, holds up every later event of that saga subscription meanwhile, for every instance of the saga, not only the events of the quarantined instance. That lasts until you move
 the data back to a replica set and release the instance there, or delete it by hand in the database, as the
 [quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes.
 

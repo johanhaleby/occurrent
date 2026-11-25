@@ -16,7 +16,12 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -51,6 +56,7 @@ import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -227,6 +233,53 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         assertAll(
                 () -> assertThat(held.getData()).isExactlyInstanceOf(BytesCloudEventData.class),
                 () -> assertThat(requireNonNull(held.getData()).toBytes()).isEqualTo("{}".getBytes(UTF_8))
+        );
+    }
+
+    @Test
+    void the_warning_for_data_held_as_its_bytes_names_the_position_and_classes_of_the_value_and_neither_a_key_nor_a_value_of_the_event() {
+        Map<String, Object> inner = new LinkedHashMap<>();
+        inner.put("balance-key-4c8d", new BigDecimal("9876543210.987654321"));
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("orderId", ORDER);
+        data.put("holder-key-7b2e", inner);
+        CloudEvent event = baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
+        Logger storeLog = (Logger) LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        storeLog.addAppender(appender);
+        try {
+            heldAndRead(event);
+        } finally {
+            storeLog.detachAppender(appender);
+            appender.stop();
+        }
+
+        List<String> warnings = appender.list.stream().filter(logged -> logged.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage).toList();
+        assertThat(warnings).singleElement().satisfies(warning -> assertThat(warning)
+                .contains("holds the data of the input '" + KEY + "' it skips as its bytes")
+                .contains("The value at 'entry 1 > entry 0' of its data, a java.math.BigDecimal, comes back as a ")
+                .doesNotContain("balance-key-4c8d").doesNotContain("holder-key-7b2e").doesNotContain("9876543210"));
+    }
+
+    @Test
+    void the_refusal_of_json_data_that_comes_back_as_another_value_names_the_position_and_classes_and_neither_a_field_name_nor_a_value_of_the_event() {
+        ObjectNode inner = new ObjectMapper().createObjectNode();
+        inner.putArray("list-field-8a1d").add("text-value-5e11").add(new byte[]{1, 2, 3});
+        ObjectNode node = new ObjectMapper().createObjectNode();
+        node.set("holder-field-2f6e", inner);
+        CloudEvent event = baseEvent().withDataContentType("application/json").withData(JsonCloudEventData.wrap(node)).build();
+        StoredSaga instance = anInstance();
+
+        Throwable thrown = catchThrowable(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("The value at 'field 0 > field 0 > element 1' of its JSON data")
+                        .hasMessageContaining("BinaryNode")
+                        .message().doesNotContain("holder-field-2f6e").doesNotContain("list-field-8a1d").doesNotContain("text-value-5e11"),
+                () -> assertNothingWritten()
         );
     }
 
@@ -409,7 +462,7 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
 
     @Test
     void json_data_holding_a_binary_value_that_reads_back_as_text_is_refused_and_nothing_is_written() {
-        com.fasterxml.jackson.databind.node.ObjectNode node = new ObjectMapper().createObjectNode();
+        ObjectNode node = new ObjectMapper().createObjectNode();
         node.put("v", new byte[]{1, 2, 3});
         CloudEvent event = baseEvent().withDataContentType("application/json").withData(JsonCloudEventData.wrap(node)).build();
         StoredSaga instance = anInstance();

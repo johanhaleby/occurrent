@@ -470,6 +470,11 @@ another value, such as a binary value that comes back as its base64 text, or whe
 key take about 8 MiB between them and leave no room for a chunk. The message names the instance, the input and, when
 it's known, where in the event the difference is. A subscription that retries such an event stops on it.
 
+Neither that message nor the `WARN` quotes the event. A value in the data is named by its position, such as
+`entry 2 > element 0`, which counts the entries of a map, the fields of a JSON object and the elements of a list from
+0, and by its class. Look the value up in the event in the event store. After the `WARN` the record also holds the
+data's bytes in `data`.
+
 These records and their chunks are the only copy of the skipped events that the saga keeps, and erasing an event
 from the event store doesn't erase its copy here. Release or delete the quarantined instances before you erase an
 event from the event store, or a later release applies the event you erased. The same goes for an event you redact in place with
@@ -516,7 +521,10 @@ transaction on MongoDB, so a correlation id that keeps receiving events costs a 
 
 Deleting a quarantined instance deletes the only copy the saga keeps of what it skipped. The records hold the events the instance
 skipped, and both deletes below remove them with the instance, so nothing can apply those events afterwards. Release
-the instance in step 5 instead when any of them matter.
+the instance in step 5 instead when any of them matter. The Java delete logs a `WARN` with the number of records it
+deleted, and the shell commands log nothing. A TTL index or a retention job that removes instances from the
+collection deletes none of their records. The records and their chunks stay with no instance, where no release can
+replay them and nothing deletes them, so keep quarantined instances out of such a job.
 
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
 wired.
@@ -615,12 +623,16 @@ makes an instance quarantined before the decorator was put in place throw on eac
 On a standalone MongoDB server, `SpringMongoSagaStateStore` makes a saga with quarantine on refuse to start too, since
 the server refuses the transactions a quarantine writes. A saga with quarantine off works there. Set
 `occurrent.saga.quarantine-enabled=false` on the annotation path, or call `SagaRunnerConfig.disableQuarantine()` on a
-`SagaRunner`, or run MongoDB as a replica set, which can have a single member.
+`SagaRunner`, or run MongoDB as a replica set, which can have a single member. Restart the application after you
+convert a standalone server to a replica set. The store asks the server what it is once, when it's created, so until
+the restart it still refuses quarantine, and it skips the read that makes sure an instance it doesn't find right after
+an election really is missing.
 
 An instance quarantined while the data was on a replica set, such as data restored from one onto a standalone server,
-can't record the inputs it skips there. An input it needs no record for, such as a redelivery of one it applied before
-it was quarantined, is skipped and acknowledged as on a replica set. The delivery of an input it has to record as
-skipped fails, and the subscription delivers the input again. A subscription that delivers an event again before any
+can't record the inputs it skips there. A redelivery of an input it applied before it was quarantined needs no record,
+so it's skipped and acknowledged as on a replica set. Every other input addressed to it fails, a redelivery of one it
+recorded as skipped on the replica set included, which a replica set acknowledges. The subscription delivers the input
+again. A subscription that delivers an event again before any
 later one, as a MongoDB subscription does, holds up every later event of that saga subscription meanwhile, for every
 instance of the saga, not only the events of the quarantined instance. That lasts until you do one of two things.
 Move the data back to a replica set and release the instance there in step 5, or delete it by hand with the shell

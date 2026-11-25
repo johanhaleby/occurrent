@@ -17,6 +17,10 @@
 package org.occurrent.dsl.saga.mongodb.spring;
 
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import org.bson.Document;
@@ -30,6 +34,7 @@ import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
@@ -436,29 +441,32 @@ class SpringMongoSagaStateStoreReleaseTest {
     @Test
     void of_two_concurrent_quarantining_inserts_of_the_same_saga_id_exactly_one_wins_and_the_other_returns_false_without_an_error() throws Exception {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        CountDownLatch bothReady = new CountDownLatch(2);
-        CountDownLatch go = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            List<Future<Boolean>> inserts = List.of("q-a", "q-b").stream().map(quarantineId -> executor.submit(() -> {
-                SagaEnvelope<Payment> quarantined = envelope("order-race", SagaStatus.QUARANTINED, 1, failure(null, quarantineId), 1L);
-                bothReady.countDown();
-                go.await();
-                return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, quarantined, 0, quarantineId, new SkippedInput(0, quarantineId + "@1", heldEvent(quarantineId + "@1")));
-            })).toList();
-            bothReady.await();
-            go.countDown();
+            for (int round = 0; round < 30; round++) {
+                String sagaId = "order-race-insert-" + round;
+                CountDownLatch bothReady = new CountDownLatch(2);
+                CountDownLatch go = new CountDownLatch(1);
+                List<Future<Boolean>> inserts = List.of("q-a", "q-b").stream().map(quarantineId -> executor.submit(() -> {
+                    SagaEnvelope<Payment> quarantined = envelope(sagaId, SagaStatus.QUARANTINED, 1, failure(null, quarantineId), 1L);
+                    bothReady.countDown();
+                    go.await();
+                    return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, quarantined, 0, quarantineId, new SkippedInput(0, quarantineId + "@1", heldEvent(quarantineId + "@1")));
+                })).toList();
+                assertThat(bothReady.await(10, TimeUnit.SECONDS)).isTrue();
+                go.countDown();
 
-            boolean a = inserts.get(0).get(30, TimeUnit.SECONDS);
-            boolean b = inserts.get(1).get(30, TimeUnit.SECONDS);
+                boolean a = inserts.get(0).get(30, TimeUnit.SECONDS);
+                boolean b = inserts.get(1).get(30, TimeUnit.SECONDS);
 
-            String winner = requireNonNull(SagaEnvelopes.of(store, null).find("order-race").orElseThrow().quarantineId());
-            String loser = winner.equals("q-a") ? "q-b" : "q-a";
-            assertAll(
-                    () -> assertThat(a ^ b).as("exactly one insert wins").isTrue(),
-                    () -> assertThat(store.findSkippedInputs("order-race", winner, 10)).containsExactly(new SkippedInput(0, winner + "@1", heldEvent(winner + "@1"))),
-                    () -> assertThat(store.findSkippedInputs("order-race", loser, 10)).as("the losing insert records nothing").isEmpty()
-            );
+                String winner = requireNonNull(SagaEnvelopes.of(store, null).find(sagaId).orElseThrow().quarantineId());
+                String loser = winner.equals("q-a") ? "q-b" : "q-a";
+                assertAll(
+                        () -> assertThat(a ^ b).as("exactly one insert wins, a %s b %s", a, b).isTrue(),
+                        () -> assertThat(store.findSkippedInputs(sagaId, winner, 10)).containsExactly(new SkippedInput(0, winner + "@1", heldEvent(winner + "@1"))),
+                        () -> assertThat(store.findSkippedInputs(sagaId, loser, 10)).as("the losing insert records nothing").isEmpty()
+                );
+            }
         } finally {
             executor.shutdownNow();
         }
@@ -576,6 +584,47 @@ class SpringMongoSagaStateStoreReleaseTest {
                 () -> assertThat(store.findSkippedInputs("order-13", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1", heldEvent("b@1"))),
                 () -> assertThat(store.findSkippedInputs("order-14", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1", heldEvent("c@1")))
         );
+    }
+
+    @Test
+    void deleting_a_quarantined_instance_logs_one_warning_naming_it_the_number_of_records_deleted_and_its_quarantine_id() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        instances(store, "order-warn-1");
+        skip(store, "order-warn-1", QUARANTINE_ID, new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-warn-1", QUARANTINE_ID, new SkippedInput(1, "b@2", heldEvent("b@2")));
+        skip(store, "order-warn-1", "q-other", new SkippedInput(0, "c@3", heldEvent("c@3")));
+
+        List<String> warnings = warningsLoggedBy(() -> store.delete("order-warn-1"));
+
+        assertThat(warnings).singleElement().satisfies(warning -> assertThat(warning)
+                .isEqualTo("Saga instance 'order-warn-1' is deleted while it is quarantined, and with it the 2 inputs it recorded as skipped under quarantine '" + QUARANTINE_ID + "'. No release can replay them any more."));
+    }
+
+    @Test
+    void deleting_an_active_instance_logs_no_warning() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        assertThat(SagaEnvelopes.of(store, null).compareAndSave("order-warn-2", envelope("order-warn-2", SagaStatus.ACTIVE, 1, null, null), 0)).isTrue();
+
+        List<String> warnings = warningsLoggedBy(() -> store.delete("order-warn-2"));
+
+        assertAll(
+                () -> assertThat(warnings).isEmpty(),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-warn-2")).isEmpty()
+        );
+    }
+
+    private static List<String> warningsLoggedBy(Runnable action) {
+        Logger storeLog = (Logger) LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        storeLog.addAppender(appender);
+        try {
+            action.run();
+        } finally {
+            storeLog.detachAppender(appender);
+            appender.stop();
+        }
+        return appender.list.stream().filter(logged -> logged.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     @Test

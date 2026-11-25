@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.internal;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -107,6 +108,18 @@ public final class SkippedInputData {
         return JSON_CLOUD_EVENT_DATA.equals(classOf(delivered)) ? Json.difference(delivered, held) : null;
     }
 
+    /**
+     * The path to the value at {@code position} of the {@code kind} it is in, such as an entry of a map or an element of
+     * a list, inside the value at {@code path}, or at the top of the data when {@code path} is empty. A position counts
+     * from 0 in the order the map, the list or the JSON object gives its values. A path names positions and never a key,
+     * so a message built from it quotes no part of the event. The event can hold personal data, and erasing it from the
+     * event store doesn't erase a log line.
+     */
+    public static String pathTo(String path, String kind, int position) {
+        String step = kind + " " + position;
+        return path.isEmpty() ? step : path + " > " + step;
+    }
+
     // Jackson is used here alone, so it's loaded on the first JsonCloudEventData
     private static final class Json {
         // The mapper the CloudEvents JSON format reads an event with, and the same mapper reading decimals as BigDecimal
@@ -120,7 +133,10 @@ public final class SkippedInputData {
                 JsonNode exact = EXACT.readTree(bytes);
                 return JsonCloudEventData.wrap(difference("", exact, read) == null ? read : exact);
             } catch (IOException e) {
-                throw new IllegalStateException("A skipped input's JSON data can't be read back from its bytes, since " + e, e);
+                // Named by its class and where it failed alone, since Jackson's message quotes the token it couldn't read
+                String where = e instanceof JsonProcessingException processing && processing.getLocation() != null
+                        ? " at byte " + processing.getLocation().getByteOffset() : "";
+                throw new IllegalStateException("A skipped input's JSON data can't be read back from its bytes, since reading them throws " + e.getClass().getName() + where + ".");
             }
         }
 
@@ -131,12 +147,12 @@ public final class SkippedInputData {
         // Where held differs from delivered at any depth, and how, or null when every value is the same
         private static @Nullable String difference(String path, JsonNode delivered, JsonNode held) {
             if (delivered.isObject() && held.isObject()) {
-                Set<String> names = names(delivered);
-                if (!names.equals(names(held))) {
-                    return at(path) + " comes back with the fields " + names(held) + " where it was delivered with " + names;
+                if (!names(delivered).equals(names(held))) {
+                    return at(path) + " comes back with " + held.size() + " fields where it was delivered with " + delivered.size();
                 }
+                int position = 0;
                 for (Map.Entry<String, JsonNode> field : delivered.properties()) {
-                    String difference = difference(path.isEmpty() ? field.getKey() : path + "." + field.getKey(), field.getValue(), held.get(field.getKey()));
+                    String difference = difference(pathTo(path, "field", position++), field.getValue(), held.get(field.getKey()));
                     if (difference != null) {
                         return difference;
                     }
@@ -148,7 +164,7 @@ public final class SkippedInputData {
                     return at(path) + " comes back with " + held.size() + " elements where it was delivered with " + delivered.size();
                 }
                 for (int i = 0; i < delivered.size(); i++) {
-                    String difference = difference(path + "[" + i + "]", delivered.get(i), held.get(i));
+                    String difference = difference(pathTo(path, "element", i), delivered.get(i), held.get(i));
                     if (difference != null) {
                         return difference;
                     }
@@ -156,7 +172,7 @@ public final class SkippedInputData {
                 return null;
             }
             if (delivered.isNumber() && held.isNumber()) {
-                return sameNumber(delivered, held) ? null : at(path) + ", " + delivered.asText() + ", comes back as " + held.asText();
+                return sameNumber(delivered, held) ? null : at(path) + ", a " + delivered.getClass().getName() + ", comes back as a " + held.getClass().getName() + " of another value";
             }
             if (delivered.getClass() != held.getClass()) {
                 return at(path) + ", a " + delivered.getClass().getName() + ", comes back as a " + held.getClass().getName();
