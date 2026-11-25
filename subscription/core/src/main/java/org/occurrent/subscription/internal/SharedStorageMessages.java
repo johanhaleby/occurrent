@@ -46,8 +46,9 @@ public final class SharedStorageMessages {
 
     /**
      * For a message that tells someone, whatever the case, to cancel a subscription that stores a checkpoint, or to
-     * delete or replace that checkpoint. A message that gives the delete only under a condition, or as one of several
-     * choices, appends {@link #CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT} instead.
+     * delete or replace that checkpoint, on a path that has always stored one under the id. A message on a path that
+     * can have nothing stored, or that gives the delete only under a condition or as one of several choices, appends
+     * {@link #CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT} instead.
      */
     public static final String CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT = "When more than one instance runs the subscription, stop every instance,"
             + " delete its stored checkpoint or replace it with the checkpoint to start from, and start every instance again with the same start, as " + GUIDE + " describes."
@@ -55,8 +56,8 @@ public final class SharedStorageMessages {
 
     /**
      * For a message that gives a delete of the stored checkpoint, or a cancel that deletes it, only under a condition or
-     * as one of several choices. It says how to do the delete when more than one instance runs the subscription, without
-     * telling anyone to do it.
+     * as one of several choices, or on a path that can have nothing stored under the id. It says how to do the delete
+     * when more than one instance runs the subscription, without telling anyone to do it.
      */
     public static final String CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT = "To delete the stored checkpoint when more than one instance runs the subscription,"
             + " stop every instance, delete it or replace it with the checkpoint to start from, and start every instance again with the same start, as " + GUIDE + " describes."
@@ -65,10 +66,14 @@ public final class SharedStorageMessages {
     /**
      * For a message that tells someone to cancel a catch-up-then-live subscription, or to delete its catch-up marker. It
      * names the checkpoint storage that keeps the marker, since a push saga keeps its instances under the same id in its
-     * saga state store.
+     * saga state store. A catch-up can fail before any instance stored a marker, and a model built without marker
+     * storage stores none, so the delete is only for a marker that is kept. Each instance stores the marker once its own
+     * replay is done, and one that finds it skips its replay or replays only the events after it. So when one instance
+     * starts first and the others once it has stored the marker, only that instance replays the whole history.
      */
     public static final String MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT = "When more than one instance runs it, stop every instance,"
-            + " delete the catch-up marker the checkpoint storage keeps under its id, and start every instance again with the same start, as " + GUIDE + " describes.";
+            + " delete the catch-up marker the checkpoint storage keeps under its id, if it keeps one, start one instance again with the same start,"
+            + " and start the others once it has stored the marker, as " + GUIDE + " describes.";
 
     /**
      * For a message about a checkpoint stored under the id that is not a catch-up marker, which something else, such as
@@ -77,7 +82,8 @@ public final class SharedStorageMessages {
      * another component's checkpoint.
      */
     public static final String NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT = "When nothing else uses that checkpoint and more than one instance"
-            + " runs the subscription, stop every instance, delete the checkpoint, and start every instance again with the same start, as " + GUIDE + " describes.";
+            + " runs the subscription, stop every instance, delete the checkpoint, start one instance again with the same start,"
+            + " and start the others once it has stored its catch-up marker, as " + GUIDE + " describes.";
 
     /**
      * For a message that tells someone to subscribe under a new id, or to replace a catch-up-then-live subscription

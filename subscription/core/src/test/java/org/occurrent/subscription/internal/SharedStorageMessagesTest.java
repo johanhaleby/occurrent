@@ -61,17 +61,20 @@ class SharedStorageMessagesTest {
     void the_step_for_a_marker_names_the_catch_up_marker_the_checkpoint_storage_keeps_and_not_whatever_is_stored_under_the_id_and_links_the_guide() {
         assertThat(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .startsWith("When more than one instance runs it, stop every instance,")
-                .contains("delete the catch-up marker the checkpoint storage keeps under its id")
+                .contains("delete the catch-up marker the checkpoint storage keeps under its id, if it keeps one,")
+                .contains("start one instance again with the same start, and start the others once it has stored the marker, as ")
                 .doesNotContain("what is stored under")
+                .doesNotContain("start every instance again")
                 .doesNotContain(SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE)
-                .endsWith("start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.");
+                .endsWith(", as " + SharedStorageMessages.GUIDE + " describes.");
     }
 
     @Test
     void the_step_for_a_checkpoint_that_is_not_a_marker_keeps_the_condition_that_nothing_else_uses_it_and_never_asks_for_an_unconditional_delete() {
         assertThat(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .isEqualTo("When nothing else uses that checkpoint and more than one instance runs the subscription, stop every instance, delete the checkpoint,"
-                        + " and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes.")
+                        + " start one instance again with the same start, and start the others once it has stored its catch-up marker, as " + SharedStorageMessages.GUIDE + " describes.")
+                .doesNotContain("start every instance again")
                 .startsWith("When nothing else uses that checkpoint and more than one instance runs the subscription, stop every instance,")
                 .isNotEqualTo(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .doesNotContain(SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE);

@@ -215,7 +215,7 @@ class ReactorDurableMarkedCheckpointPreviousReleaseMongoTest {
                 .waitUntilStarted().block(TIMEOUT))
                 .as("what resuming from the stored marked time throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", markedTime.asString(), "replays by time", "StreamCatchupSubscriptionModel", "delete the checkpoint");
+                .hasMessageContainingAll("sub", markedTime.asString(), "replays by time", "StreamCatchupSubscriptionModel", "when it is the checkpoint stored for the subscription, delete it so that the subscription starts from its StartAt again.");
         eventStore.write("stream-B", Flux.just(event("B"))).block(TIMEOUT);
         assertThat(checkpointDocuments()).as("the checkpoints after the refusal").isEqualTo(before);
         assertThat(received).as("what the refused subscription delivered").isEmpty();

@@ -123,6 +123,7 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
     private final CopyOnWriteArrayList<String> asked = new CopyOnWriteArrayList<>();
     private final ListAppender<ILoggingEvent> modelLog = new ListAppender<>();
     private Checkpoint start;
+    private Level originalLogLevel;
 
     @BeforeEach
     void createClients() {
@@ -137,6 +138,7 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(new ReactiveMongoTemplate(mongoClient, databaseName), eventStoreConfig);
         Logger logger = (Logger) LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
+        originalLogLevel = logger.getLevel();
         logger.setLevel(Level.INFO);
         modelLog.start();
         logger.addAppender(modelLog);
@@ -144,7 +146,9 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
 
     @AfterEach
     void shutdown() {
-        ((Logger) LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class)).detachAppender(modelLog);
+        Logger logger = (Logger) LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
+        logger.detachAppender(modelLog);
+        logger.setLevel(originalLogLevel);
         modelLog.stop();
         if (subscriptionModel != null) {
             subscriptionModel.shutdown();
@@ -163,7 +167,10 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
 
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(modelLog.list).as("what the model logged about the lost history")
                 .filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("will not restart subscription"))
-                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription sub").contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription sub")
+                        .contains("Consider removing its checkpoint from the durable storage when one stores it, or use a catch-up subscription to get up to speed if needed. ")
+                        .doesNotContain("Consider removing the subscription from the durable storage")
+                        .contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)));
     }
 
     @Test
@@ -177,7 +184,9 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
 
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(modelLog.list).as("what the model logged about the lost history")
                 .filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("will not restart subscription"))
-                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("the subscription").doesNotContain("stop every instance")));
+                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("the subscription").doesNotContain("stop every instance")
+                        .contains("will not restart subscription! Consider using a catch-up subscription to get up to speed if needed.")
+                        .doesNotContain("durable storage").doesNotContain("checkpoint")));
     }
 
     @Test

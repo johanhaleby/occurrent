@@ -1375,7 +1375,8 @@ What to do:
 
 - After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. With more
   than one instance running it, stop every instance instead, delete its catch-up marker from the `CheckpointStorage`
-  you passed for catch-up markers, and start them all again with the same start, as
+  you passed for catch-up markers, start one instance again with the same start, and start the others once it has
+  stored the marker, as
   [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes. Once the catch-up marker is gone, its catch-up replays the history, the failed event and the events
   after it included. An event that no replay can bring back and nothing waits for is lost when applying it fails, or
@@ -1383,8 +1384,8 @@ What to do:
 - When deleting the marker still fails after 3 retries, the subscription or feed logs an error naming its id. Delete
   the marker stored under that id in the `CheckpointStorage` you passed for catch-up markers before you subscribe again
   or build the new feed, since a marker left in place makes that catch-up skip the replay. With more than one
-  instance running it, delete the marker with every instance stopped and start them all again with the same start,
-  as
+  instance running it, delete the marker with every instance stopped, start one instance again with the same start,
+  and start the others once it has stored the marker, as
   [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
   describes.
 - To have the call recognized, subscribe it on the thread the handler or fold was called on, by blocking on it for
@@ -2042,7 +2043,7 @@ What to do:
    With more than one instance running the subscription, stop every instance instead, delete its checkpoint or its
    catch-up marker from the `CheckpointStorage` that keeps it, and start them all again with the same start, as
    [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
-   describes.
+   describes. For a marker, start one instance first, and start the others once it has stored the marker again.
 3. A class that implements either interface stops compiling. Return `Mono<Void>`. An implementation that cancels
    synchronously and stores nothing returns `Mono.empty()`.
 4. An implementation that deletes stored state asynchronously starts the delete when the method is called, returns a

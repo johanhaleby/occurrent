@@ -137,7 +137,7 @@ class NewIdStepCopiesTest {
     }
 
     // Surefire runs in the module directory, so walk up to the directory that holds the modules
-    private static Path repositoryRoot() {
+    static Path repositoryRoot() {
         Path directory = Path.of("").toAbsolutePath();
         for (Path candidate = directory; candidate != null; candidate = candidate.getParent()) {
             if (Files.isRegularFile(candidate.resolve("AGENTS.md")) && Files.isRegularFile(candidate.resolve("subscription/core/pom.xml"))) {

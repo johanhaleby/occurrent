@@ -3758,7 +3758,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // Neither a conditional nor an unconditional delete is safe to run without knowing which the storage takes
             inPlaceOfWaiting = Mono.error(new IllegalStateException("Could not delete the stored checkpoint of cancelled subscription " + subscriptionId +
                                                                     ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again. "
-                                                                    + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT,
+                                                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT,
                     conditionUnknown));
         } else {
             Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, new LinkedHashMap<>()).sequencedKeySet()));
@@ -3831,7 +3831,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private void startDelete(String subscriptionId, Mono<Void> delete) {
         delete.subscribe(unused -> {
         }, throwable -> log.warn("Failed to delete the stored checkpoint of cancelled subscription {} before the model was shut down. Cancel it again once it runs, or a later subscribe with the subscription-model default start position resumes from that checkpoint. "
-                                                    + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, throwable));
+                                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, throwable));
     }
 
     /**

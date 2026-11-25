@@ -931,7 +931,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
             await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logged.at(Level.WARN)).as("warnings about the delete")
                     .containsOnlyOnce("Failed to delete the stored checkpoint of cancelled subscription " + SUBSCRIPTION_ID + " before the model was shut down. "
                                       + "Cancel it again once it runs, or a later subscribe with the subscription-model default start position resumes from that checkpoint. "
-                                      + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT));
+                                      + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT));
         }
     }
 

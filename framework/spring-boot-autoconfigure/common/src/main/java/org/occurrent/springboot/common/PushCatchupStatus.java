@@ -104,7 +104,8 @@ public interface PushCatchupStatus {
      * The catch-up failed and will not recover on its own. The subscription keeps its registration and refuses every
      * event afterwards, so the source redelivers rather than losing them. Fix the cause, then cancel the subscription
      * and subscribe again. With more than one instance running it, stop every instance instead, delete the catch-up
-     * marker the checkpoint storage keeps under its id, and start them all again with the same start, as
+     * marker the checkpoint storage keeps under its id, if it keeps one, start one instance again with the same start,
+     * and start the others once it has stored the marker, as
      * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
      * describes. On the reactor stack the catch-up also fails when the checkpoint stored under the id is not a catch-up
      * marker, such as a durable subscription's, and the cause says so. There is no marker to delete then, and a cancel

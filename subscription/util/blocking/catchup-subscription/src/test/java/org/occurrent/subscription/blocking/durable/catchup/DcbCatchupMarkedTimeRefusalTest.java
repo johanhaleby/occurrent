@@ -101,7 +101,7 @@ class DcbCatchupMarkedTimeRefusalTest {
         assertThatThrownBy(() -> catchup.subscribe("sub", StartAt.checkpoint(MARKED_TIME), delivered::add))
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "when it is the checkpoint stored for the subscription, delete it so that the subscription starts from its StartAt again.")
                 .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingWrittenSubscribedOrDelivered(null);
@@ -118,7 +118,7 @@ class DcbCatchupMarkedTimeRefusalTest {
         assertThatThrownBy(() -> catchup.subscribe("sub", StartAt.subscriptionModelDefault(), delivered::add))
                 .as("what subscribe throws")
                 .isInstanceOf(CatchupCannotResumeException.class)
-                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "delete the checkpoint")
+                .hasMessageContainingAll("sub", MARKED_TIME.asString(), "replays only by position", "StreamCatchupSubscriptionModel", "when it is the checkpoint stored for the subscription, delete it so that the subscription starts from its StartAt again.")
                 .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertNothingWrittenSubscribedOrDelivered(MARKED_TIME);

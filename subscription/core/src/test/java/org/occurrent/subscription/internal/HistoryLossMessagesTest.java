@@ -51,12 +51,12 @@ class HistoryLossMessagesTest {
 
     @Test
     void the_log_for_a_subscription_paused_after_a_loss_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
-        assertThat(HistoryLossMessages.TERMINAL_FAILURE_LOG).contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).contains(SharedStorageMessages.GUIDE);
+        assertThat(HistoryLossMessages.TERMINAL_FAILURE_LOG).contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).contains(SharedStorageMessages.GUIDE);
     }
 
     @Test
     void the_log_for_a_subscription_paused_after_a_live_start_loss_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
-        assertThat(HistoryLossMessages.LIVE_START_LOST_LOG).contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).contains(SharedStorageMessages.GUIDE);
+        assertThat(HistoryLossMessages.LIVE_START_LOST_LOG).contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).contains(SharedStorageMessages.GUIDE);
     }
 
     @Test
@@ -68,13 +68,13 @@ class HistoryLossMessagesTest {
 
     @Test
     void the_log_picked_for_a_loss_says_how_to_change_the_checkpoint_when_several_instances_run_it_whether_or_not_it_was_the_live_start() {
-        assertThat(HistoryLossMessages.terminalFailureLog(false)).as("a lost position").contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
-        assertThat(HistoryLossMessages.terminalFailureLog(true)).as("a lost live start").contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(HistoryLossMessages.terminalFailureLog(false)).as("a lost position").contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(HistoryLossMessages.terminalFailureLog(true)).as("a lost live start").contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     @Test
     void the_refusal_to_resume_a_subscription_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
-        assertThat(HistoryLossMessages.historyLost("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(HistoryLossMessages.historyLost("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     @Test
@@ -107,6 +107,6 @@ class HistoryLossMessagesTest {
 
     @Test
     void the_refusal_to_resume_a_subscription_whose_live_start_was_lost_says_how_to_change_the_checkpoint_when_several_instances_run_it() {
-        assertThat(HistoryLossMessages.liveStartLostOnResume("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT).hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(HistoryLossMessages.liveStartLostOnResume("id", CHECKPOINT)).hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 }

@@ -1322,7 +1322,7 @@ class StreamCatchupResumeReplayMongoTest {
         catchupB.resumeSubscription(subscriptionId);
 
         // Then the replay is held and refused once, naming the subscription and the way out
-        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(bareTime, "holds no live start");
+        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(bareTime, "holds no live start", SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT, SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     @Test
@@ -1335,7 +1335,10 @@ class StreamCatchupResumeReplayMongoTest {
         catchupB.resumeSubscription(subscriptionId);
 
         // Then the replay is held and refused once, naming the subscription and the way out
-        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(barePosition, "after position 2");
+        assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(barePosition, "after position 2", SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT, SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+        assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
+                .contains("If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ")
+                .doesNotContain("Cancel the subscription first, which deletes the checkpoint stored for it.");
     }
 
     @Test
@@ -1358,8 +1361,10 @@ class StreamCatchupResumeReplayMongoTest {
         assertThat(errorLog.thrown).as("the throwable of the held replay").singleElement().isInstanceOf(CatchupCannotResumeException.class);
         assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
                 .contains(subscriptionId).contains("from the beginning again")
-                .contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
-                .doesNotContain(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .contains("If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ")
+                .doesNotContain("Cancel the subscription first, which deletes the checkpoint stored for it.")
+                .contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(storage.read(subscriptionId)).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
         assertThat(receivedByB).as("delivered").isEmpty();
     }
@@ -2713,7 +2718,7 @@ class StreamCatchupResumeReplayMongoTest {
         storage.save(subscriptionId, stored);
     }
 
-    private void assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(Checkpoint stored, String messagePart) {
+    private void assertTheRefusedReplayIsHeldAndNothingIsStoredOrDelivered(Checkpoint stored, String messagePart, String expectedClause, String unexpectedClause) {
         await("the replay is held").atMost(10, SECONDS).untilAsserted(() -> assertThat(catchupB.hasParkedReplay(subscriptionId)).isTrue());
         assertThat(catchupB.isPaused(subscriptionId)).as("paused").isTrue();
         assertThat(catchupB.isRunning(subscriptionId)).as("running").isFalse();
@@ -2723,8 +2728,8 @@ class StreamCatchupResumeReplayMongoTest {
                 .untilAsserted(() -> assertThat(errorLog.messagesAbout(subscriptionId)).filteredOn(message -> message.contains("it was held")).hasSize(1));
         assertThat(errorLog.failures).as("the failure of the held replay").singleElement().asString()
                 .startsWith(CatchupCannotResumeException.class.getName()).contains(subscriptionId).contains(messagePart)
-                .contains(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
-                .doesNotContain(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
+                .contains(expectedClause)
+                .doesNotContain(unexpectedClause);
         assertThat(storage.read(subscriptionId)).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(stored.asString());
         assertThat(receivedByB).as("delivered").isEmpty();
     }

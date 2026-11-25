@@ -125,8 +125,9 @@ public enum RoutingOutcome {
      * Offering the same event to the same registration again gets the same answer, so a caller stops rather than
      * parking, discarding or redelivering. Recovery is a lifecycle action, cancelling the subscription and
      * subscribing again, or building a new projection feed. With more than one instance running it, recovery stops
-     * every instance instead, deletes the catch-up marker the checkpoint storage keeps under its id and starts them
-     * all again with the same start, as <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
+     * every instance instead, deletes the catch-up marker the checkpoint storage keeps under its id, if it keeps one,
+     * starts one instance again with the same start, and starts the others once it has stored the marker, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
      * describes. On the reactor stack the refusal can also come from a catch-up that found a checkpoint under the id
      * that is not a catch-up marker, such as a durable subscription's, and the error the catch-up logs says so. A
      * cancel deletes that checkpoint too, so cancel or delete it only when nothing else uses it, and otherwise replace

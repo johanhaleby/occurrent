@@ -560,7 +560,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
                 softly.assertThat(cancelEnded).as("how the cancel ended").isInstanceOf(IllegalStateException.class)
                         .hasMessage("Could not delete the stored checkpoint of cancelled subscription " + SUBSCRIPTION_ID
                                     + ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again. "
-                                    + SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                         .hasCause(evaluationFailed);
                 softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the cancel ended").isFalse();
             });

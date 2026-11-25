@@ -657,7 +657,8 @@ class StreamCatchupTakeoverLifecycleTest {
         assertThat(logged.events).filteredOn(event -> event.getFormattedMessage().contains("again after the catch-up took it over")).singleElement().satisfies(event ->
                 assertThat(event.getFormattedMessage())
                         .contains("No replay of the catch-up resumes it now. The subscription model holds the subscription paused until it is resumed.")
-                        .contains("If the subscription model loses that position again, cancel the subscription, which deletes the checkpoint stored for it, and subscribe it again.")
+                        .contains("If the subscription model loses that position again, cancel the subscription, which deletes any checkpoint stored for it, and subscribe it again.")
+                        .doesNotContain("which deletes the checkpoint stored for it")
                         .doesNotContain("cancel the subscription and subscribe it again.")
                         .endsWith(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                         .doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT));

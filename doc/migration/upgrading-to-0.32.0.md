@@ -549,8 +549,8 @@ release the registration instead, which freed the subscription id but meant your
 event into a projection that received nothing, and your broker then discarded them. Now the acknowledgement fails, so
 the source holds the backlog. Fix the cause, call `cancelSubscription(..)` to release the id, and subscribe again. The
 fresh `subscribe(...)` replays the whole history when nothing is recorded as caught up for the id. With more than one
-instance running the subscription, stop every instance instead, delete its catch-up marker and start them all again
-with the same start, as
+instance running the subscription, stop every instance instead, delete its catch-up marker, start one instance again
+with the same start, and start the others once it has stored the marker, as
 [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
 describes.
 
