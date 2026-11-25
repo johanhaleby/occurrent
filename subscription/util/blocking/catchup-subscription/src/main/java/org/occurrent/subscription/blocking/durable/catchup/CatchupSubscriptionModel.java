@@ -389,8 +389,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public void start(boolean resumeSubscriptionsAutomatically) {
         anyCatchupModel().runInTurn(this, "start(..)", () -> {
             long shutdownsBegunBefore = anyCatchupModel().shutdownsBegun(this);
+            AbstractCatchupSubscriptionModel.LifecycleCall call = anyCatchupModel().startBegins();
             Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
-            presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
+            presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart(call)));
             final AbstractCatchupSubscriptionModel replaysOnResume;
             try {
                 replaysOnResume = resumeSubscriptionsAutomatically
@@ -400,7 +401,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 undoStart(attempts, e);
                 throw e;
             }
-            anyCatchupModel().startUnlessStoppedFromInside(this, this::stopTheReplaysAndTheLiveDelegate, () -> {
+            anyCatchupModel().startUnlessStoppedFromInside(this, call, shutdownsBegunBefore, this::stopTheReplaysAndTheLiveDelegate, getWrappedSubscriptionModel()::stop, () -> {
                 try {
                     anyCatchupModel().startTheLiveDelegate(this, shutdownsBegunBefore, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null));
                 } catch (Throwable e) {
@@ -408,9 +409,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                     throw e;
                 }
                 // A shutdown that didn't wait for this start has forgotten the catch-ups by now, so nothing is resumed
-                // after it. A stop() made from inside this start has stopped the model, so nothing is resumed after it
-                // either
-                if (anyCatchupModel().shuttingDown || anyCatchupModel().stoppedSinceTheLastStart()) {
+                // after it. A stop() made from inside this start has stopped the delegate, so nothing is resumed after
+                // it either. A stopReplay() of a child made there leaves the delegate running, and the resumes go on
+                if (anyCatchupModel().shutDownSince(this, shutdownsBegunBefore) || anyCatchupModel().lastCallSince(call).liveDelegateStopped()) {
                     return;
                 }
                 // Each also when an earlier one throws, so a parked replay whose claim fails holds up no other subscription
@@ -420,7 +421,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 }
                 if (replaysOnResume != null) {
                     resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), id -> {
-                        if (!anyCatchupModel().shuttingDown && !anyCatchupModel().stoppedSinceTheLastStart()) {
+                        if (!anyCatchupModel().shutDownSince(this, shutdownsBegunBefore) && !anyCatchupModel().lastCallSince(call).liveDelegateStopped()) {
                             resumeSubscription(id);
                         }
                     }));

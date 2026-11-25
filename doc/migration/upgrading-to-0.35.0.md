@@ -2989,8 +2989,11 @@ the catch-up is not affected.
   doesn't call the wrapped model's `start(..)` when the `stop()` came before it. When the `stop()` came from inside the
   wrapped model's `start(..)`, or from a method of the wrapped model the start calls after it, the start stops the
   model once more before it returns, since the wrapped model may have started after all. A `start(..)` made on the same
-  thread after that `stop()` starts the model again. A `stop()` from a `CatchupListener` still throws
-  `IllegalStateException` and changes nothing.
+  thread after that `stop()` starts the model again, unless it throws and stops the model again, as a start does when
+  the wrapped model's `start(..)` throws. The model then ends stopped as after the `stop()`. A start made after a
+  `shutdown()` has returned handles such a `stop()` the same way. A `resumeReplay()` made on the same thread after the
+  `stop()` lets replays run again, and the start then stops only the wrapped model once more. A `stop()` from a
+  `CatchupListener` still throws `IllegalStateException` and changes nothing.
 * Code the caller supplied, a `StartAt.dynamic(..)` function or a `CatchupListener`, can run under the model's lock.
   Two examples are the function of a subscribe handed over from an action, and a listener that a
   `resumeSubscription(id)` calls when it relaunches a parked replay. While such code runs there, each of the waits

@@ -127,7 +127,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private final AtomicLong handedShutdownsReturned;
     private final AtomicLong callersCodeUnderTheLockSince;
     private final ConcurrentMap<Object, LiveDelegateCalls> liveDelegateCalls;
-    private final AtomicBoolean stoppedSinceTheLastStart;
+    private final AtomicReference<LifecycleCall> lastLifecycleCall;
     // Moves on with every start and stop, so a start whose live delegate failed can tell whether another came after it
     private long lifecycleGeneration = 0;
     // Moves on with every stop, so a call to the wrapped model can tell whether a stop came while it ran
@@ -324,7 +324,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.handedShutdownsReturned = sharedState.handedShutdownsReturned;
         this.callersCodeUnderTheLockSince = sharedState.callersCodeUnderTheLockSince;
         this.liveDelegateCalls = sharedState.liveDelegateCalls;
-        this.stoppedSinceTheLastStart = sharedState.stoppedSinceTheLastStart;
+        this.lastLifecycleCall = sharedState.lastLifecycleCall;
         HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.addHistoryLossListener(historyLossListener));
     }
 
@@ -369,9 +369,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final AtomicLong callersCodeUnderTheLockSince = new AtomicLong();
         // The calls to the live delegate's start(..) and shutdown() of each model that makes them
         private final ConcurrentMap<Object, LiveDelegateCalls> liveDelegateCalls = new ConcurrentHashMap<>();
-        // Whether a stop() of these children or of their dispatcher has run since the last start(..) of them began.
-        // Written and read under modelLock
-        private final AtomicBoolean stoppedSinceTheLastStart = new AtomicBoolean();
+        // The last lifecycle call of these children or of their dispatcher that started or stopped them, as
+        // LifecycleCall describes. Read under modelLock, and written there too, except when liveDelegateResumed() starts
+        // a model a failed start stopped again
+        private final AtomicReference<LifecycleCall> lastLifecycleCall = new AtomicReference<>(new LifecycleCall(0, false, false));
     }
 
     // The start(..) and shutdown() calls a model makes to its live delegate, so a shutdown() can end a start(..) that the
@@ -1018,7 +1019,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * from a method of the live delegate this start calls after it, this start runs the stop again once those calls and the
      * resumes have returned or thrown, before this start returns or throws, since the live delegate may have started after
      * the stop. That second stop doesn't change what this start returns or throws, and when it throws, it is logged at
-     * {@code ERROR}. A {@code start(..)} made on the same thread after the stop starts the model again.
+     * {@code ERROR}. A {@code start(..)} made on the same thread after the stop starts the model again. When that start
+     * throws and the model stops again, as it does when the live delegate throws, the model ends stopped all the same.
+     * <p>
+     * A {@link #stopReplay()} made on the thread of this start leaves the live delegate running, and this start goes on
+     * to resume subscriptions. A subscription it resumes one at a time, as described above, is resumed as
+     * {@link #resumeSubscription(String)} resumes it, which starts the model again when it finds the model stopped. A
+     * {@link #resumeReplay()} made there after a stop made there lets replays run again, and this
+     * start then stops only the live delegate again.
      *
      * @throws IllegalStateException when called on a thread that runs a replay of this model outside the subscriber's
      *                               action, such as in a {@link CatchupListener}, or from a thread on which the model
@@ -1030,7 +1038,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void start(boolean resumeSubscriptionsAutomatically) {
         runInTurn(this, "start(..)", () -> {
             long shutdownsBegunBefore = shutdownsBegun(this);
-            StartAttempt attempt = beginStart();
+            LifecycleCall call = startBegins();
+            StartAttempt attempt = beginStart(call);
             final boolean resumeEachHere;
             try {
                 resumeEachHere = resumeSubscriptionsAutomatically && anyResumeReplays();
@@ -1038,7 +1047,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e), e);
                 throw e;
             }
-            startUnlessStoppedFromInside(this, this::stopTheReplaysAndTheLiveDelegate, () -> {
+            startUnlessStoppedFromInside(this, call, shutdownsBegunBefore, this::stopTheReplaysAndTheLiveDelegate, getWrappedSubscriptionModel()::stop, () -> {
                 try {
                     startTheLiveDelegate(this, shutdownsBegunBefore, () -> getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere));
                 } catch (Throwable e) {
@@ -1046,9 +1055,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     throw e;
                 }
                 // A shutdown that didn't wait for this start has forgotten the catch-ups by now, so nothing is resumed
-                // after it. A stop() made from inside this start has stopped the model, so nothing is resumed after it
-                // either
-                if (shuttingDown || stoppedSinceTheLastStart()) {
+                // after it. A stop() made from inside this start has stopped the live delegate, so nothing is resumed
+                // after it either. A stopReplay() made there leaves the live delegate running, and the resumes go on
+                if (shutDownSince(this, shutdownsBegunBefore) || lastCallSince(call).liveDelegateStopped()) {
                     return;
                 }
                 List<Runnable> resumes = new ArrayList<>();
@@ -1057,7 +1066,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
                 if (resumeEachHere) {
                     resumes.add(() -> resumeEach(subscriptionsTheLiveDelegateHoldsPaused(), id -> {
-                        if (!shuttingDown && !stoppedSinceTheLastStart()) {
+                        if (!shutDownSince(this, shutdownsBegunBefore) && !lastCallSince(call).liveDelegateStopped()) {
                             resumeSubscription(id);
                         }
                     }));
@@ -4426,6 +4435,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 stoppedByFailedStart = false;
                 lifecycleGeneration++;
             }
+            // Keeps what the call before recorded for the live delegate, which this doesn't touch
+            lastLifecycleCall.updateAndGet(last -> last.next(false, last.liveDelegateStopped()));
         });
     }
 
@@ -4801,50 +4812,95 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Records, under the model lock, that a {@code stop()} of these children or of their dispatcher runs, so a
-     * {@code start(..)} that holds the lock can tell that the stop was made on its thread, from code it ran.
+     * The last call that stopped or started these children, their replays or their dispatcher, numbered in the order
+     * such calls came, and whether it left the replays and the live delegate stopped. A {@code stop()} leaves both
+     * stopped. A {@code start(..)} leaves neither stopped, and neither does a resume of the live delegate that starts a
+     * model a failed start stopped again. A {@link #resumeReplay()} leaves the replays running and doesn't change what
+     * the call before left the live delegate. A {@code start(..)} that throws and stops the model again, as
+     * {@link #undoStart} describes, turns its own call into one that leaves both stopped. A {@link #stopReplay()} isn't
+     * recorded, since a start goes on past one made from inside it, as {@link #start(boolean)} describes.
+     * <p>
+     * Every {@code start(..)}, {@code stop()} and {@link #resumeReplay()} runs under the model lock, so while a start
+     * holds it, such a call numbered after the start was made on the start's own thread from code the start ran, such
+     * as a {@code StartAt.dynamic} function or a method of the live delegate.
      */
-    void stopBegins() {
-        stoppedSinceTheLastStart.set(true);
+    record LifecycleCall(long number, boolean replaysStopped, boolean liveDelegateStopped) {
+        private LifecycleCall next(boolean replaysStopped, boolean liveDelegateStopped) {
+            return new LifecycleCall(number + 1, replaysStopped, liveDelegateStopped);
+        }
     }
 
     /**
-     * Whether a {@code stop()} of these children or of their dispatcher has run since the last {@code start(..)} of them
-     * began, read under the model lock. Every {@code start(..)} and {@code stop()} runs under it, so while a start holds
-     * it, such a stop was made on the start's own thread from code the start ran, such as a {@code StartAt.dynamic}
-     * function or a method of the live delegate, and no other start began after it.
+     * Records that a {@code stop()} of these children or of their dispatcher runs.
      */
-    boolean stoppedSinceTheLastStart() {
-        return stoppedSinceTheLastStart.get();
+    void stopBegins() {
+        lastLifecycleCall.updateAndGet(last -> last.next(true, true));
+    }
+
+    /**
+     * Records that a {@code start(..)} of these children or of their dispatcher begins, and returns the call to hand to
+     * {@link #beginStart(LifecycleCall)} of each child it starts.
+     */
+    LifecycleCall startBegins() {
+        return lastLifecycleCall.updateAndGet(last -> last.next(false, false));
+    }
+
+
+    /**
+     * The last call that stopped or started these children, their replays or their dispatcher since {@code start}
+     * began, read under the model lock {@code start} holds, or {@code start} itself when none came since. A start made
+     * from inside {@code start} that threw and stopped the model again counts as a call that left both stopped, as
+     * {@link LifecycleCall} describes, but {@code start}'s own failure doesn't, and neither does a stop that came before
+     * {@code start}.
+     */
+    LifecycleCall lastCallSince(LifecycleCall start) {
+        LifecycleCall last = lastLifecycleCall.get();
+        return last.number() > start.number() ? last : start;
     }
 
     /**
      * Runs {@code start}, the rest of a {@code start(..)} of {@code model} from the live delegate's {@code start(..)} on,
      * under the model lock, so that a {@code stop()} made from inside the start takes effect as if it came after the
-     * start, as {@link #stoppedSinceTheLastStart} tells.
+     * start, as {@link #lastCallSince} tells for {@code call}, the start's own call.
      * <p>
-     * When such a stop came before this, from code the start ran so far, it has stopped the model and the live delegate,
-     * and {@code start} doesn't run. When one comes while {@code start} runs, the live delegate's {@code start(..)} or a
-     * resume may go on after the stop has returned, so once {@code start} has returned or thrown, this runs {@code stop},
-     * the body of {@code model}'s {@code stop()}, again before it returns or rethrows. A {@code shutdown()} under way by
-     * then ends the live delegate itself, and {@code stop} doesn't run. What {@code stop} throws is logged at
-     * {@code ERROR} naming {@code model}, and the start's own outcome stands.
+     * When the last such call before this left the live delegate stopped, {@code start} doesn't run. When the last
+     * such call left it stopped once {@code start} has returned or thrown, the live delegate's {@code start(..)} or a
+     * resume may have gone on after that call, so this runs {@code stop}, the body of {@code model}'s {@code stop()}, again before it
+     * returns or rethrows, or only {@code stopTheLiveDelegate} when a {@link #resumeReplay()} came after that stop. So
+     * this stops nothing when a start made from inside since started the model again, and does stop when one made there
+     * threw and stopped the model again. A {@code shutdown()} under way, or begun since the start read
+     * {@code shutdownsBegunBefore}, ends the live delegate itself, and nothing is stopped again then. One that returned
+     * before the start began doesn't count. What that stop throws is logged at {@code ERROR} naming {@code model}, and
+     * the start's own outcome stands.
      */
-    void startUnlessStoppedFromInside(Object model, Runnable stop, Runnable start) {
-        if (stoppedSinceTheLastStart()) {
+    void startUnlessStoppedFromInside(Object model, LifecycleCall call, long shutdownsBegunBefore, Runnable stop, Runnable stopTheLiveDelegate, Runnable start) {
+        if (lastCallSince(call).liveDelegateStopped()) {
             return;
         }
         try {
             start.run();
         } finally {
-            if (stoppedSinceTheLastStart() && !shuttingDown) {
+            LifecycleCall last = lastCallSince(call);
+            if (last.liveDelegateStopped() && !shutDownSince(model, shutdownsBegunBefore)) {
                 try {
-                    stop.run();
+                    (last.replaysStopped() ? stop : stopTheLiveDelegate).run();
                 } catch (Throwable e) {
                     // Every Throwable, since the stop it belongs to has returned, and the start's own outcome stands
                     log.error("stop() of {}, made from inside a start(..) of it and run again once that start had gone on past it, threw", model, e);
                 }
             }
+        }
+    }
+
+    /**
+     * Whether a {@code shutdown()} of {@code model} is under way, or one has begun since a {@code start(..)} of it read
+     * {@code shutdownsBegunBefore} from {@link #shutdownsBegun}. A shutdown that returned before that start began
+     * doesn't count, so a start made after one starts the model as any other start does.
+     */
+    boolean shutDownSince(Object model, long shutdownsBegunBefore) {
+        LiveDelegateCalls calls = liveDelegateCalls.computeIfAbsent(model, ignored -> new LiveDelegateCalls());
+        synchronized (calls) {
+            return calls.shutdowns > 0 || calls.shutdownsBegun != shutdownsBegunBefore;
         }
     }
 
@@ -4869,7 +4925,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     void startTheLiveDelegate(Object model, long shutdownsBegunBefore, Runnable start) {
         LiveDelegateCalls calls = liveDelegateCalls.computeIfAbsent(model, ignored -> new LiveDelegateCalls());
         synchronized (calls) {
-            if (calls.shutdowns > 0 || calls.shutdownsBegun != shutdownsBegunBefore) {
+            if (shutDownSince(model, shutdownsBegunBefore)) {
                 return;
             }
             calls.starts++;
@@ -5144,20 +5200,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Whether a start found this model stopped, and where the lifecycle and the resumes of the live delegate stood
-     * once it allowed replays to run again.
+     * The call of a start, whether it found this model stopped, and where the lifecycle and the resumes of the live
+     * delegate stood once it allowed replays to run again.
      */
-    record StartAttempt(boolean wasStopped, long generation, long liveDelegateResumes) {
+    record StartAttempt(LifecycleCall call, boolean wasStopped, long generation, long liveDelegateResumes) {
     }
 
     /**
      * Allows the next replay on this model to run, as {@link #resumeReplay()} does, before the live delegate is
-     * started. Hand the result to {@link #undoStart(StartAttempt, boolean, Throwable)} when that start throws.
+     * started for {@code call}, which {@link #startBegins()} returned. Hand the result to
+     * {@link #undoStart(StartAttempt, boolean, Throwable)} when that start throws.
      */
-    StartAttempt beginStart() {
-        stoppedSinceTheLastStart.set(false);
+    StartAttempt beginStart(LifecycleCall call) {
         synchronized (lifecycleLock) {
-            StartAttempt attempt = new StartAttempt(stopped, ++lifecycleGeneration, liveDelegateResumes);
+            StartAttempt attempt = new StartAttempt(call, stopped, ++lifecycleGeneration, liveDelegateResumes);
             stopped = false;
             stoppedByFailedStart = false;
             return attempt;
@@ -5203,6 +5259,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             stoppedByFailedStart = true;
             lifecycleGeneration++;
             stops++;
+            // Turns this start's own call into a stop, so an outer start that ran this start reads it as a stop made
+            // from inside. No later call is overwritten, since each moves the generation checked above. Another child of
+            // a dispatcher may have turned it first
+            lastLifecycleCall.compareAndSet(attempt.call(), new LifecycleCall(attempt.call().number(), true, true));
         }
         List<ActionInFlight> admitted = new ArrayList<>();
         try {
@@ -5227,6 +5287,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 stopped = false;
                 stoppedByFailedStart = false;
                 lifecycleGeneration++;
+                startBegins();
             }
         }
     }

@@ -74,6 +74,7 @@ class CatchupSubscriptionModelStopFromInsideAStartTest {
     private ExecutorService executor;
     private final AtomicBoolean acted = new AtomicBoolean();
     private final AtomicReference<@Nullable Throwable> actionThrew = new AtomicReference<>();
+    private final AtomicReference<@Nullable Throwable> nestedStartFailure = new AtomicReference<>();
     private final List<String> delivered = new CopyOnWriteArrayList<>();
 
     @BeforeEach
@@ -222,6 +223,203 @@ class CatchupSubscriptionModelStopFromInsideAStartTest {
         assertThat(model.isRunning("second")).as("whether second runs once the start returned").isFalse();
     }
 
+    @Test
+    @Timeout(40)
+    void a_failed_start_made_from_inside_the_wrapped_start_after_a_stop_leaves_each_child_stopped_and_the_wrapped_model_not_running_once_the_outer_wrapped_start_went_on_and_returned() throws Exception {
+        // Given
+        givenAWrappedStartThatStopsTheModelAndRunsAStartWhoseWrappedStartFails();
+
+        // When
+        start();
+
+        // Then
+        assertThat(acted).as("whether the wrapped start of the outer start ran the stop and the nested start").isTrue();
+        assertThat(actionThrew.get()).as("what the stop and the nested start called from inside the wrapped start threw").isNull();
+        assertThat(nestedStartFailure.get()).as("what the nested start threw, which it must for the model to stop again").isNotNull();
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the outer start returned, after its own wrapped start went on past the nested start").isFalse();
+        assertThat(wrapped.stops.get()).as("the stops the wrapped model got, one from the stop and one after the outer wrapped start went on").isEqualTo(2);
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped once the outer start returned").containsOnly(true);
+    }
+
+    @Test
+    @Timeout(40)
+    void a_start_after_a_failed_start_made_from_inside_the_wrapped_start_after_a_stop_starts_the_wrapped_model_and_each_child_again() throws Exception {
+        // Given
+        givenAWrappedStartThatStopsTheModelAndRunsAStartWhoseWrappedStartFails();
+        start();
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs after the outer start").isFalse();
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped after the outer start").containsOnly(true);
+
+        // When
+        start();
+
+        // Then
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped once the later start returned").containsOnly(false);
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the later start returned").isTrue();
+    }
+
+    @Test
+    @Timeout(40)
+    void a_stop_called_from_inside_the_wrapped_start_of_a_start_made_after_a_completed_shutdown_leaves_each_child_stopped_and_the_wrapped_model_not_running() throws Exception {
+        // Given
+        givenAShutdownThatCompletedAndAWrappedStartThatStopsTheModel();
+
+        // When
+        start();
+
+        // Then
+        assertThat(acted).as("whether the wrapped start ran the stop of the catch-up model").isTrue();
+        assertThat(actionThrew.get()).as("what the stop called from inside the wrapped start threw").isNull();
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the start returned, after its own start went on past the stop").isFalse();
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped once the start returned").containsOnly(true);
+    }
+
+    @Test
+    @Timeout(40)
+    void a_start_after_a_stop_called_from_inside_the_wrapped_start_of_a_start_made_after_a_completed_shutdown_starts_the_wrapped_model_and_each_child_again() throws Exception {
+        // Given
+        givenAShutdownThatCompletedAndAWrappedStartThatStopsTheModel();
+        start();
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs after the start that stopped the model").isFalse();
+
+        // When
+        start();
+
+        // Then
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped once the later start returned").containsOnly(false);
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the later start returned").isTrue();
+    }
+
+    @Test
+    @Timeout(40)
+    void a_stop_replay_of_each_child_called_from_inside_the_wrapped_start_leaves_each_child_started_and_resumes_the_subscription_the_wrapped_model_holds_paused_when_the_start_resumes_it_one_at_a_time() throws Exception {
+        // Given
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        model = new CatchupSubscriptionModel(wrapped, new InMemoryEventStore(inMemory), new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        AtomicBoolean armed = new AtomicBoolean();
+        // A non-null position and a stored one make the start resume this subscription itself, one at a time, after the wrapped start
+        model.subscribe("subscription", null, StartAt.dynamic(() -> armed.get() && wrapped.starts.get() == 0 ? StartAtTime.beginningOfTime() : null), event -> {
+        });
+        model.pauseSubscription("subscription");
+        storage.save("subscription", new StringBasedCheckpoint(CatchupCheckpoints.format(1, 1, 3, new StringBasedCheckpoint("token-1"))));
+        model.stop();
+        armed.set(true);
+        int stopsBeforeTheStart = wrapped.stops.get();
+        wrapped.beforeStart = () -> {
+            if (acted.compareAndSet(false, true)) {
+                runCatching(() -> children().forEach(AbstractCatchupSubscriptionModel::stopReplay));
+            }
+        };
+
+        // When
+        start();
+
+        // Then
+        assertThat(acted).as("whether the wrapped start ran the stopReplay of each child").isTrue();
+        assertThat(actionThrew.get()).as("what the stopReplay of each child called from inside the wrapped start threw").isNull();
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped once the start returned, the stopReplay having come before the start in the serial order").containsOnly(false);
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the start returned").isTrue();
+        assertThat(wrapped.resumed).as("the subscriptions the start resumed after the stopReplay").contains("subscription");
+        assertThat(wrapped.stops.get()).as("the stops the wrapped model got during the start").isEqualTo(stopsBeforeTheStart);
+    }
+
+    @Test
+    @Timeout(40)
+    void a_stop_replay_of_each_child_called_from_inside_the_wrapped_start_leaves_each_child_stopped_for_replays_and_the_wrapped_model_running_when_the_start_resumes_no_subscription_one_at_a_time() throws Exception {
+        // Given
+        int stopsBeforeTheStart = wrapped.stops.get();
+        wrapped.beforeStart = () -> {
+            if (acted.compareAndSet(false, true)) {
+                runCatching(() -> children().forEach(AbstractCatchupSubscriptionModel::stopReplay));
+            }
+        };
+
+        // When
+        start();
+
+        // Then
+        assertThat(acted).as("whether the wrapped start ran the stopReplay of each child").isTrue();
+        assertThat(actionThrew.get()).as("what the stopReplay of each child called from inside the wrapped start threw").isNull();
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped for replays once the start returned, the stopReplay having come after the start in the serial order").containsOnly(true);
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the start returned, a stopReplay not stopping it").isTrue();
+        assertThat(wrapped.stops.get()).as("the stops the wrapped model got during the start").isEqualTo(stopsBeforeTheStart);
+
+        // And when a later start runs
+        String history = write();
+        model.subscribe("late", null, StartAtTime.beginningOfTime(), event -> delivered.add(event.getId()));
+        start();
+        assertThatTheHistoryIsReplayedAndTheSubscriptionIsLive(history);
+    }
+
+
+    @Test
+    @Timeout(40)
+    void a_stop_followed_by_a_resume_replay_of_each_child_from_inside_the_wrapped_start_leaves_the_wrapped_model_stopped_and_each_child_not_stopped_once_the_start_returns() throws Exception {
+        // Given
+        wrapped.beforeStart = () -> {
+            if (acted.compareAndSet(false, true)) {
+                runCatching(() -> {
+                    model.stop();
+                    children().forEach(AbstractCatchupSubscriptionModel::resumeReplay);
+                });
+            }
+        };
+        String history = write();
+
+        // When
+        start();
+
+        // Then
+        assertThat(acted).as("whether the wrapped start ran the stop and the resumeReplay of each child").isTrue();
+        assertThat(actionThrew.get()).as("what the stop and the resumeReplay of each child called from inside the wrapped start threw").isNull();
+        assertThat(stoppedOfEachChild()).as("whether each child is stopped once the start returned, a replay a subscribe starts having to run at once").containsOnly(false);
+        assertThat(wrapped.isRunning()).as("whether the wrapped model runs once the start returned, after its own start went on past the stop").isFalse();
+        assertThat(wrapped.stops.get()).as("the stops the wrapped model got, one from the stop and one after the wrapped start went on").isEqualTo(2);
+        model.subscribe("late", null, StartAtTime.beginningOfTime(), event -> delivered.add(event.getId()));
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> assertThat(delivered).as("the events a replay delivered to a subscription made after the start").contains(history));
+    }
+
+    private void givenAWrappedStartThatStopsTheModelAndRunsAStartWhoseWrappedStartFails() {
+        wrapped.beforeStart = () -> {
+            int call = wrapped.starts.get();
+            if (call == 1) {
+                acted.set(true);
+                runCatching(() -> {
+                    model.stop();
+                    try {
+                        model.start(false);
+                    } catch (IllegalStateException e) {
+                        nestedStartFailure.set(e);
+                    }
+                });
+            } else if (call == 2) {
+                throw new IllegalStateException("the wrapped start of the nested start fails");
+            }
+        };
+    }
+
+    private void givenAShutdownThatCompletedAndAWrappedStartThatStopsTheModel() throws Exception {
+        start();
+        model.shutdown();
+        wrapped.beforeStart = () -> {
+            if (acted.compareAndSet(false, true)) {
+                runCatching(model::stop);
+            }
+        };
+    }
+
+    private List<AbstractCatchupSubscriptionModel> children() {
+        return Stream.of("streamCatchupSubscriptionModel", "agnosticCatchupSubscriptionModel").map(name -> {
+            try {
+                Field field = CatchupSubscriptionModel.class.getDeclaredField(name);
+                field.setAccessible(true);
+                return (AbstractCatchupSubscriptionModel) field.get(model);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        }).toList();
+    }
+
     private void givenAStoppedModelWhoseHeldPausedSubscriptionHasAStartAtFunctionThatRuns(Runnable onTheFirstAsk) throws Exception {
         AtomicBoolean armed = new AtomicBoolean();
         model.subscribe("subscription", null, StartAt.dynamic(() -> {
@@ -296,6 +494,8 @@ class CatchupSubscriptionModelStopFromInsideAStartTest {
     private static final class HookedLiveSubscriptionModel implements CheckpointAwareSubscriptionModel {
         private final InMemorySubscriptionModel delegate;
         final AtomicInteger starts = new AtomicInteger();
+        final AtomicInteger stops = new AtomicInteger();
+        final List<String> resumed = new CopyOnWriteArrayList<>();
         volatile Runnable beforeStart = () -> {
         };
         volatile Runnable beforeIsPaused = () -> {
@@ -317,6 +517,7 @@ class CatchupSubscriptionModelStopFromInsideAStartTest {
 
         @Override
         public void stop() {
+            stops.incrementAndGet();
             delegate.stop();
         }
 
@@ -345,6 +546,7 @@ class CatchupSubscriptionModelStopFromInsideAStartTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
+            resumed.add(subscriptionId);
             return delegate.resumeSubscription(subscriptionId);
         }
 

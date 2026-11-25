@@ -361,11 +361,27 @@ such as `isPaused(..)`, the stop keeps the start from resuming anything after it
 and the resumes have returned or thrown, the start makes the whole stop again under the lock, because the wrapped model
 may have gone on to start after the stop returned. The start returns or throws what it would have without the stop, and
 a throw from the repeated stop is logged at `ERROR`. A `start(..)` made on the same thread after that stop is the later
-call, and the model ends started. A `stop()` from a `CatchupListener`, or from a `StartAt.dynamic` function asked while
-the start resumes one subscription, throws `IllegalStateException` and changes nothing, since that thread runs a replay
-or holds the subscription's claim. The children of one dispatcher share a flag that every `stop()` sets and every
-`start(..)` clears as it begins. Every `start(..)` and `stop()` runs under the model lock, so a stop the flag shows
-while a start holds the lock was made on the start's own thread.
+call, and the model ends started. When that later `start(..)` throws and stops the model again, as a start that finds
+the model stopped does when the wrapped model's `start(..)` throws, it has changed nothing, so the stop is still the
+last call and the model ends stopped. A `stop()` from a `CatchupListener`, or from a `StartAt.dynamic` function asked
+while the start resumes one subscription, throws `IllegalStateException` and changes nothing, since that thread runs a
+replay or holds the subscription's claim.
+
+The start decides by the last call made from inside it. The children of one dispatcher share a record of the last
+`start(..)`, `stop()` or `resumeReplay()`, numbered in the order they came, with whether it left the replays and the
+wrapped model stopped. A `start(..)` that throws and stops the model again turns its own entry into a stop. Every one of
+these calls runs under the model lock, so an entry numbered after the start that holds the lock was made on that
+start's thread. The start runs the stop again exactly when the last entry left the wrapped model stopped and no
+`shutdown()` is under way or has begun since the start began. A `shutdown()` that returned before the start began
+doesn't count, so a start made after a completed shutdown treats a stop made from inside it as any other start does.
+
+A `stopReplay()` made on the thread of a `start(..)` doesn't touch the wrapped model, and the start goes on to resume
+subscriptions. When the wrapped model's own `start(true)` resumes what it holds paused, the replays the `stopReplay()`
+parked stay parked and the model ends stopped for replays, as if the `stopReplay()` came after the start. When the start
+resumes the subscriptions one at a time, the first of those resumes finds the model stopped and starts it again, as
+`resumeSubscription(id)` does, so the model ends started, as if the `stopReplay()` came before the start. A
+`resumeReplay()` made there after a `stop()` made there lets replays run again, so the start stops only the wrapped
+model again, and the model ends as after the start, the `stop()` and the `resumeReplay()`.
 
 Once the wrapped model's `shutdown()` has returned normally under the lock, a later `shutdown()` doesn't call it there
 again. One that threw left the wrapped model running, so the next `shutdown()` calls it again. A `start(..)` after a
