@@ -3123,12 +3123,27 @@ already handled after it are delivered again. When the durable model writes with
 of a lease, and another instance stored the checkpoint with a newer version, the checkpoint storage refuses the token
 and the resume throws `CheckpointWriteConditionNotFulfilledException`, as
 [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint)
-describes. A catch-up position or a time is stored only as
-[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) says.
+describes.
+
+Over a resume token, a resume at a catch-up position, a `GlobalCheckpoint` or a time stores nothing, so the token stays.
+The exception is an instance whose subscription never went live, because the replay its `subscribe(..)` started lost
+its live start and the instance holds the subscription paused. That instance stores what
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) says, as
+every instance does when the stored checkpoint is a position a catch-up stored.
 
 Another instance that paused the subscription when it lost the history too stays paused, and its
 `resumeSubscription(id)` keeps throwing `CatchupCannotResumeException`. Restart it with a start that reads the stored
-checkpoint, such as the subscription model default, and it goes on from the stored checkpoint.
+checkpoint, such as the subscription model default, and it goes on from what the resumed instance stored.
+
+When the resumed instance stored nothing, neither at the resume nor for an event since, the restart reads the
+checkpoint stored before the resume. Over a resume token whose history is gone,
+[A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
+describes what the restart does.
+
+Over a catch-up position whose live start is gone, the restart replays from it when the replay that stored it started
+at position 0 or the beginning of time. When that replay started later, the restart is refused or held paused, as
+[A catch-up refuses a start that could skip an event committed below it](#a-catch-up-refuses-a-start-that-could-skip-an-event-committed-below-it)
+describes.
 
 When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
 instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its
