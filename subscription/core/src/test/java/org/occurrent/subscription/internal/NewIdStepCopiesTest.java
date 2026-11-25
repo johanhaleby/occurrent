@@ -47,7 +47,7 @@ class NewIdStepCopiesTest {
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
     private static final Pattern LEADING_WHITESPACE_AND_STAR = Pattern.compile("^\\s*\\*?\\s*");
 
-    // Every file that holds a copy, and how many, so that a copy that is added or removed is a decision and not a drift
+    // Every file that holds a copy, and how many, so that a copy that is added or removed in one of these files is a decision and not a drift
     private static final Map<String, Integer> COPIES = copies();
 
     private static Map<String, Integer> copies() {
