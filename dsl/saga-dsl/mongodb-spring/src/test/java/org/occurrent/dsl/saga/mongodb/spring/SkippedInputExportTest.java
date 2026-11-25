@@ -82,6 +82,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Docker-based. The downgrade guide has the operator dump the skipped inputs and their chunks with two {@code mongodump}
@@ -288,6 +289,37 @@ class SkippedInputExportTest {
 
         Object rebuilt = rebuild(restored.getFirst()).getExtension("decimal128ext");
         assertThat(rebuilt).as("extension of the rebuilt event").isInstanceOf(Decimal128.class).isEqualTo(DECIMAL);
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigDecimal_or_BigInteger_is_rebuilt_as_the_plain_BigDecimal_or_BigInteger_with_its_value_and_scale() throws Exception {
+        record(builder("held-1").withExtension("number", (Number) new SubclassedBigDecimal("10.00")).build());
+        record(builder("held-2").withExtension("number", (Number) new SubclassedBigDecimal("10.50")).build());
+        record(builder("held-3").withExtension("number", (Number) new SubclassedBigInteger("12345")).build());
+        record(builder("held-4").withExtension("number", (Number) new SubclassedBigInteger("123456789012345678901234567890")).build());
+
+        List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+
+        List<Object> rebuilt = restored.stream().map(record -> rebuild(record).getExtension("number")).toList();
+        assertAll(
+                () -> assertThat(rebuilt).as("extensions of the rebuilt events").containsExactly(
+                        new BigDecimal("10.00"), new BigDecimal("10.50"), new BigInteger("12345"), new BigInteger("123456789012345678901234567890")),
+                () -> assertThat(rebuilt.stream().map(Object::getClass).toList()).as("classes of the rebuilt extensions")
+                        .containsExactly(BigDecimal.class, BigDecimal.class, BigInteger.class, BigInteger.class),
+                () -> assertThat(((BigDecimal) rebuilt.get(0)).scale()).as("scale of the first").isEqualTo(2)
+        );
+    }
+
+    private static final class SubclassedBigDecimal extends BigDecimal {
+        private SubclassedBigDecimal(String value) {
+            super(value);
+        }
+    }
+
+    private static final class SubclassedBigInteger extends BigInteger {
+        private SubclassedBigInteger(String value) {
+            super(value);
+        }
     }
 
     private static final class Reading extends Number {

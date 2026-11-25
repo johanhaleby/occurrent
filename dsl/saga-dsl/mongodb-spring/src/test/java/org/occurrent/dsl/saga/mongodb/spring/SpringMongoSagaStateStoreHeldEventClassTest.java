@@ -92,6 +92,7 @@ import java.util.function.UnaryOperator;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -529,18 +530,45 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void an_extension_that_is_a_subclass_of_BigDecimal_is_held_as_its_decimal_string_and_released_as_a_BigDecimal_with_its_value_and_scale_and_a_warning() {
-        Object released = assertReleasedAs(new SubclassedBigDecimal("2.50"), new BigDecimal("2.50"));
-
-        assertAll(
-                () -> assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(2),
-                () -> assertThat(storedExtension("number")).as("the stored extension").containsEntry("value", "2.50")
-        );
+    void an_extension_that_is_a_subclass_of_BigDecimal_with_trailing_zeros_is_held_under_the_bigDecimal_tag_and_released_as_a_plain_BigDecimal_with_its_scale_and_a_warning() {
+        assertSubclassedBigDecimalReleasedAsPlain("10.00");
     }
 
     @Test
-    void an_extension_that_is_a_subclass_of_BigInteger_is_held_and_released_as_a_Long_with_its_value_and_a_warning() {
-        assertReleasedAs(new SubclassedBigInteger("12345"), Long.valueOf(12345));
+    void an_extension_that_is_a_subclass_of_BigDecimal_with_a_fraction_is_held_under_the_bigDecimal_tag_and_released_as_a_plain_BigDecimal_with_its_scale_and_a_warning() {
+        assertSubclassedBigDecimalReleasedAsPlain("10.50");
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigInteger_inside_the_Long_range_is_held_under_the_bigInteger_tag_and_released_as_a_plain_BigInteger_and_a_warning() {
+        assertSubclassedBigIntegerReleasedAsPlain("12345");
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigInteger_outside_the_Long_range_is_held_under_the_bigInteger_tag_and_released_as_a_plain_BigInteger_and_a_warning() {
+        assertSubclassedBigIntegerReleasedAsPlain("123456789012345678901234567890");
+    }
+
+    private void assertSubclassedBigDecimalReleasedAsPlain(String value) {
+        Held held = heldAndReadWarned(baseEvent().withExtension("number", (Number) new SubclassedBigDecimal(value)).build());
+
+        Object released = held.event().getExtension("number");
+        assertAll(
+                () -> assertThat(released).as("the released extension").isExactlyInstanceOf(BigDecimal.class).isEqualTo(new BigDecimal(value)),
+                () -> assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(new BigDecimal(value).scale()),
+                () -> assertThat(held.warnings()).containsExactly(warning("number", SubclassedBigDecimal.class, BigDecimal.class)),
+                () -> assertThat(storedExtension("number")).as("the stored extension").isEqualTo(new Document("type", "bigDecimal").append("value", value))
+        );
+    }
+
+    private void assertSubclassedBigIntegerReleasedAsPlain(String value) {
+        Held held = heldAndReadWarned(baseEvent().withExtension("number", (Number) new SubclassedBigInteger(value)).build());
+
+        assertAll(
+                () -> assertThat(held.event().getExtension("number")).as("the released extension").isExactlyInstanceOf(BigInteger.class).isEqualTo(new BigInteger(value)),
+                () -> assertThat(held.warnings()).containsExactly(warning("number", SubclassedBigInteger.class, BigInteger.class)),
+                () -> assertThat(storedExtension("number")).as("the stored extension").isEqualTo(new Document("type", "bigInteger").append("value", value))
+        );
     }
 
     @Test
@@ -573,6 +601,113 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 () -> assertThat(held.warnings()).containsExactlyInAnyOrder(
                         warning("first", AtomicLong.class, Long.class),
                         warning("second", Reading.class, BigDecimal.class))
+        );
+    }
+
+    @Test
+    void an_extension_whose_value_changes_on_every_read_is_held_and_released_as_one_value_without_falling_back_to_the_data_as_bytes() {
+        Ticking ticking = new Ticking(1_000);
+        Held held = heldAndReadWarned(baseEvent().withExtension("number", (Number) ticking).build());
+
+        Object released = held.event().getExtension("number");
+        Document record = requireNonNull(template.getCollection(SKIPPED_INPUTS).find().first());
+        assertAll(
+                () -> assertThat(released).as("the released extension").isExactlyInstanceOf(Long.class),
+                () -> assertThat(ticking.reads()).as("the values the number wrote when it was read").contains((Long) released),
+                () -> assertThat(storedExtension("number")).as("the stored extension").isEqualTo(new Document("type", "number").append("class", Ticking.class.getName()).append("value", released)),
+                () -> assertThat(held.warnings()).as("the warnings").containsExactly(warning("number", Ticking.class, Long.class)),
+                () -> assertThat(record.containsKey("dataClass")).as("the record holds the data as its bytes").isFalse()
+        );
+    }
+
+    @Test
+    void no_warning_is_logged_for_an_event_the_store_refuses_because_an_extension_is_a_UUID() {
+        CloudEvent event = baseEvent().withExtension("number", (Number) new AtomicLong(1_234_567)).withExtension(new UuidExtension("correlation", UUID.randomUUID())).build();
+        StoredSaga instance = anInstance();
+
+        List<String> warnings = warningsLoggedBy(() -> assertThatThrownBy(() -> stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)))
+                .isInstanceOf(IllegalStateException.class));
+
+        assertAll(
+                () -> assertThat(warnings).as("the warnings").isEmpty(),
+                () -> assertNothingWritten()
+        );
+    }
+
+    @Test
+    void no_warning_is_logged_when_the_compare_and_set_loses_because_the_expected_version_is_wrong() {
+        CloudEvent event = baseEvent().withExtension("number", (Number) new AtomicLong(1_234_567)).build();
+        StoredSaga instance = anInstance();
+        AtomicReference<Boolean> saved = new AtomicReference<>();
+
+        List<String> warnings = warningsLoggedBy(() -> saved.set(stateStore.compareAndSaveSkipped(instance, 7, QUARANTINE_ID, new SkippedInput(1, KEY, event))));
+
+        assertAll(
+                () -> assertThat(saved.get()).as("saved").isFalse(),
+                () -> assertThat(warnings).as("the warnings").isEmpty(),
+                () -> assertNothingWritten()
+        );
+    }
+
+    @Test
+    void the_warning_for_a_number_is_logged_once_when_the_same_input_is_delivered_again_after_it_was_recorded() {
+        CloudEvent event = baseEvent().withExtension("number", (Number) new AtomicLong(1_234_567)).build();
+
+        List<String> warnings = warningsLoggedBy(() -> {
+            heldAndRead(event);
+            skipAgain(event);
+        });
+
+        assertAll(
+                () -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("the records").isEqualTo(1),
+                () -> assertThat(warnings).as("the warnings").containsExactly(warning("number", AtomicLong.class, Long.class))
+        );
+    }
+
+    @Test
+    void no_warning_for_data_held_as_its_bytes_is_logged_when_the_compare_and_set_loses_because_the_expected_version_is_wrong() {
+        CloudEvent event = eventWithDataHeldAsBytes();
+        StoredSaga instance = anInstance();
+        AtomicReference<Boolean> saved = new AtomicReference<>();
+
+        List<String> warnings = warningsLoggedBy(() -> saved.set(stateStore.compareAndSaveSkipped(instance, 7, QUARANTINE_ID, new SkippedInput(1, KEY, event))));
+
+        assertAll(
+                () -> assertThat(saved.get()).as("saved").isFalse(),
+                () -> assertThat(warnings).as("the warnings").isEmpty(),
+                () -> assertNothingWritten()
+        );
+    }
+
+    @Test
+    void the_warning_for_data_held_as_its_bytes_is_logged_once_when_the_same_input_is_delivered_again_after_it_was_recorded() {
+        CloudEvent event = eventWithDataHeldAsBytes();
+
+        List<String> warnings = warningsLoggedBy(() -> {
+            heldAndRead(event);
+            skipAgain(event);
+        });
+
+        assertAll(
+                () -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("the records").isEqualTo(1),
+                () -> assertThat(warnings).as("the warnings").singleElement().asString().contains("holds the data of the input '" + KEY + "' it skips as its bytes")
+        );
+    }
+
+    @Test
+    void a_BigDecimal_and_a_BigInteger_extension_that_are_subclasses_are_warned_about_by_the_subclass_and_the_superclass() {
+        Held held = heldAndReadWarned(baseEvent()
+                .withExtension("decimal", (Number) new SubclassedBigDecimal("10.00"))
+                .withExtension("integer", (Number) new SubclassedBigInteger("123456789012345678901234567890"))
+                .build());
+
+        assertAll(
+                restored(held.event(), "decimal", new BigDecimal("10.00")),
+                () -> assertThat(((BigDecimal) requireNonNull(held.event().getExtension("decimal"))).scale()).as("the scale of the released value").isEqualTo(2),
+                restored(held.event(), "integer", new BigInteger("123456789012345678901234567890")),
+                () -> assertThat(held.warnings()).containsExactlyInAnyOrder(
+                        warning("decimal", SubclassedBigDecimal.class, BigDecimal.class),
+                        warning("integer", SubclassedBigInteger.class, BigInteger.class))
         );
     }
 
@@ -812,6 +947,51 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         }
     }
 
+    // A Number whose value is the next integer every time it is read, and which remembers every value it wrote
+    private static final class Ticking extends Number {
+        private final AtomicLong next;
+        private final List<Long> reads = new CopyOnWriteArrayList<>();
+
+        private Ticking(long first) {
+            this.next = new AtomicLong(first);
+        }
+
+        private long read() {
+            long value = next.getAndIncrement();
+            reads.add(value);
+            return value;
+        }
+
+        List<Long> reads() {
+            return reads;
+        }
+
+        @Override
+        public int intValue() {
+            return (int) read();
+        }
+
+        @Override
+        public long longValue() {
+            return read();
+        }
+
+        @Override
+        public float floatValue() {
+            return read();
+        }
+
+        @Override
+        public double doubleValue() {
+            return read();
+        }
+
+        @Override
+        public String toString() {
+            return Long.toString(read());
+        }
+    }
+
     // A Number of a class the record can't hold as that class, whose toString is the decimal it writes
     private static final class Reading extends Number {
         private final String text;
@@ -843,6 +1023,33 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         @Override
         public String toString() {
             return text;
+        }
+    }
+
+    private CloudEvent eventWithDataHeldAsBytes() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("orderId", ORDER);
+        data.put("price", new BigDecimal("9876543210.987654321"));
+        return baseEvent().withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build();
+    }
+
+    // Delivers event for the key again to the instance as it is stored now
+    private void skipAgain(CloudEvent event) {
+        StoredSaga current = stateStore.find(ORDER).orElseThrow();
+        stateStore.compareAndSaveSkipped(current, current.version(), QUARANTINE_ID, new SkippedInput(2, KEY, event));
+    }
+
+    private static List<String> warningsLoggedBy(Runnable action) {
+        Logger storeLog = (Logger) LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        storeLog.addAppender(appender);
+        try {
+            action.run();
+            return appender.list.stream().filter(logged -> logged.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
+        } finally {
+            storeLog.detachAppender(appender);
+            appender.stop();
         }
     }
 

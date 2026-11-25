@@ -19,27 +19,54 @@ package org.occurrent.dsl.saga.internal;
 import org.slf4j.Logger;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * The value a saga state store hands back for an extension of a skipped input that is a {@code Number} of a class the
- * store doesn't hold as that class, such as an {@code AtomicLong}. Every store works the value out here, so a release
- * hands back the same value as the same class from any of them, and every store logs the same warning.
+ * An extension of a skipped input that is a {@code Number} of a class the saga state store doesn't hold as that class,
+ * such as an {@code AtomicLong}, and the number a release hands back for it. Every store works that number out here, so
+ * a release hands back the same value as the same class from any of them, and every store logs the same warning.
+ *
+ * @param extension the name of the extension
+ * @param delivered the class of the number the event was delivered with
+ * @param released  the number a release hands back, of a class every store holds
  */
-public final class SkippedInputNumber {
+public record SkippedInputNumber(String extension, Class<? extends Number> delivered, Number released) {
 
-    private SkippedInputNumber() {
+    public SkippedInputNumber {
+        requireNonNull(extension, "extension cannot be null");
+        requireNonNull(delivered, "delivered cannot be null");
+        requireNonNull(released, "released cannot be null");
     }
 
     /**
-     * The number a release hands back for {@code number}. Its value is the decimal its {@code toString} writes, which is
-     * how Jackson writes such a number. It's a {@code Long} when that decimal is an integer that fits in one, and
-     * otherwise a {@code BigDecimal} with the same value and scale. When {@code toString} doesn't write a decimal, as
-     * for {@code NaN}, it's the {@code doubleValue} as a {@code Double}.
+     * The extension {@code extension} delivered as {@code number}, whose value this reads once, with the number
+     * {@link #releasedAs(Number)} gives for it.
+     */
+    public static SkippedInputNumber of(String extension, Number number) {
+        requireNonNull(number, "number cannot be null");
+        return new SkippedInputNumber(extension, number.getClass(), releasedAs(number));
+    }
+
+    /**
+     * The number a release hands back for {@code number}. A subclass of {@code BigDecimal} or {@code BigInteger}, which
+     * every store holds, comes back as that class with the value and scale its {@code BigDecimal} or {@code BigInteger}
+     * methods give. Any other number's value is the decimal its {@code toString} writes, which is how Jackson writes
+     * such a number. It's a {@code Long} when that decimal is an integer that fits in one, and otherwise a
+     * {@code BigDecimal} with the same value and scale. When {@code toString} doesn't write a decimal, as for
+     * {@code NaN} or an infinity, it's the {@code doubleValue} as a {@code Double}.
      */
     public static Number releasedAs(Number number) {
         requireNonNull(number, "number cannot be null");
+        return switch (number) {
+            case BigDecimal decimal -> new BigDecimal(decimal.unscaledValue(), decimal.scale());
+            case BigInteger integer -> new BigInteger(integer.toByteArray());
+            default -> fromDecimal(number);
+        };
+    }
+
+    private static Number fromDecimal(Number number) {
         String decimal = number.toString();
         if (decimal == null) {
             return number.doubleValue();
@@ -61,12 +88,19 @@ public final class SkippedInputNumber {
     }
 
     /**
-     * Logs a warning that saga instance {@code sagaId} holds the extension {@code extension} of the input
-     * {@code inputKey} it skips as {@code released}, the number {@link #releasedAs(Number)} gives for {@code delivered}.
-     * The warning names the instance, the extension, the input and both classes, and never the value.
+     * Whether the delivered class extends the class a release hands back, as a subclass of {@code BigDecimal} does.
      */
-    public static void warnHeldAs(Logger log, String sagaId, String inputKey, String extension, Number delivered, Number released) {
+    public boolean releasedAsItsSuperclass() {
+        return released.getClass().isAssignableFrom(delivered);
+    }
+
+    /**
+     * Logs a warning that saga instance {@code sagaId} holds this extension of the input {@code inputKey} it skips as
+     * the class a release hands back. The warning names the instance, the extension, the input and both classes, and
+     * never the value. A store logs it once it has recorded the input.
+     */
+    public void warn(Logger log, String sagaId, String inputKey) {
         log.warn("Saga instance '{}' can't hold the extension '{}' of the input '{}' it skips as a {}, so a release hands it back as a {}.",
-                sagaId, extension, inputKey, delivered.getClass().getName(), released.getClass().getName());
+                sagaId, extension, inputKey, delivered.getName(), released.getClass().getName());
     }
 }

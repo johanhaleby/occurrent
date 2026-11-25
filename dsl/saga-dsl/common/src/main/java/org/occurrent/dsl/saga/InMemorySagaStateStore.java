@@ -66,13 +66,15 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * An extension that is a {@code Number} of any class other than {@code Byte}, {@code Short}, {@code Integer},
  * {@code Long}, {@code Float}, {@code Double}, {@code BigInteger} and {@code BigDecimal}, such as an {@code AtomicLong} or
- * a subclass of {@code BigDecimal}, is held as a {@code Long} when its value is an integer that fits in one, and otherwise
- * as a {@code BigDecimal} with its value and scale, and a release hands it back as that class. Its value is the decimal
- * its {@code toString} writes. When {@code toString} doesn't write a decimal, as for {@code NaN}, it's held as its
- * {@code doubleValue}. This module doesn't depend on BSON, so a {@code Decimal128} extension comes back here as a
- * {@code Long} or a {@code BigDecimal}, while {@code SpringMongoSagaStateStore} hands it back as the same
- * {@code Decimal128}. The store logs a warning that names the instance, the input, the extension, the delivered class
- * and the class a release hands back, and never the value.
+ * a subclass of {@code BigDecimal}, is held as another class, and a release hands it back as that class. A subclass of
+ * {@code BigInteger} or {@code BigDecimal} is held as that class, with its value and scale. Any other is held as a
+ * {@code Long} when its value is an integer that fits in one, and otherwise as a {@code BigDecimal} with its value and
+ * scale. Its value is the decimal its {@code toString} writes. When {@code toString} doesn't write a decimal, as for
+ * {@code NaN} or an infinity, it's held as its {@code doubleValue}, a {@code Double}. This module doesn't depend on
+ * BSON, so a {@code Decimal128} extension comes back here as a {@code Long}, a {@code BigDecimal}, or a {@code Double}
+ * for {@code NaN} or an infinity, while {@code SpringMongoSagaStateStore} hands it back as the same {@code Decimal128}.
+ * Once it has recorded the input, the store logs a warning that names the instance, the input, the extension, the
+ * delivered class and the class a release hands back, and never the value.
  * <p>
  * Data it can't copy is held as its bytes, and every read rebuilds it the way {@code SpringMongoSagaStateStore} rebuilds
  * data it holds as bytes. A {@code JsonCloudEventData} comes back as a {@code JsonCloudEventData} read from those bytes
@@ -136,9 +138,21 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(quarantineId, "quarantineId cannot be null");
         requireNonNull(input, "input cannot be null");
-        SkippedInput held = copyOf(saga.sagaId(), input);
-        return compareAndSet(saga, expectedVersion, withoutStateUnlessInsert(saga, expectedVersion), quarantineId,
-                records -> records.containsKey(held.key()) ? records : with(records, held));
+        List<SkippedInputNumber> converted = new ArrayList<>();
+        SkippedInput held = copyOf(saga.sagaId(), input, converted);
+        boolean[] recorded = {false};
+        boolean saved = compareAndSet(saga, expectedVersion, withoutStateUnlessInsert(saga, expectedVersion), quarantineId, records -> {
+            if (records.containsKey(held.key())) {
+                return records;
+            }
+            recorded[0] = true;
+            return with(records, held);
+        });
+        // Only once the input is recorded, so a lost compare-and-set or a key recorded before warns nothing
+        if (recorded[0]) {
+            converted.forEach(number -> number.warn(log, saga.sagaId(), input.key()));
+        }
+        return saved;
     }
 
     @Override
@@ -350,8 +364,13 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
             "org.bson.types.Code", "org.bson.types.Symbol", "org.bson.types.MinKey", "org.bson.types.MaxKey", "org.bson.BsonTimestamp",
             "org.bson.BsonRegularExpression", "org.bson.BsonDbPointer", "org.bson.BsonUndefined");
 
-    // A copy that shares nothing the producer of the event or a reader of the record can change
     private static SkippedInput copyOf(String sagaId, SkippedInput input) {
+        return copyOf(sagaId, input, new ArrayList<>());
+    }
+
+    // A copy that shares nothing the producer of the event or a reader of the record can change. Every extension held as
+    // another class is added to converted
+    private static SkippedInput copyOf(String sagaId, SkippedInput input, List<SkippedInputNumber> converted) {
         CloudEvent event = input.event();
         CloudEventBuilder copy = CloudEventBuilder.fromSpecVersion(event.getSpecVersion()).withId(event.getId()).withSource(event.getSource()).withType(event.getType());
         if (event.getDataContentType() != null) {
@@ -375,9 +394,9 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
                 case byte[] value -> copy.withExtension(name, value.clone());
                 case Number value when UNCHANGEABLE.contains(value.getClass()) -> copy.withExtension(name, value);
                 case Number value -> {
-                    Number released = SkippedInputNumber.releasedAs(value);
-                    SkippedInputNumber.warnHeldAs(log, sagaId, input.key(), name, value, released);
-                    copy.withExtension(name, released);
+                    SkippedInputNumber number = SkippedInputNumber.of(name, value);
+                    converted.add(number);
+                    copy.withExtension(name, number.released());
                 }
                 case Object value -> throw cannotCopy(sagaId, input, "the extension '" + name + "', a " + value.getClass().getName());
             }

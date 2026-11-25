@@ -120,7 +120,8 @@ event. A release converts the event again, so `SpringMongoSagaStateStore` holds 
 converter the event exactly as it was delivered. That means the same attributes, the same `CloudEventData` class,
 the same data values with the same Java classes at any depth, the same bytes, and the extensions with the same values
 and the same Java classes. The one exception is an extension that is a `Number` of a class the store doesn't hold as
-that class, such as an `AtomicLong`, which comes back with its value as a `Long` or a `BigDecimal`. A map or a list inside the
+that class, such as an `AtomicLong`, which comes back with its value as a `Long`, a `BigDecimal` or a `Double`, or a
+subclass of `BigInteger` or `BigDecimal`, which comes back as that class. A map or a list inside the
 data may come back as another implementation of `Map` or `List`, such as a `Document` for a `LinkedHashMap`. Data the
 record can't hold that way is held as its bytes and its class, and a record too large for one document is split
 across several, so an event a quarantined instance skips stops the subscription only when the record can't hold its
@@ -133,12 +134,16 @@ surrogate, which BSON's UTF-8 can't hold, is stored as its UTF-16 code units in 
 comes back as the same `String`. Any other extension is stored as it is.
 
 A `Number` of any other class than `Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger`, `BigDecimal`
-and `Decimal128`, a subclass of `BigInteger` or `BigDecimal` included, is stored with the tag `number`, the name of its
-class, and its value. A release hands it back as a `Long` when its value is an integer that fits in one, and otherwise
-as a `BigDecimal` with its value and scale, which the record stores as its decimal string. Its value is the decimal its
-`toString` writes, which is how Jackson writes such a number, and a `Number` whose `toString` isn't a decimal, such as
-`NaN`, comes back as its `doubleValue`. The store logs a `WARN` that names the instance, the input, the extension, the
-delivered class and the class a release hands back, and not the value. A release can't hand back the delivered class,
+and `Decimal128` comes back as another class. The store reads its value once, so a number its producer changes while
+the store checks the record is held and checked as one value. A subclass of `BigInteger` or `BigDecimal` is stored with
+the tag of that class and comes back as it, with its value and scale. Any other is stored with the tag `number`, the
+name of its class, and its value. A release hands it back as a `Long` when its value is an integer that fits in one,
+and otherwise as a `BigDecimal` with its value and scale, which the record stores as its decimal string. Its value is
+the decimal its `toString` writes, which is how Jackson writes such a number, and a `Number` whose `toString` isn't a
+decimal, such as `NaN` or an infinity, comes back as its `doubleValue`, a `Double`. Once the record is written, the
+store logs a `WARN` that names the instance, the input, the extension, the delivered class and the class a release
+hands back, and not the value. It logs nothing for an event it refuses, a write that loses its compare-and-set, or an
+event whose key it has recorded already. A release can't hand back the delivered class,
 since `Number` has no way to build one from a value, and refusing the event would stop the subscription for every
 instance of the saga. The MongoDB event store never delivers such an extension, since it hands back every extension as
 an `Integer`, a `Long`, a `Boolean` or a `String`, so such an event comes from an in-memory event store or one of your
@@ -148,7 +153,7 @@ own.
 `Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`, `BigInteger` and `BigDecimal`, so a release hands back the same
 class from either store. The exception is a `Decimal128`, which `SpringMongoSagaStateStore` hands back as the same
 `Decimal128`. The saga DSL's common module doesn't depend on BSON, so `InMemorySagaStateStore` hands a `Decimal128`
-back as a `Long` or a `BigDecimal`.
+back as a `Long` or a `BigDecimal`, or as a `Double` for `NaN` or an infinity.
 
 Data delivered as a `PojoCloudEventData` that holds a map, which is how the MongoDB event store delivers a JSON object,
 is held in `dataDocument`, with its bytes in `data` unless they are the document's own JSON, and a release hands the
@@ -181,9 +186,9 @@ as, such as a `DoubleNode` of `1.1` for a `DecimalNode` of `1.10`, which is the 
 
 The check compares the data it reads back from the bytes with the data a release promises, its class and, for a
 `JsonCloudEventData`, its JSON value at every depth. A number equals a number of the same value whatever its node
-class, and any other value equals only an equal value of the same node class. The store logs a warning that names the
-instance, the input and the difference, since the converter then gets bytes where it was delivered a map or an
-object.
+class, and any other value equals only an equal value of the same node class. Once the record is written, the store
+logs a warning that names the instance, the input and the difference, since the converter then gets bytes where it was
+delivered a map or an object.
 
 A record that doesn't fit in one document, at most 16 MiB, or in the write that sends it, at most 16 MiB and 16 KiB
 with its filter, is encoded to BSON and split into chunks of 8 MiB. Each chunk is a document in a collection named

@@ -475,6 +475,61 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
     }
 
     @Test
+    void an_extension_that_is_a_subclass_of_BigDecimal_with_trailing_zeros_is_released_as_a_plain_BigDecimal_with_the_same_scale() {
+        quarantinedInstance();
+
+        Object released = assertReleasedAs(new SubclassedBigDecimal("10.00"), new BigDecimal("10.00"));
+
+        assertThat(released).isExactlyInstanceOf(BigDecimal.class);
+        assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(2);
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigDecimal_with_a_fraction_is_released_as_a_plain_BigDecimal_with_the_same_scale() {
+        quarantinedInstance();
+
+        Object released = assertReleasedAs(new SubclassedBigDecimal("10.50"), new BigDecimal("10.50"));
+
+        assertThat(released).isExactlyInstanceOf(BigDecimal.class);
+        assertThat(((BigDecimal) released).scale()).as("the scale of the released value").isEqualTo(2);
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigInteger_inside_the_Long_range_is_released_as_a_plain_BigInteger() {
+        quarantinedInstance();
+
+        Object released = assertReleasedAs(new SubclassedBigInteger("1234567"), new BigInteger("1234567"));
+
+        assertThat(released).isExactlyInstanceOf(BigInteger.class);
+    }
+
+    @Test
+    void an_extension_that_is_a_subclass_of_BigInteger_outside_the_Long_range_is_released_as_a_plain_BigInteger() {
+        quarantinedInstance();
+
+        Object released = assertReleasedAs(new SubclassedBigInteger("123456789012345678901234567890"), new BigInteger("123456789012345678901234567890"));
+
+        assertThat(released).isExactlyInstanceOf(BigInteger.class);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("decimal128NonFiniteValues")
+    void a_non_finite_Decimal128_extension_is_recorded_and_released_as_the_Double_of_that_value(String name, Decimal128 delivered, Double expected) {
+        quarantinedInstance();
+
+        Object released = assertReleasedAs(delivered, expected);
+
+        assertThat(released).isExactlyInstanceOf(Double.class);
+    }
+
+    static Stream<Arguments> decimal128NonFiniteValues() {
+        return Stream.of(
+                Arguments.of("NaN", Decimal128.NaN, Double.NaN),
+                Arguments.of("positive infinity", Decimal128.POSITIVE_INFINITY, Double.POSITIVE_INFINITY),
+                Arguments.of("negative infinity", Decimal128.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY));
+    }
+
+    @Test
     void a_fractional_Decimal128_extension_is_recorded_and_released_as_a_BigDecimal_with_its_value_and_scale() {
         quarantinedInstance();
 
@@ -625,6 +680,12 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
         }
     }
 
+    private static final class SubclassedBigInteger extends BigInteger {
+        SubclassedBigInteger(String value) {
+            super(value);
+        }
+    }
+
     // A Number of a class the store does not hold as that class, whose toString is the decimal it writes
     private static final class Reading extends Number {
         private final String text;
@@ -673,6 +734,54 @@ class InMemorySagaStateStoreSkippedEventCopyTest {
         public Set<String> getKeys() {
             return Set.of(name);
         }
+    }
+
+    @Test
+    void no_warning_is_logged_for_an_event_the_store_refuses_because_it_cannot_copy_an_extension() {
+        quarantinedInstance();
+        CloudEvent delivered = CloudEventBuilder.v1().withId(KEY).withSource(URI.create("urn:test")).withType("t")
+                .withExtension("number", (Number) new AtomicLong(1_234_567))
+                .withExtension(new UuidExtension("correlation", UUID.randomUUID())).build();
+
+        assertThatThrownBy(() -> skip(delivered)).isInstanceOf(IllegalStateException.class);
+
+        assertAll(
+                () -> assertThat(warnings()).as("the warnings").isEmpty(),
+                this::assertNothingWasRecorded
+        );
+    }
+
+    @Test
+    void no_warning_is_logged_when_the_compare_and_set_loses_because_the_expected_version_is_wrong() {
+        quarantinedInstance();
+        StoredSaga current = store.find("s1").orElseThrow();
+        long wrongVersion = current.version() + 5;
+        SagaEnvelope<String> next = atVersion(codec.decode(current), wrongVersion + 1);
+        CloudEvent delivered = CloudEventBuilder.v1().withId(KEY).withSource(URI.create("urn:test")).withType("t")
+                .withExtension("number", (Number) new AtomicLong(1_234_567)).build();
+
+        boolean saved = store.compareAndSaveSkipped(codec.encodeWithoutState(next), wrongVersion, "q1", new SkippedInput(0, KEY, delivered));
+
+        assertAll(
+                () -> assertThat(saved).as("saved").isFalse(),
+                () -> assertThat(warnings()).as("the warnings").isEmpty(),
+                this::assertNothingWasRecorded
+        );
+    }
+
+    @Test
+    void the_warning_is_logged_once_when_the_same_input_is_delivered_again_after_it_was_recorded() {
+        quarantinedInstance();
+        CloudEvent delivered = CloudEventBuilder.v1().withId(KEY).withSource(URI.create("urn:test")).withType("t")
+                .withExtension("number", (Number) new AtomicLong(1_234_567)).build();
+
+        skip(delivered);
+        skip(delivered);
+
+        assertAll(
+                () -> assertThat(store.findSkippedInputs("s1", "q1", 10)).as("the records").hasSize(1),
+                () -> assertThat(warnings()).as("the warnings").containsExactly(warning("number", AtomicLong.class, Long.class))
+        );
     }
 
     private List<String> warnings() {

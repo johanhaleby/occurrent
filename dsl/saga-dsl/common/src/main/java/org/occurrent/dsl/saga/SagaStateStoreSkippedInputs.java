@@ -34,10 +34,12 @@ import java.util.Optional;
  * store returns the event as it was delivered, with the same attributes, the same data class, the same values of the
  * same Java classes at any depth, the same bytes, and the extensions with the same values and the same classes. The one
  * exception is an extension that is a {@code Number} of a class the store can't hold as that class, such as an
- * {@code AtomicLong}. A store hands it back as a {@code Long} when the decimal its {@code toString} writes is an integer
- * that fits in one, and otherwise as a {@code BigDecimal} with the value and scale of that decimal. When
- * {@code toString} doesn't write a decimal, as for {@code NaN}, the store hands back its {@code doubleValue} as a
- * {@code Double}. It logs a warning that names both classes and never the value. A map or a list inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't
+ * {@code AtomicLong}. A store hands back a subclass of {@code BigInteger} or {@code BigDecimal} as that class, with its
+ * value and scale. It hands back any other such number as a {@code Long} when the decimal its {@code toString} writes is
+ * an integer that fits in one, and otherwise as a {@code BigDecimal} with the value and scale of that decimal. When
+ * {@code toString} doesn't write a decimal, as for {@code NaN} or an infinity, the store hands back its
+ * {@code doubleValue} as a {@code Double}. Once it has recorded the input, it logs a warning that names both classes and
+ * never the value. A map or a list inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't
  * hold the data that way may hold its bytes instead, and then returns a {@code JsonCloudEventData} read from those
  * bytes with the same JSON value for data that was one, and a {@code BytesCloudEventData} with the same bytes for data
  * of any other class. A number in the JSON keeps its value but not always its node class, so {@code 1.10} may come back
