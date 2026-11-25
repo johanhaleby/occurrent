@@ -66,7 +66,6 @@ import java.util.function.Consumer;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
@@ -244,7 +243,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
     }
 
     @Test
-    void a_checkpoint_for_a_delivered_event_another_node_stored_with_a_newer_version_is_started_from_and_nothing_is_written() {
+    void a_checkpoint_for_a_delivered_event_another_node_stored_with_a_newer_version_refuses_the_subscribe_and_is_left_as_it_was() {
         MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
         MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
         ExecutorService executor = Executors.newCachedThreadPool();
@@ -255,16 +254,14 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
 
             Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
-            }).waitUntilStarted());
+            }));
 
             assertAll(
-                    () -> assertThat(thrown).as("thrown by subscribe").isNull(),
-                    () -> assertThat(storage.refused.get()).as("the write of this node, older than the stored version, was refused")
-                            .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                    () -> assertThat(thrown).as("thrown by subscribe").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
+                            .isSameAs(storage.refused.get()),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
                     () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L),
-                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from")
-                            .isNotEmpty().containsOnly(deliveredEvent.asString())
+                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from").isEmpty()
             );
         } finally {
             nativeModel.shutdown();
@@ -301,7 +298,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
     }
 
     @Test
-    void a_node_with_an_older_version_starts_from_the_first_position_a_node_with_a_newer_one_stored_and_leaves_it_and_its_version_as_they_were() {
+    void a_node_with_an_older_version_refuses_the_subscribe_and_leaves_the_first_position_a_node_with_a_newer_one_stored_and_its_version_as_they_were() {
         MongoCollection<Document> eventCollection = database.getCollection("events-" + UUID.randomUUID());
         ExecutorService executor = Executors.newCachedThreadPool();
         EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
@@ -313,16 +310,15 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, laterFirstPosition, CheckpointWriteCondition.notOlderThan(2)), true);
             DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(1));
 
-            assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
-            }).waitUntilStarted()).doesNotThrowAnyException();
+            Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            }));
 
             assertAll(
-                    () -> assertThat(storage.refused.get()).as("the version of this node, older than the stored one, was refused")
-                            .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                    () -> assertThat(thrown).as("thrown by subscribe").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
+                            .isSameAs(storage.refused.get()),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(laterFirstPosition.asString()),
                     () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
-                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from")
-                            .isNotEmpty().containsOnly(laterFirstPosition.asString())
+                    () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from").isEmpty()
             );
         } finally {
             nativeModel.shutdown();

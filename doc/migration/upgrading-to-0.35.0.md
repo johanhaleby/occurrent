@@ -593,13 +593,15 @@ When two nodes record a first position at the same moment, what happens depends 
 
 | Stored by the other node | 0.35.0 |
 | --- | --- |
-| A newer version than this node's | The call writes nothing, a warning is logged, and the subscription starts from the stored checkpoint. 0.34.0 threw `StartPositionAlreadyPinnedException` here unless the stored checkpoint was the position it read or the MongoDB storages could order the two. |
+| A newer version than this node's | The call writes nothing, and `subscribe` throws `CheckpointWriteConditionNotFulfilledException`, since the node that stored that version holds a newer lease. Under `CompetingConsumerSubscriptionModel`, `subscribe` returns instead, and the subscription waits until this node gets the lease. 0.34.0 handled this like any other lost race, without looking at the version. |
 | The position this node read, with the same version, an older one or none | This node's version is stored with it, and the subscription starts from it. |
 | Another operation time on the MongoDB storages, with the same version, an older one or none | The earlier of the two positions is stored with this node's version, and the subscription starts from it. |
 | Any other checkpoint, with the same version, an older one or none | The call writes nothing, and `subscribe` throws `StartPositionAlreadyPinnedException`, as in 0.34.0. On the Redis and in-memory storages this is every other stored checkpoint. On the MongoDB storages it is one stored for a delivered event, a generic checkpoint, and a legacy one stored under `subscriptionPosition`. |
 
-When the subscription would start from the stored checkpoint and reading it back fails or finds nothing, `subscribe`
-throws `StartPositionAlreadyPinnedException`.
+When the MongoDB subscription models decide the start position after `subscribe` has returned,
+`CheckpointWriteConditionNotFulfilledException` is logged at `ERROR` there and not retried. Under
+`CompetingConsumerSubscriptionModel` the subscription is paused once the lease strategy reports that another node
+holds the lease, and this node competes for it again.
 
 During a rolling upgrade, a 0.34.0 node that has lost its lease settles a lost race without a version, so on the
 MongoDB storages it can replace a first position a 0.35.0 node stored with an earlier one, which delivers events
@@ -607,8 +609,10 @@ again but skips none.
 
 ### What to do
 
-If you catch `StartPositionAlreadyPinnedException` from `subscribe` to alert or to subscribe again, it is no longer
-thrown when the storage holds a newer version, and the subscription starts instead.
+If you catch `StartPositionAlreadyPinnedException` from `subscribe` to alert or to subscribe again, a lost race
+against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. Under
+`CompetingConsumerSubscriptionModel` the new exception doesn't reach `subscribe`, since the subscription waits for the
+lease.
 
 A storage of your own that doesn't override the three-argument `resolveFirstCheckpointRace`, or answers it empty,
 gets the `ifAbsent()` write and no version, as in 0.34.0. Until the next checkpoint write stores the version, a node

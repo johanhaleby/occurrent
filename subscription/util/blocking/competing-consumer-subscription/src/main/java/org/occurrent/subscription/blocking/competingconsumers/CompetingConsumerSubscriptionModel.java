@@ -6,6 +6,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartAt;
@@ -93,6 +94,11 @@ import static java.util.Objects.requireNonNull;
  * subscription is made, or this model is stopped, {@code subscribe} throws the refusal and the subscription id is free
  * again. When this node gets the lease later, the refusal is logged as a warning and the lease is given back. The
  * subscription stays registered, so it fails the same way every time this node gets the lease, and the id stays taken.
+ * A {@link CheckpointWriteConditionNotFulfilledException} that a durable model throws because its checkpoint storage
+ * holds a newer write version than this node's lease is handled differently when the subscription is made. Another
+ * node holds the lease then, so {@code subscribe} returns, unless the wrapped model runs the subscription anyway. The
+ * subscription is kept and waits for the lease, which this node competes for again, after {@code start()} when this
+ * model is stopped.
  * A {@link CatchupCannotResumeException} that a catch-up throws because it no longer has the history back to the
  * position stored for the subscription is handled differently, since it is thrown again on every later try. Any other
  * {@code CatchupCannotResumeException} is handled as any other refusal. When this node gets the
@@ -771,7 +777,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      *                                          <p>
      *                                          A failure of the wrapped model or the lease strategy before the wrapped
      *                                          model has made the subscription is thrown too. Nothing is then recorded,
-     *                                          and the registration is given up. For a competing subscription, a failure
+     *                                          and the registration is given up. A
+     *                                          {@link CheckpointWriteConditionNotFulfilledException} for a newer write
+     *                                          version stored is not thrown when the wrapped model runs nothing for the
+     *                                          id. The subscription is then kept and waits for the lease, as
+     *                                          the class documentation describes. For a competing subscription, a failure
      *                                          once the wrapped model has made it is logged as a warning instead, the
      *                                          subscription is recorded, and {@code subscribe} returns. What failed is
      *                                          then tried again on a thread of its own, until the subscription is
@@ -3788,6 +3798,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     if (holdALostStart && HistoryLossMessages.isHistoryLost(e) && holdsTheRefusedSubscribePaused(beingMade, (CatchupCannotResumeException) e)) {
                         return handleOf(key, null);
                     }
+                    if (e instanceof CheckpointWriteConditionNotFulfilledException refused && waitsForTheLeaseAfterARefusedWrite(beingMade, refused)) {
+                        return handleOf(key, null);
+                    }
                     if (recordOrTakeBackAfterAFailedStep(beingMade, e)) {
                         return handleOf(key, beingMade.subscription);
                     }
@@ -3850,8 +3863,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * Nothing here cancels a subscription in the wrapped model unless the user cancelled it, since cancelling can delete
      * the position a durable subscription has stored. Anything made for a state that no longer holds, or that a step
      * here fails to resume, is paused in the wrapped model and waits for a grant. A failure before the wrapped model has
-     * made anything makes the subscribe throw. Once it has, the subscription is recorded, and what failed is tried again
-     * once the subscribe returns.
+     * made anything makes the subscribe throw, apart from a refusal for a newer write version stored, after which the
+     * subscription waits for a grant. Once the wrapped model has made something, the subscription is recorded, and what
+     * failed is tried again once the subscribe returns.
      */
     private Step nextStep(BeingMade beingMade) {
         SubscriptionIdAndSubscriberId key = beingMade.key;
@@ -4177,6 +4191,40 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             return false;
         }
         recordAfterAFailure(beingMade, failure);
+        return true;
+    }
+
+    /**
+     * The wrapped model refused the subscribe because the checkpoint storage holds a write version newer than the one
+     * this node wrote with, which a durable model does when another node has taken the lease since this node won it. A
+     * grant whose start is refused that way waits for the lease again, and so does this subscribe. Nothing was made, so
+     * the consumer is recorded as waiting for a grant and gives up a lease it still holds, so this node competes for
+     * the lease again. While this model is stopped it gives up its registration instead, and {@code start()} registers
+     * it again. The subscribe returns rather than throwing. Answers {@code false},
+     * and the subscribe throws as for any other failure, once the model was shut down or the id cancelled, or when the
+     * wrapped model runs the subscription after all or can't say whether it does. Called under the subscription's lock
+     */
+    private boolean waitsForTheLeaseAfterARefusedWrite(BeingMade beingMade, CheckpointWriteConditionNotFulfilledException refused) {
+        if (shutDown || beingMade.cancelled || beingMade.subscription != null || beingMade.waiting == null) {
+            return false;
+        }
+        SubscriptionIdAndSubscriberId key = beingMade.key;
+        try {
+            if (isRunningInTheWrappedModel(key.subscriptionId())) {
+                return false;
+            }
+        } catch (Exception e) {
+            // Exception, since a wrapped model written in Kotlin can throw a checked exception
+            interruptAgainIfInterrupted(e);
+            addSuppressed(refused, e);
+            return false;
+        }
+        // Nothing runs, so this records the consumer as waiting and gives up the lease or, while stopped, the registration.
+        // Only a subscription the wrapped model runs may run while stopped
+        mayRunWhileStopped.remove(key);
+        waitForAGrant(beingMade);
+        log.warn("The wrapped subscription model refused to start a subscription because its checkpoint storage holds a newer write version than this node's lease, so another node holds the lease. The subscription waits for a grant of the lease (subscriberId={}, subscriptionId={})",
+                key.subscriberId(), key.subscriptionId(), refused);
         return true;
     }
 

@@ -96,8 +96,10 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint, long)}, which stores it and the version in one
  * write, and the subscription starts from the checkpoint the call answers. Of two nodes recording one at the same
  * moment, {@code NativeMongoCheckpointStorage} and {@code SpringMongoCheckpointStorage} store the earlier position.
- * When the storage holds a newer write version, nothing is written, the refusal is logged, and the subscription starts
- * from the checkpoint stored, since the node that stored it holds a newer lease and this node's writes are refused.
+ * When the storage holds a newer write version, the node that stored it holds a newer lease. Nothing is written, and
+ * the subscribe throws the storage's {@link CheckpointWriteConditionNotFulfilledException}, the exception a refused
+ * checkpoint write for an event throws. A {@code CompetingConsumerSubscriptionModel} over this model then has the
+ * subscription wait for a grant of the lease again, and its subscribe returns without throwing.
  * A stored checkpoint that is the position read is kept, the version is stored with it, and the subscription starts
  * from it. When the storage holds the same version, an older one or none, and another checkpoint it can't compare with
  * the position read is stored, the call writes nothing and answers empty. On {@code SpringRedisCheckpointStorage} and
@@ -145,10 +147,11 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * nothing when the wrapped model answers no position. It is refused instead of recording that position once a cancel or
  * a later {@code subscribe(..)} of the id has stopped the checkpoint writes of its subscribe. On a storage that
  * evaluates write conditions, an evaluation with a version starts from the checkpoint
- * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint, long)} answers, or from the one stored when
- * the storage holds a newer write version. One whose {@code ifAbsent()} write loses starts from the position
- * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint)} answers, or else from the one it reads back.
- * Either is refused when it has to read the stored checkpoint back and that read fails or finds nothing. A storage
+ * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint, long)} answers, and throws that
+ * {@link CheckpointWriteConditionNotFulfilledException} when the storage holds a newer write version. The blocking
+ * MongoDB models don't retry it. One whose {@code ifAbsent()} write loses starts from the position
+ * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint)} answers, or else from the one it reads back,
+ * and is refused when that read fails or finds nothing. A storage
  * that doesn't evaluate write conditions had a checkpoint stored when the position was decided, since this model
  * refuses the subscribe otherwise. An evaluation there that finds nothing stored any more, for example because a
  * cancel on another node deleted the checkpoint, starts from the checkpoint read when the position was decided, also
@@ -847,7 +850,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
         OptionalLong writeVersion = writeVersionOfFirstPosition(subscriptionId);
         if (writeVersion.isPresent()) {
-            Optional<Checkpoint> settled = settleWithWriteVersion(subscriptionId, globalCheckpoint, writeVersion.getAsLong());
+            // One write settles the first position and stores the version, so no write of another node falls between
+            // the two. With a newer version stored, the storage writes nothing and throws
+            // CheckpointWriteConditionNotFulfilledException, so a node that lost its lease delivers no event
+            Optional<Checkpoint> settled = storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint, writeVersion.getAsLong());
             if (settled.isPresent()) {
                 return settled.get();
             }
@@ -872,40 +878,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                      "Each later checkpoint write asks for the version again.", subscriptionId, e);
             return OptionalLong.empty();
         }
-    }
-
-    // One write settles the first position and stores the version, so no write of another node falls between the two
-    // and nothing stored is moved later. A newer version stored means this node's lease moved on and nothing was
-    // written, so the subscription starts from what the newer lease holder stored and every write of this node is
-    // refused. Anything else the storage throws fails the recording like a failed ifAbsent() write
-    private Optional<Checkpoint> settleWithWriteVersion(String subscriptionId, Checkpoint globalCheckpoint, long writeVersion) {
-        try {
-            return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint, writeVersion);
-        } catch (CheckpointWriteConditionNotFulfilledException e) {
-            Checkpoint stored;
-            try {
-                stored = readStoredPositionBack(subscriptionId, globalCheckpoint);
-            } catch (StartPositionAlreadyPinnedException readBackFailed) {
-                throw newerVersionStoredAndNothingReadBack(subscriptionId, globalCheckpoint, writeVersion, readBackFailed);
-            }
-            log.warn("Subscription {} could not record its first position {} with the write version {} of this node's lease, " +
-                     "because the checkpoint storage holds a newer write version for it. The subscription starts from the " +
-                     "checkpoint stored, {}, and its checkpoint writes are refused the same way.",
-                    subscriptionId, globalCheckpoint.asString(), writeVersion, stored.asString(), e);
-            return Optional.of(stored);
-        }
-    }
-
-    // Keeps the read back's cause, so a read that failed still has one and a read that found nothing still has none
-    private static StartPositionAlreadyPinnedException newerVersionStoredAndNothingReadBack(String subscriptionId, Checkpoint positionRead, long writeVersion,
-                                                                                           StartPositionAlreadyPinnedException readBack) {
-        return new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
-                "Subscription " + subscriptionId + " could not record " + positionRead.asString() + " as its first " +
-                "position, because the checkpoint storage holds a newer write version for it than " + writeVersion +
-                ", the version of this node's lease. Reading the checkpoint stored back " +
-                (readBack.getCause() == null ? "found nothing" : "failed") + ", so there is no position to start " +
-                "from that the node holding the newer lease stored, and the start is refused.",
-                readBack.getCause());
     }
 
     // Runs inside the StartAt.dynamic supplier below, for an evaluation that gets no recorded position, so for a

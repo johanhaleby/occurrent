@@ -28,6 +28,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
@@ -139,7 +140,7 @@ class DurableSubscriptionModelFirstPositionUnorderedRaceRedisTest {
     }
 
     @Test
-    void a_different_first_position_another_node_stored_with_a_newer_version_is_started_from_and_nothing_is_written() {
+    void a_different_first_position_another_node_stored_with_a_newer_version_refuses_the_subscribe_and_is_left_as_it_was() {
         RaceHookStorage storage = new RaceHookStorage(redis);
         storage.beforeTheResolver = () -> storage.save(subscriptionId, new StringBasedCheckpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
         Feed feed = new Feed();
@@ -149,10 +150,11 @@ class DurableSubscriptionModelFirstPositionUnorderedRaceRedisTest {
         }));
 
         assertAll(
-                () -> assertThat(thrown).as("thrown by subscribe").isNull(),
+                () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class,
+                        e -> assertThat(e.storedVersion).as("stored version reported").hasValue(3L)),
                 () -> assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo("newer-nodes-position"),
                 () -> assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(3L),
-                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly("newer-nodes-position")
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
         );
     }
 

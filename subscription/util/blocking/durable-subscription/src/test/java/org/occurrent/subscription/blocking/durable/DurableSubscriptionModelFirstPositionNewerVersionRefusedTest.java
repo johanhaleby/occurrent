@@ -26,7 +26,6 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
-import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -45,21 +44,21 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * A storage that refuses the first position because it holds a newer write version, and then can't name what it
- * holds, stands for a node whose lease moved on while the checkpoint can't be read. Starting from the position this
- * node read could skip the events up to what the newer node stored, so the start is refused, and nothing is started
- * from or saved.
+ * A storage that refuses the first position because it holds a newer write version stands for a node whose lease moved
+ * on, since the node that stored the newer version holds a newer lease. The model lets the storage's
+ * {@link CheckpointWriteConditionNotFulfilledException} reach the caller, on subscribe and in a start position
+ * evaluation, and writes nothing. It doesn't read the stored checkpoint back, so the outcome doesn't depend on whether
+ * that read would have worked.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
+class DurableSubscriptionModelFirstPositionNewerVersionRefusedTest {
 
     private static final String SUBSCRIPTION_ID = "someSubscription";
     private static final String POSITION_READ = "position-this-node-read";
 
     @Test
-    void a_newer_version_stored_with_a_checkpoint_that_cannot_be_read_back_refuses_the_subscribe_with_the_failure_as_cause() {
-        IllegalStateException unreachable = new IllegalStateException("Checkpoint storage cannot be reached");
-        NewerVersionStoredStorage storage = new NewerVersionStoredStorage(unreachable);
+    void a_newer_version_stored_refuses_the_subscribe_with_the_storages_exception_when_the_stored_checkpoint_cannot_be_read() {
+        NewerVersionStoredStorage storage = new NewerVersionStoredStorage(new IllegalStateException("Checkpoint storage cannot be reached"));
         Feed feed = new Feed(false);
         DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
 
@@ -67,19 +66,15 @@ class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
         }));
 
         assertAll(
-                () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
-                    assertThat(refusal.positionRead.asString()).as("position read").isEqualTo(POSITION_READ);
-                    assertThat(refusal.positionStored).as("position stored").isEmpty();
-                    assertThat(refusal.getCause()).as("cause").isSameAs(unreachable);
-                    assertThat(refusal).hasMessageContaining("newer write version for it than 2").hasMessageContaining("failed");
-                }),
+                () -> assertThat(thrown).as("thrown by subscribe").isSameAs(storage.refusal),
+                () -> assertThat(storage.readsAfterTheRefusal).as("reads after the refusal").isZero(),
                 () -> assertThat(storage.saved).as("saved").isEmpty(),
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
         );
     }
 
     @Test
-    void a_newer_version_stored_with_a_checkpoint_that_reads_back_as_nothing_refuses_the_subscribe_with_no_cause() {
+    void a_newer_version_stored_refuses_the_subscribe_with_the_storages_exception_when_the_stored_checkpoint_reads_back_as_nothing() {
         NewerVersionStoredStorage storage = new NewerVersionStoredStorage(null);
         Feed feed = new Feed(false);
         DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
@@ -88,21 +83,16 @@ class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
         }));
 
         assertAll(
-                () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
-                    assertThat(refusal.positionRead.asString()).as("position read").isEqualTo(POSITION_READ);
-                    assertThat(refusal.positionStored).as("position stored").isEmpty();
-                    assertThat(refusal.getCause()).as("cause").isNull();
-                    assertThat(refusal).hasMessageContaining("newer write version for it than 2").hasMessageContaining("found nothing");
-                }),
+                () -> assertThat(thrown).as("thrown by subscribe").isSameAs(storage.refusal),
+                () -> assertThat(storage.readsAfterTheRefusal).as("reads after the refusal").isZero(),
                 () -> assertThat(storage.saved).as("saved").isEmpty(),
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
         );
     }
 
     @Test
-    void an_evaluation_that_records_the_first_position_and_finds_a_newer_version_it_cannot_read_back_is_refused_with_the_failure_as_cause() {
-        IllegalStateException unreachable = new IllegalStateException("Checkpoint storage cannot be reached");
-        NewerVersionStoredStorage storage = new NewerVersionStoredStorage(unreachable);
+    void an_evaluation_that_records_the_first_position_and_finds_a_newer_version_throws_the_storages_exception_when_the_stored_checkpoint_cannot_be_read() {
+        NewerVersionStoredStorage storage = new NewerVersionStoredStorage(new IllegalStateException("Checkpoint storage cannot be reached"));
         Feed feed = new Feed(true);
         DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage,
                 new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true), id -> OptionalLong.of(2));
@@ -112,21 +102,15 @@ class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
 
         assertAll(
                 () -> assertThat(thrown).as("thrown by subscribe").isNull(),
-                () -> assertThat(feed.startPositionFailures).as("start position failures").singleElement()
-                        .isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
-                            assertThat(refusal.positionRead.asString()).as("position read").isEqualTo(POSITION_READ);
-                            assertThat(refusal.positionStored).as("position stored").isEmpty();
-                            assertThat(refusal.getCause()).as("cause").isSameAs(unreachable);
-                            assertThat(refusal).hasMessageContaining("newer write version for it than 2");
-                            assertThat(refusal.getMessage()).doesNotContain("stored in between");
-                        }),
+                () -> assertThat(feed.startPositionFailures).as("start position failures").singleElement().isSameAs(storage.refusal),
+                () -> assertThat(storage.readsAfterTheRefusal).as("reads after the refusal").isZero(),
                 () -> assertThat(storage.saved).as("saved").isEmpty(),
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
         );
     }
 
     @Test
-    void an_evaluation_that_records_the_first_position_and_finds_a_newer_version_that_reads_back_as_nothing_is_refused_with_no_cause() {
+    void an_evaluation_that_records_the_first_position_and_finds_a_newer_version_throws_the_storages_exception_when_the_stored_checkpoint_reads_back_as_nothing() {
         NewerVersionStoredStorage storage = new NewerVersionStoredStorage(null);
         Feed feed = new Feed(true);
         DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage,
@@ -137,13 +121,8 @@ class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
 
         assertAll(
                 () -> assertThat(thrown).as("thrown by subscribe").isNull(),
-                () -> assertThat(feed.startPositionFailures).as("start position failures").singleElement()
-                        .isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
-                            assertThat(refusal.positionStored).as("position stored").isEmpty();
-                            assertThat(refusal.getCause()).as("cause").isNull();
-                            assertThat(refusal).hasMessageContaining("newer write version for it than 2").hasMessageContaining("found nothing");
-                            assertThat(refusal.getMessage()).doesNotContain("stored in between");
-                        }),
+                () -> assertThat(feed.startPositionFailures).as("start position failures").singleElement().isSameAs(storage.refusal),
+                () -> assertThat(storage.readsAfterTheRefusal).as("reads after the refusal").isZero(),
                 () -> assertThat(storage.saved).as("saved").isEmpty(),
                 () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
         );
@@ -151,10 +130,13 @@ class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
 
     /**
      * Refuses the three-argument resolver because a newer version is stored. Reads find nothing before that, and after it
-     * they fail or keep finding nothing.
+     * they fail or keep finding nothing, and are counted, since the model must not read the stored checkpoint back.
      */
     private static final class NewerVersionStoredStorage implements CheckpointStorage {
         final List<Checkpoint> saved = new ArrayList<>();
+        final CheckpointWriteConditionNotFulfilledException refusal =
+                new CheckpointWriteConditionNotFulfilledException(SUBSCRIPTION_ID, OptionalLong.of(3), CheckpointWriteCondition.notOlderThan(2));
+        int readsAfterTheRefusal = 0;
         private final @Nullable RuntimeException readFailure;
         private boolean refusedTheResolver = false;
 
@@ -164,8 +146,11 @@ class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
 
         @Override
         public @Nullable Checkpoint read(String subscriptionId) {
-            if (refusedTheResolver && readFailure != null) {
-                throw readFailure;
+            if (refusedTheResolver) {
+                readsAfterTheRefusal++;
+                if (readFailure != null) {
+                    throw readFailure;
+                }
             }
             return null;
         }
@@ -179,7 +164,7 @@ class DurableSubscriptionModelFirstPositionNewerVersionUnreadableTest {
         @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
             refusedTheResolver = true;
-            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(3), CheckpointWriteCondition.notOlderThan(writeVersion));
+            throw refusal;
         }
 
         @Override

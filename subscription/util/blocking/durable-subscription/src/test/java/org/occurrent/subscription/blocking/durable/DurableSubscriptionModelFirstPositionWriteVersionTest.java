@@ -158,7 +158,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
     }
 
     @Test
-    void a_newer_version_stored_just_before_the_three_argument_resolver_writes_writes_nothing_and_starts_from_the_position_stored() {
+    void a_newer_version_stored_just_before_the_three_argument_resolver_writes_refuses_the_subscribe_and_leaves_the_position_and_version_stored_as_they_were() {
         StorageWithAHookInTheThreeArgumentResolver storage = new StorageWithAHookInTheThreeArgumentResolver();
         storage.beforeTheThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("newer-nodes-position"), CheckpointWriteCondition.notOlderThan(3));
         Feed feed = new Feed();
@@ -168,11 +168,12 @@ class DurableSubscriptionModelFirstPositionWriteVersionTest {
         }));
 
         assertAll(
-                () -> assertThat(thrown).as("thrown by subscribe").isNull(),
+                () -> assertThat(thrown).as("thrown by subscribe").isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class,
+                        e -> assertThat(e.storedVersion).as("stored version reported").hasValue(3L)),
                 () -> assertThat(storage.conditionsSaved).as("conditions saved with").isEmpty(),
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("newer-nodes-position"),
                 () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L),
-                () -> assertThat(feed.positionsStartedFrom).as("positions started from").containsExactly("newer-nodes-position")
+                () -> assertThat(feed.positionsStartedFrom).as("positions started from").isEmpty()
         );
     }
 
