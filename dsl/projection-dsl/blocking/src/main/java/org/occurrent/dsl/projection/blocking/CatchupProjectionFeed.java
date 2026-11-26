@@ -201,7 +201,9 @@ public final class CatchupProjectionFeed<E> {
      * @param event The domain event received from the external source.
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
      *                               went live, the catch-up failed, the waiting thread was interrupted, the live
-     *                               buffer is full, or another delivery of the same event was still running. The
+     *                               buffer is full, another delivery of the same event was still running, or the
+     *                               replay had folded the event already and the view's
+     *                               {@code ReplayAware.alreadyDeliveredByReplay(..)} threw for it. The
      *                               listener must not acknowledge it, and has the broker deliver it again, as
      *                               {@link RoutingOutcome.Disposition#HOLD} describes. Also thrown when this is called
      *                               while the feed is not live from inside the feed's own folds or callbacks, the

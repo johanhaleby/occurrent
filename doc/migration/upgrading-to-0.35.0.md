@@ -224,6 +224,7 @@ other sections compile fine and behave differently, so read them first.
   before that. Compiles unchanged.
 - [A full live buffer fails a blocking catch-up push subscription](#a-full-live-buffer-fails-a-blocking-catch-up-push-subscription).
 - [A blocking catch-up stopped while it delivers what it held ends there](#a-blocking-catch-up-stopped-while-it-delivers-what-it-held-ends-there).
+- [A recording callback that throws fails only its own event on a blocking catch-up](#a-recording-callback-that-throws-fails-only-its-own-event-on-a-blocking-catch-up).
   An event written once the buffer is full fails the catch-up, where 0.34.0 refused the event and went live without
   it. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
@@ -4898,6 +4899,19 @@ and a stop it finds there writes no marker.
 
 There is no code to change. The next catch-up replays the history the stopped one would have marked, and the held
 events the stopped one kept reach the handler once, from that replay or after it.
+
+## A recording callback that throws fails only its own event on a blocking catch-up
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` calls
+`alreadyDeliveredByReplay(..)` on its `CatchupListener` or `ReplayAware` view for a live event its replay already
+applied, so a recording projection can write down the append the event came from. In 0.34.0 a throw from that call for
+an event held during the catch-up failed the whole catch-up, so it wrote no marker and refused every later event. Now
+the throw fails that event alone. A feed's `acceptAndWait(..)` for it throws, and a subscription logs a warning. The
+catch-up delivers the rest, goes live and writes its marker.
+
+There is no code to change, unless an application relied on a recording failure to fail the catch-up. A projection
+that has to stop on such a failure now sees it through the `acceptAndWait(..)` that throws, or through the warning
+on a subscription.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

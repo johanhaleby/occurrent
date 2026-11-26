@@ -158,6 +158,17 @@ public final class HandoverMessages {
     }
 
     /**
+     * Refuses a live event held during a blocking catch-up whose replay already applied it, when the source call that
+     * records that the replay applied it threw. Only that event is refused, and the catch-up goes on.
+     *
+     * @param noun The noun describing what the event was fed to, e.g. {@code "projection feed"}.
+     */
+    public static String alreadyAppliedNotRecorded(String noun) {
+        return "The replay of this " + noun + " already applied the event, and recording that it did failed. Do not "
+                + "acknowledge it. Offer it again and a later delivery records it.";
+    }
+
+    /**
      * Refuses a live event whose caller was interrupted while it waited for a catch-up replay to apply the event.
      *
      * @param noun The noun describing what the event was waiting on, e.g. {@code "projection feed"}.

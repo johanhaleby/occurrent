@@ -185,6 +185,13 @@ public final class BlockingHandover<T, K> {
          * does not come here. That earlier delivery ran everything a delivery runs, so there is nothing left owing.
          * <p>
          * Can be called again for a further copy of the same payload. The default does nothing.
+         * <p>
+         * A throw changes the answer for that payload alone. For one held during the replay, a caller waiting on it
+         * in {@link BlockingHandover#accept(Object)} gets a {@link PreDispatchRefusalException} with the throw as its
+         * cause, and offers it again. A throw for one fed through
+         * {@link BlockingHandover#acceptReportingDelivery(Object)} is logged as a warning. Either way the drain
+         * delivers the rest of what it held, and the catch-up goes on and records no failure. For a payload fed after
+         * the handover went live, the throw reaches the call that fed it.
          *
          * @param payload The live payload that was not delivered.
          */
@@ -196,8 +203,9 @@ public final class BlockingHandover<T, K> {
      * Thrown by {@link #acceptReportingDelivery(Object)} and {@link #acceptIfLive(Object)} for a refusal decided
      * before any dispatch was attempted, a permanently failed catch-up, a full live buffer, or a {@code dedupId}
      * function that returned {@code null} for the payload, none of them a delivery. Also
-     * thrown to a caller waiting for the drain to apply its payload when the catch-up fails or when the caller is
-     * interrupted, to one that fed the payload from inside this handover's own deliveries or callbacks while it was
+     * thrown to a caller waiting for the drain to apply its payload when the catch-up fails, when the caller is
+     * interrupted, or when {@link Source#alreadyDeliveredByReplay(Object)} threw for a payload the replay applied, to
+     * one that fed the payload from inside this handover's own deliveries or callbacks while it was
      * not live, and by {@link #accept(Object)}
      * for every payload {@link #acceptReportingDelivery(Object)} would report {@code false} for. None of those
      * payloads was reported handled, so the caller offers it again.
@@ -382,7 +390,7 @@ public final class BlockingHandover<T, K> {
             }
             case STOPPED -> throw new PreDispatchRefusalException(this, HandoverMessages.stoppedBeforeApplied(noun));
             case STILL_DELIVERING -> throw new PreDispatchRefusalException(this, HandoverMessages.sameEventStillDelivering(noun));
-            case PENDING, BUFFERED, REFUSED -> throw new AssertionError("A waiting offer ends applied, stopped, still delivering or thrown.");
+            case PENDING, BUFFERED, REFUSED, RECORDING_FAILED -> throw new AssertionError("A waiting offer ends applied, stopped, still delivering or thrown.");
         }
     }
 
@@ -493,6 +501,9 @@ public final class BlockingHandover<T, K> {
         }
         if (held.answer == Answer.REFUSED) {
             throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), held.failure);
+        }
+        if (held.answer == Answer.RECORDING_FAILED) {
+            throw new PreDispatchRefusalException(this, HandoverMessages.alreadyAppliedNotRecorded(noun), held.failure);
         }
         return held.answer;
     }
@@ -1547,37 +1558,28 @@ public final class BlockingHandover<T, K> {
 
     // Answers how many of toDeliver it delivered before the drain's source stopped it, all of them when none did.
     private int deliverTaken(Drain<T> drain, Source<T> replayedBy, List<Held<T>> toDeliver, List<K> keysToDeliver, List<Held<T>> alreadyReplayed) {
-        // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
-        // that comes after it.
-        boolean reported = false;
-        try {
-            for (Held<T> replayedPayload : alreadyReplayed) {
-                replayedBy.alreadyDeliveredByReplay(replayedPayload.payload);
-                answer(replayedPayload, Answer.APPLIED);
-            }
-            reported = true;
-        } finally {
-            if (!reported) {
-                // Nothing has been delivered yet, so every key reserved above is still reserved and would be skipped
-                // by a later redelivery, and waited for by a later catch-up. Released for the same reason the
-                // delivery loop below releases the rest of them, whatever the source threw.
-                releaseReservations(keysToDeliver);
-            }
-            // Counted from under the lock that made this handover live, so a catch-up starting right now waits for
-            // these calls rather than replaying while the previous replay's source is still being told about them.
-            synchronized (lock) {
-                replayCallbacksRunning -= alreadyReplayed.size();
-                lock.notifyAll();
-            }
-        }
-        // Outside the monitor, same as a live accept(Object) (#588). Still sequential on this thread, so catchUp's
-        // markCaughtUp() call after this method returns is still ordered after every one of these deliveries, and a
-        // delivery that throws here still reaches catchUp's own catch block exactly as it did before this method
-        // stopped holding the lock for the delivery itself.
         int delivered = 0;
         // The first payload not handed to deliverOutsideLock(..), which releases the key of the one it was handed.
         int notHandedOver = 0;
         try {
+            try {
+                // Ahead of the drained deliveries, so a payload the replay already applied is reported before any
+                // payload that comes after it.
+                for (Held<T> replayedPayload : alreadyReplayed) {
+                    reportHeldAlreadyDeliveredByReplay(replayedBy, replayedPayload);
+                }
+            } finally {
+                // Counted from under the lock that took them, so a catch-up starting right now waits for these calls
+                // rather than replaying while the previous replay's source is still being told about them.
+                synchronized (lock) {
+                    replayCallbacksRunning -= alreadyReplayed.size();
+                    lock.notifyAll();
+                }
+            }
+            // Outside the monitor, same as a live accept(Object) (#588). Still sequential on this thread, so
+            // catchUp's markCaughtUp() call after this method returns is still ordered after every one of these
+            // deliveries, and a delivery that throws here still reaches catchUp's own catch block exactly as it did
+            // before this method stopped holding the lock for the delivery itself.
             for (; delivered < toDeliver.size(); delivered++) {
                 Source<T> checked = drain.checked;
                 if (checked != null && !checked.keepReplaying()) {
@@ -1605,9 +1607,35 @@ public final class BlockingHandover<T, K> {
         }
     }
 
+    // A throw changes the answer of this payload alone. The replay applied it, so the drain goes on and the
+    // catch-up records no failure for it. A caller waiting on it is refused and offers it again, and that offer,
+    // live by then, calls the source again. Nothing offers again a payload nobody waits on, so that throw is logged.
+    private void reportHeldAlreadyDeliveredByReplay(Source<T> replayedBy, Held<T> held) {
+        Throwable failure = null;
+        try {
+            replayedBy.alreadyDeliveredByReplay(held.payload);
+        } catch (Throwable e) {
+            failure = e;
+        }
+        if (failure == null) {
+            answer(held, Answer.APPLIED);
+            return;
+        }
+        if (!held.awaited) {
+            log.warn("The source of the {} threw while it was told that its replay already applied a live payload "
+                    + "fed without waiting. Nothing offers that payload again, so the source is not told again, and "
+                    + "the catch-up goes on.", describe(), failure);
+        }
+        answer(held, Answer.RECORDING_FAILED, failure);
+    }
+
     private void answer(Held<T> held, Answer answer) {
+        answer(held, answer, null);
+    }
+
+    private void answer(Held<T> held, Answer answer, @Nullable Throwable failure) {
         synchronized (lock) {
-            held.answer(answer, null);
+            held.answer(answer, failure);
             lock.notifyAll();
         }
     }
@@ -1787,10 +1815,11 @@ public final class BlockingHandover<T, K> {
         }
     }
 
-    // How an offer ended. PENDING and REFUSED only ever describe a payload waiting in the buffer, and BUFFERED only
-    // one that did not wait.
+    // How an offer ended. PENDING, REFUSED and RECORDING_FAILED only ever describe a payload waiting in the buffer,
+    // and BUFFERED only one that did not wait. RECORDING_FAILED is a payload the replay applied whose
+    // Source.alreadyDeliveredByReplay(..) threw.
     private enum Answer {
-        PENDING, APPLIED, BUFFERED, STOPPED, STILL_DELIVERING, REFUSED
+        PENDING, APPLIED, BUFFERED, STOPPED, STILL_DELIVERING, REFUSED, RECORDING_FAILED
     }
 
     // A live payload in the buffer, and what the caller waiting on it is told. The answer is written once, under the
