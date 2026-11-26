@@ -37,12 +37,14 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.LoggerFactory;
@@ -53,7 +55,9 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -185,12 +189,28 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
         assertThat(envelopes.compareAndSave(ORDER, seeded, current.version())).isTrue();
     }
 
+    // The subscription offers a failed event again only after delay, instead of the model's default 200 ms
+    private void redeliveringAfter(Duration delay) {
+        subscriptionModel.shutdown();
+        subscriptionModel = new InMemorySubscriptionModel(RetryStrategy.fixed(delay));
+        eventStore = new InMemoryEventStore(subscriptionModel);
+    }
+
     // The runner has applied the start event, and the instance then holds a state that takes it to room bytes under the limit
     private void startedWithRoomLeft(SagaRunnerConfig config, int room) {
+        started(config);
+        fillTo(room);
+    }
+
+    private void started(SagaRunnerConfig config) {
         subscription = SagaRunner.<OrderEvent, Pack>agnostic(subscriptionModel, converter)
                 .run("orders", saga(), stateStore, dispatched::add, null, config.withTimerPollInterval(Duration.ofHours(1)));
         write(new OrderPlaced(ORDER));
         await().ignoreExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE));
+    }
+
+    // The instance then holds a state that takes it to room bytes under the limit
+    private void fillTo(int room) {
         saveState("p".repeat(MAX_DOCUMENT_SIZE - 200_000));
         int size = storedSize();
         saveState("p".repeat(MAX_DOCUMENT_SIZE - 200_000 + (MAX_DOCUMENT_SIZE - room - size)));
@@ -236,6 +256,9 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
 
     @Test
     void a_failure_record_the_store_cannot_write_in_full_is_written_without_its_message_and_the_budget_still_runs_to_a_quarantine_with_a_bare_record() {
+        // A redelivery inside the budget lists the event as pending, since that write alone fits, so the next delivery comes
+        // after the budget and the quarantine is the only write after the first bare record
+        redeliveringAfter(Duration.ofSeconds(1));
         startedWithRoomLeft(SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMillis(300)), ROOM_FOR_A_BARE_FAILURE_RECORD_ONLY);
         failing.add("book");
 
@@ -251,6 +274,41 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
                 () -> assertThat(quarantined.streamMarks().get(STREAM).pending().values()).as("the input is not listed as pending").allMatch(List::isEmpty),
                 () -> assertThat(storedSize()).isLessThanOrEqualTo(MAX_DOCUMENT_SIZE),
                 () -> assertThat(errors()).as("a bare record fit").isEmpty()
+        );
+    }
+
+    @Test
+    void a_bare_quarantine_write_for_an_input_at_or_below_the_floor_that_the_marks_do_not_list_keeps_it_pending_so_the_release_applies_it_instead_of_dropping_it() {
+        // An instance stored before 0.35.0 applied the stream up to version 30 and has no marks, and its failure record names version 2
+        // with the budget used up. Version 2 is at or below the floor, so only a pending entry makes a release apply it, since
+        // the release ignores the failure record. The full record with its message does not fit and the bare one does, and
+        // without the entry the release would delete the record and return RELEASED with the reaction of the event lost
+        started(SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMillis(300)));
+        SagaEnvelope<String> current = instance();
+        SagaFailure budgetUsedUp = new SagaFailure(FAILING_INPUT, null, Instant.parse("2026-01-01T00:00:00Z"), IllegalStateException.class.getName(), null, null, null);
+        assertThat(envelopes.compareAndSave(ORDER, new SagaEnvelope<>(ORDER, current.state(), SagaStatus.ACTIVE, current.version() + 1, List.of(),
+                Map.of(STREAM, 30L), null, current.createdAt(), current.updatedAt(), null, current.currentStep(), true, budgetUsedUp, Map.of(), null),
+                current.version())).isTrue();
+        fillTo(ROOM_FOR_A_BARE_FAILURE_RECORD_ONLY);
+        failing.add("book");
+
+        write(new ItemAdded(ORDER, "book", 2));
+
+        await().ignoreExceptions().atMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED));
+        SagaEnvelope<String> quarantined = instance();
+        failing.clear();
+        saveState("placed");
+        SagaSubscription.ReleaseResult released = subscription.release(ORDER);
+        assertAll(
+                () -> assertThat(quarantined.failure().input()).isEqualTo(FAILING_INPUT),
+                () -> assertThat(quarantined.failure().failureMessage()).as("the bare record has no message").isNull(),
+                () -> assertThat(quarantined.streamMarks().values().stream().flatMap(marks -> marks.pending().values().stream()).flatMap(List::stream).toList())
+                        .as("the marks list the input as pending").containsExactly(2L),
+                () -> assertThat(errors()).isEmpty(),
+                () -> assertThat(released).isEqualTo(SagaSubscription.ReleaseResult.RELEASED),
+                () -> assertThat(dispatched).as("the reaction of the input ran").containsExactly(new Pack("book", 2)),
+                () -> assertThat(instance().failure()).as("the record is deleted").isNull(),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE)
         );
     }
 

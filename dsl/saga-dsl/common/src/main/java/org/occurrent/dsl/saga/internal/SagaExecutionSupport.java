@@ -631,8 +631,10 @@ public final class SagaExecutionSupport {
      * <p>
      * The instance is quarantined again on the record as {@code onReleaseTooLarge} quarantines it, with the marks
      * trimmed to {@code reorderWindow}, but the marks get no pending entry for the record and the failure record holds
-     * no message. A further release does not need either, since it applies the record whatever its marks say, see
-     * {@link #replay}. Leaving both out is the only difference between the two writes.
+     * no message. A further release does not need either. The marks show the input of every record as not applied from
+     * the write that records it on, the write that quarantines the instance included, see {@link #onFailureBare}, and
+     * only applying the input changes that, so a further release applies the record, see {@link #replay}. Leaving
+     * both out is the only difference between the two writes.
      */
     public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseTooLargeBare(SagaEnvelope<S> current, EventMeta meta,
                                                                                                 Throwable reason, Instant now, int reorderWindow) {
@@ -651,11 +653,15 @@ public final class SagaExecutionSupport {
      * {@code full}, which {@link #onFailure} returned for {@code current}, or {@code null} when no smaller write records
      * anything. Save it the way {@code full} is saved.
      * <p>
-     * The failure record holds no message, and the stream marks get no pending entry for the input, so the input's
-     * clock is on the failure record alone, as it is for an input with no stream. When {@code full} only lists an input
-     * the failure record names already as pending, nothing is left to write, and this returns {@code null}. A write that
-     * quarantines the instance still quarantines it, and a release applies the input whatever the marks say, see
-     * {@link #replay}.
+     * The failure record holds no message. The stream marks get no pending entry for the input when it is above the
+     * floor of its stream, or when they list it already, so the input's clock is then on the failure record alone, as
+     * it is for an input with no stream. A release ignores the failure record and applies such an input, because the
+     * marks don't show it as applied, see {@link #replay}. An input at or below the floor that the marks don't list keeps
+     * its pending entry, since without it a release would take the input for one the instance applied before the
+     * floor and delete its record unapplied. Then the message is the only difference between the two writes.
+     * <p>
+     * When {@code full} only lists an input the failure record names already as pending, nothing is left to write, and
+     * this returns {@code null}. A write that quarantines the instance still quarantines it.
      */
     public static <S extends @Nullable Object> @Nullable FailureRecord<S> onFailureBare(@Nullable SagaEnvelope<S> current, EventMeta meta, FailureRecord<S> full) {
         SagaEnvelope<S> written = full.envelope();
@@ -668,6 +674,12 @@ public final class SagaExecutionSupport {
         // As withFailure builds them, without the pending entry
         Map<String, StreamMarks> streamMarks = current == null ? Map.of()
                 : withReplacedFailure(current.streamMarks(), current.streamWatermarks(), currentFailure(current), meta);
+        // Except for an input at or below the floor of its stream that the marks do not list already. A release ignores
+        // the failure record, so without the entry it would take the input for one the instance applied and delete its
+        // record unapplied, see classify
+        if (current != null && isAtOrBelowFloor(current, meta) && !isOutstanding(streamMarks.get(meta.streamId()), meta)) {
+            streamMarks = written.streamMarks();
+        }
         return new FailureRecord<>(new SagaEnvelope<>(written.sagaId(), written.state(), written.status(), written.version(), written.timers(),
                 written.streamWatermarks(), written.positionWatermark(), written.createdAt(), written.updatedAt(), written.completedAt(),
                 written.currentStep(), written.started(), bare, streamMarks, written.quarantineSkipCount()), full.expectedVersion(), full.quarantined());
@@ -1230,6 +1242,15 @@ public final class SagaExecutionSupport {
             return marks.floor();
         }
         return watermark != null ? watermark : Long.MIN_VALUE;
+    }
+
+    // Whether the stream version meta describes is at or below the floor of its stream on current, where only an
+    // outstanding mark makes classify take it for new once the failure record stops counting, as it does in a release
+    private static <S extends @Nullable Object> boolean isAtOrBelowFloor(SagaEnvelope<S> current, EventMeta meta) {
+        String streamId = meta.streamId();
+        Long streamVersion = meta.streamVersion();
+        return streamId != null && streamVersion != null
+               && streamVersion <= floorOf(current.streamMarks().get(streamId), current.streamWatermarks().get(streamId));
     }
 
     private static String typeKey(EventMeta meta) {

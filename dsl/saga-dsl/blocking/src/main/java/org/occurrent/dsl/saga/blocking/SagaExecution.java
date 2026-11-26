@@ -437,7 +437,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 if (!fits(record)) {
                     FailureRecord<S> bare = SagaExecutionSupport.onFailureBare(current, meta, record);
                     if (bare != null && !fits(bare)) {
-                        log.error("Saga '{}' instance '{}' failed on the event '{}' and could not record the failure, because its state store {} cannot write the instance with the failure recorded, even with no failure message and the event not listed as pending. "
+                        log.error("Saga '{}' instance '{}' failed on the event '{}' and could not record the failure, because its state store {} cannot write the instance with the failure recorded, even with no failure message. "
                                   + "The exception goes back to whatever feeds this subscription, and the instance is never quarantined on the event, so a subscription that delivers the event again before any later one holds up every later event of the saga. "
                                   + "Delete the instance with SagaStateStore.delete(\"{}\"), which throws its state away, or handle the event by hand.",
                                 subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), sagaId, failure);

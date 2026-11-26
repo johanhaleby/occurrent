@@ -153,8 +153,10 @@ import static java.util.Objects.requireNonNull;
  * with an {@link IllegalStateException} like any other failing input, so with quarantine on the instance is quarantined
  * once the input's budget runs out.
  * <p>
- * When the store can't write the failure record either, it's written without its message and without listing the event
- * as pending, so the budget still runs. When even that doesn't fit, nothing is written, the event fails on every delivery
+ * When the store can't write the failure record either, it's written without its message, so the budget still runs. It
+ * doesn't list the event as pending either, unless the event is at or below the highest version of its stream that an
+ * instance stored before 0.35.0 had applied. A release takes such an event for one the instance applied unless it's
+ * listed, and skips it. When even that doesn't fit, nothing is written, the event fails on every delivery
  * and is never quarantined, and an ERROR names the instance. A store that doesn't implement
  * {@code SagaStateStoreSkippedInputs} isn't asked, so it dispatches the commands of an input whose save it then fails.
  *

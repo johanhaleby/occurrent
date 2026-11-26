@@ -35,6 +35,7 @@ import org.occurrent.dsl.saga.InMemorySagaStateStore;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
@@ -53,7 +54,9 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -368,6 +371,42 @@ class SagaLiveWriteTooLargeTest {
                 () -> assertThat(errors()).isEmpty(),
                 () -> assertThat(released).isEqualTo(ReleaseResult.RELEASED),
                 () -> assertThat(dispatched).containsExactly(new Pack(ORDER, "a")),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE)
+        );
+    }
+
+    @Test
+    void a_bare_quarantine_write_for_an_input_at_or_below_the_floor_that_the_marks_do_not_list_keeps_it_pending_so_the_release_applies_it_instead_of_dropping_it() {
+        // An instance stored before 0.35.0 applied the stream up to version 30 and has no marks, so version 2 is at or below the floor
+        // and only a pending entry makes a release take it for an input to apply. The release ignores the failure record, so a
+        // bare record without the entry would let it delete the record and return RELEASED with the event's reaction lost
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        aFails = true;
+        fits = candidate -> !hasFailureMessage(candidate);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+        SagaEnvelope<Order> placed = instance();
+        SagaFailure budgetUsedUp = new SagaFailure(FAILING_INPUT, null, START, IllegalStateException.class.getName(), null, null, null);
+        assertThat(envelopes.compareAndSave(ORDER, new SagaEnvelope<>(ORDER, placed.state(), SagaStatus.ACTIVE, placed.version(), List.of(),
+                Map.of(ORDER, 30L), null, START, START, null, null, true, budgetUsedUp, Map.of(), null), placed.version())).isTrue();
+        advanceThroughTheBudget();
+
+        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(a));
+        SagaEnvelope<Order> quarantined = instance();
+        aFails = false;
+        fits = candidate -> true;
+        ReleaseResult released = execution.release(ORDER);
+
+        assertAll(
+                () -> assertThat(thrown).as("the quarantining delivery is acknowledged").isNull(),
+                () -> assertThat(quarantined.status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(quarantined.failure().input()).isEqualTo(FAILING_INPUT),
+                () -> assertThat(quarantined.failure().failureMessage()).as("the bare record has no message").isNull(),
+                () -> assertThat(quarantined.streamMarks().values().stream().flatMap(marks -> marks.pending().values().stream()).flatMap(Collection::stream).toList())
+                        .as("the marks list the input as pending").containsExactly(2L),
+                () -> assertThat(errors()).isEmpty(),
+                () -> assertThat(released).isEqualTo(ReleaseResult.RELEASED),
+                () -> assertThat(dispatched).as("the reaction of the input ran").containsExactly(new Pack(ORDER, "a")),
+                () -> assertThat(instance().failure()).as("the record is deleted").isNull(),
                 () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE)
         );
     }
