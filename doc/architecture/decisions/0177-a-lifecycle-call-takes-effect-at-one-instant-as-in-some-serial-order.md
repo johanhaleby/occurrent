@@ -235,7 +235,9 @@ A `start(true)` made on a thread that already holds the lock, from code another 
 those subscriptions after its turn on that same thread, one after another, and each of them reads under the lock. A
 thread of their own would wait for the lock while the `start(true)` waited for them, and neither would return. So
 those reads run under the lock that the wrapped model's own `start(..)` or the `StartAt.dynamic(..)` function already
-holds, two of the cases listed below that still hold the model lock.
+holds, two of the cases listed below that still hold the model lock. A `shutdown()` from another thread that waits
+for the lock behind one of those reads shuts the wrapped model down without the lock, and throws after 10 seconds, as
+described below.
 
 A call for X that an action handed over, a subscribe, a resume, a positioned resume, a pause or a cancel, runs on a
 thread of its own without the model lock, as the same call made from another thread does. The lifecycle thread waits
@@ -245,25 +247,35 @@ with the calls handed over after it. A withdrawn call throws `IllegalStateExcept
 changes nothing. So the `StartAt.dynamic(..)` function of a handed subscribe runs without the lock, and a `start(..)`,
 `stop()` or `shutdown()` made meanwhile doesn't wait for it. Another call for X waits for X's claim, at most 10 seconds.
 
-A thread that holds the model lock and waits for one subscription gives up after 10 seconds, whatever it waits for.
-That covers a `stop()` waiting for the claim or the handover lock of a replay it parks, while the replay waits for its
+A thread that holds the model lock and waits for one subscription gives up after 10 seconds, apart from the reads of
+a `start(true)` made on a thread that already holds the lock, above, and the wrapped model's resume in case 2 below,
+which have no deadline of their own. That covers a `stop()` waiting for the claim or the handover lock of a replay it parks, while the replay waits for its
 checkpoint storage or the wrapped model, and a resume's turn waiting for a cancelled replay to return. A `stop()` that
 gives up has stopped the model all the same (`STOPPED_ALL_THE_SAME`), and that replay parks itself, as described below.
 A replay a resume started can be in its handover then, waiting for its storage to give it the live start. Once the read
 returns, it finds the model stopped and parks instead of resuming the wrapped model. A resume in the wrapped model that
 blocks until after the stop gave up still resumes the subscription there.
 A `shutdown()` that waits for the lock while its holder has waited 100 milliseconds or more for one subscription shuts
-the wrapped model down without the lock.
+the wrapped model down without the lock. When that wait has no deadline of its own, and it and the `shutdown()`'s own
+wait have both run for 10 seconds, the `shutdown()` throws (`SHUT_DOWN_PAST_A_WAIT`), and a thread of its own shuts the
+wrapped model down again under the lock, as behind code the caller supplied, described below.
 
 The three cases that still hold the model lock across I/O or code the caller supplied are these:
 
-1. The wrapped model's own `start(..)`, `stop()` and `shutdown()`, and whatever they read.
-2. A wrapped model that doesn't implement `PreparedResumeSubscriptions` reads in its `resumeSubscription(X)`, which the
-   turn calls. A wrapped model that isn't part of Occurrent and whose resume blocks holds the lock until it returns. A
-   `shutdown()` that waits for the lock meanwhile shuts the wrapped model down without the lock, as above, so the
-   wrapped model then has a resume and a `shutdown()` running at once, as it would with two threads calling it.
+1. The wrapped model's own `start(..)`, `stop()` and `shutdown()`, and whatever they read. That includes the checkpoint
+   reads of a `start(true)` made inside the wrapped model's `start(..)`, described above.
+2. The wrapped model's `resumeSubscription(X)`, which the turn calls. A wrapped model that doesn't implement
+   `PreparedResumeSubscriptions` reads in it. A wrapped model that isn't part of Occurrent and whose resume blocks holds
+   the lock until it returns. A `shutdown()` that waits for the lock meanwhile shuts the wrapped model down without the
+   lock, as above, so the wrapped model then has a resume and a `shutdown()` running at once, as it would with two
+   threads calling it. After 10 seconds the `shutdown()` throws, as above. The MongoDB subscription models read nothing
+   in the resume that `DurableSubscriptionModel.resumeAsPrepared(..)` calls, but it waits for the MongoDB model's
+   monitor. Their `pauseSubscription(..)` and `cancelSubscription(..)` of another subscription hold that monitor while
+   they close its change stream cursor, and closing one can wait for the server. So the turn can wait under the lock
+   until that close returns, and a `shutdown()` made meanwhile waits for it too.
 3. A `StartAt.dynamic(..)` function that a start's or a resume's turn asks, and a `CatchupListener` that a resume
-   relaunching a parked replay tells. Both run under the lock, bounded as follows.
+   relaunching a parked replay tells. Both run under the lock, bounded as follows. So do the checkpoint reads of a
+   `start(true)` made inside such a function, described above.
 
 The one bound on the wait for the lock comes from code the caller supplied, and so does one of the two bounds on a
 resume's wait behind the handed calls. The other is the wait for the actions that handed those calls over, described

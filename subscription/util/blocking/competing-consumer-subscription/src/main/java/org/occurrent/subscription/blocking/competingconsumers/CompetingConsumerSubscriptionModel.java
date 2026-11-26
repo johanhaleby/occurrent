@@ -1647,7 +1647,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             failedToPause.add(e);
             throw e;
         }
-        unregisterCompetingConsumer(cc, c -> {
+        Consumer<CompetingConsumer> pausedByThisStop = c -> {
             logDebug("Stopped CompetingConsumer subscription (subscriberId={}, subscriptionId={})", c.getSubscriberId(), c.getSubscriptionId());
             if (c.isRunning()) {
                 competingConsumers.put(c.subscriptionIdAndSubscriberId, c.registerPaused(true));
@@ -1657,7 +1657,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             } else if (c.isMeantToRunBefore(stop)) {
                 competingConsumers.put(c.subscriptionIdAndSubscriberId, c.registerPaused(true));
             }
-        });
+        };
+        // A catch-up replay whose action called this stop() parks only once that action has returned, so the try gives
+        // the lease up then, and no other node delivers the subscription while this node is still in the action
+        if (isRunningInTheWrappedModel(subscriptionId) && isPausedInTheWrappedModel(subscriptionId)) {
+            logDebug("CompetingConsumer is unregistered once its pause takes effect in the wrapped model (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), subscriptionId);
+            pausedByThisStop.accept(cc);
+            reconcileLater(cc.subscriptionIdAndSubscriberId);
+        } else {
+            unregisterCompetingConsumer(cc, pausedByThisStop);
+        }
     }
 
     /**
@@ -4889,6 +4898,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 if (runs && holdsLease && pausedByTheLossOfItsLease(key) && isPausedInTheWrappedModel(key.subscriptionId())) {
                     throw new IllegalStateException("CompetingConsumer (subscriberId=" + key.subscriberId() + ", subscriptionId=" + key.subscriptionId() + ") still runs in the wrapped subscription model until the pause it was asked for there takes effect, so it is resumed once it is paused there");
                 }
+                // The same for one that no longer competes, such as one a stop() called from its replay's action paused,
+                // whose lease is given up only once the pause has taken effect, so no other node delivers it meanwhile
+                if (runs && registrations.containsKey(key) && !competesNow(key) && isPausedInTheWrappedModel(key.subscriptionId())) {
+                    throw new IllegalStateException("CompetingConsumer (subscriberId=" + key.subscriberId() + ", subscriptionId=" + key.subscriptionId() + ") still runs in the wrapped subscription model until the pause it was asked for there takes effect, so it keeps its lease until it is paused there");
+                }
                 @Nullable BooleanSupplier call = nextCall(key, runs, holdsLease, stillRunsAfterItsPause);
                 if (call == null) {
                     return;
@@ -4910,6 +4924,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private boolean pausedByTheLossOfItsLease(SubscriptionIdAndSubscriberId key) {
         @Nullable CompetingConsumer competingConsumer = competingConsumers.get(key);
         return competingConsumer != null && competingConsumer.isPausedByTheLossOfItsLease();
+    }
+
+    private boolean competesNow(SubscriptionIdAndSubscriberId key) {
+        @Nullable CompetingConsumer competingConsumer = competingConsumers.get(key);
+        return competingConsumer != null && competes(competingConsumer);
     }
 
     // Null once this model is shut down. Waits for each pause, resume or cancel that the try lets go first, see

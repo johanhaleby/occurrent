@@ -1646,7 +1646,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link #stop()} and no {@code shutdown()}.
      * <p>
      * When {@code alone} finds that what was read moved before the turn used it, by throwing {@link ReadAgain}, this
-     * reads again and runs another turn. When a stop of any of {@code models} took effect after the read began, it reads
+     * reads again and runs another turn. When the {@link ReadAgain} started a takeover's replay outside the lock, the next
+     * turn reads nothing and returns that replay's handle, also once the replay has handed over and the subscription runs
+     * in the live delegate. When a stop of any of {@code models} took effect after the read began, it reads
      * again too, so the resume takes effect after that stop, as a resume made once it had returned would, and never
      * from a position read before it. When a {@code shutdown()} of {@code model} began after it, the turn changes
      * nothing, and the handle answers {@code false} from {@code waitUntilStarted}. {@code alone} returning {@code null}
@@ -1664,9 +1666,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                                             boolean throwsOnceStopped, @Nullable ResumeRead readBefore, Function<ResumeRead, @Nullable Subscription> alone) {
         long[] stopsAtTheRead = {stopsBefore};
         ResumeRead notYetUsed = readBefore;
+        @Nullable Subscription startedBeforeReadingAgain = null;
         try {
             while (true) {
-                ResumeRead read = notYetUsed != null ? notYetUsed : ResumeRead.read(subscriptionId, models, getWrappedSubscriptionModel());
+                // Its replay may have handed over and gone live by the next turn, so that turn returns its handle rather
+                // than resume the live delegate, which then runs the subscription
+                Subscription replayStarted = startedBeforeReadingAgain;
+                // Read under the lock only by a start made under another start's lock, and marked there as a wait for
+                // one subscription, so a shutdown() waiting for the lock shuts the live delegate down meanwhile
+                ResumeRead read = replayStarted != null ? null
+                        : notYetUsed != null ? notYetUsed : whileWaitingForOneSubscription(() -> ResumeRead.read(subscriptionId, models, getWrappedSubscriptionModel()));
                 notYetUsed = null;
                 try {
                     return resumeInTurn(subscriptionId, () -> {
@@ -1682,10 +1691,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                             stopsAtTheRead[0] = stopsNow;
                             throw ReadAgain.MOVED;
                         }
-                        return alone.apply(read);
+                        return replayStarted != null ? replayStarted : alone.apply(Objects.requireNonNull(read));
                     });
                 } catch (ReadAgain moved) {
-                    moved.beforeReadingAgain.run();
+                    startedBeforeReadingAgain = moved.beforeReadingAgain.get();
                 }
             }
         } finally {
@@ -1760,14 +1769,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Thrown in the turn of a resume when what its {@link ResumeRead} read moved before the turn used it, so the resume
      * reads again outside the model lock and runs another turn. {@code beforeReadingAgain} runs first, outside the lock
-     * too. Has no stack trace, since it is a signal and never reaches a caller.
+     * too, and answers the handle of a replay it started, which the next turn returns, or {@code null}. Has no stack
+     * trace, since it is a signal and never reaches a caller.
      */
     static final class ReadAgain extends RuntimeException {
-        private static final ReadAgain MOVED = new ReadAgain(() -> {
-        });
-        private final Runnable beforeReadingAgain;
+        private static final ReadAgain MOVED = new ReadAgain(() -> null);
+        private final Supplier<@Nullable Subscription> beforeReadingAgain;
 
-        private ReadAgain(Runnable beforeReadingAgain) {
+        private ReadAgain(Supplier<@Nullable Subscription> beforeReadingAgain) {
             super(null, null, false, false);
             this.beforeReadingAgain = beforeReadingAgain;
         }
@@ -2349,15 +2358,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (historyLost != null) {
                 throw historyLost;
             }
-            // A takeover stores the position it replays from, so under the model lock it is run outside the lock first,
-            // under the claim, as the takeover's own thread runs it, and the resume then finds its replay running
-            if (modelLock.isHeldByCurrentThread() && takeOverStores(subscriptionId)) {
-                throw new ReadAgain(() -> {
-                    try (Claim alsoIgnored = claim(subscriptionId)) {
-                        takeOverIfAsked(subscriptionId);
-                    }
-                });
-            }
             Subscription takenOver = takeOverIfAsked(subscriptionId);
             if (takenOver != null) {
                 return takenOver;
@@ -2841,14 +2841,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return "The subscription model neither runs the subscription nor holds it paused.";
     }
 
-    // Whether takeOverIfAsked would store the position its replay starts from, called with the handover lock held
-    private boolean takeOverStores(String subscriptionId) {
-        HandedOver made = handedOver.get(subscriptionId);
-        return made != null && made.owner() == this && !made.noLive() && !shuttingDown && subscribed.get(subscriptionId) == made.subscribed()
-               && (made.takingOver().get() || made.takeOverAsked().get() && getWrappedSubscriptionModel().isPaused(subscriptionId))
-               && returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> true).orElse(false);
-    }
-
     /**
      * Starts the replay a takeover asked for, once the live delegate has paused the subscription after it lost the
      * history from the live start a replay on this model handed over, and returns its handle. Returns {@code null} when
@@ -2860,7 +2852,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * The replay runs as one a resume starts. It replays from the position or time the replay that handed over started
      * from, and the live delegate resumes the subscription it holds paused at a live start read again. The checkpoint the
      * replay starts from is stored first, so a restart in between replays as well, unless the live delegate must not
-     * run, when it is kept in memory only. A pause asked for since the live
+     * run, when it is kept in memory only. A call holding the model lock gets {@link ReadAgain} in place of that write,
+     * which runs this again outside the lock. A pause asked for since the live
      * delegate paused the subscription keeps it paused, and the next resume replays from what is stored then, or,
      * without checkpoint storage, runs this replay. It counts towards the {@value #MAX_REPLAYS_AGAIN} times a replay
      * runs again, as {@link #replayUntilLiveStartHolds} describes.
@@ -2878,7 +2871,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return null;
             }
             // Kept in memory when the live delegate must not run, since the subscription keeps no position once live
-            boolean stored = !made.noLive() && this.<Boolean, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+            boolean stores = !made.noLive() && returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> true).orElse(false);
+            // Not stored under the model lock. The takeover runs outside the lock first, under the claim, as its own
+            // thread runs it, and the resume's next turn returns that replay's handle. Decided after the live delegate
+            // was asked above whether it holds the subscription paused, since it can pause it at any moment
+            if (stores && modelLock.isHeldByCurrentThread()) {
+                throw new ReadAgain(() -> {
+                    try (Claim alsoIgnored = claim(subscriptionId)) {
+                        return takeOverIfAsked(subscriptionId);
+                    }
+                });
+            }
+            boolean stored = stores && this.<Boolean, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 try {
                     cfg.storage().save(subscriptionId, made.replayAgainFrom(), writeConditionFor(cfg, subscriptionId));
                 } finally {
@@ -5670,6 +5674,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 + " made on another thread. " + whatChanged);
     }
 
+    private IllegalStateException aWaitForOneSubscriptionHeldUp(String call, String whatChanged) {
+        log.error("{} waited {} ms for the model lock while the call holding it waited for one subscription, such as for a checkpoint storage that doesn't answer, and gives up. {}",
+                call, LIFECYCLE_WAIT.toMillis(), whatChanged);
+        return new IllegalStateException("Cannot run " + call + ", because the call holding the model lock waited " + LIFECYCLE_WAIT.toMillis()
+                + " ms for one subscription while this call waited for the lock, such as for a checkpoint storage or a subscription model that doesn't answer. " + whatChanged);
+    }
+
     /**
      * Runs {@code code}, which a caller supplied, such as a {@link CatchupListener}. On a thread that holds the model
      * lock, as a subscribe, a resume or a {@link #start(boolean)} does on the lifecycle thread or in turn, a call from
@@ -5920,7 +5931,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * While the thread that holds the lock has waited {@link #CALLERS_CODE_POLL} or more for one subscription, such as a
      * {@link #stop()} waiting for the handover lock of a replay whose checkpoint storage doesn't answer, or a resume inside
      * a live delegate that reads in its {@code resumeSubscription(String)}, this runs {@code shutDownTheLiveDelegate}
-     * once without the lock, and goes on waiting for the lock as above.
+     * once without the lock, and goes on waiting for the lock as above. Once that wait for one subscription and this
+     * wait have both run for {@link #LIFECYCLE_WAIT}, it hands the rest over and throws as it does behind code a caller
+     * supplied. Only a wait with no deadline of its own lasts that long, such as the checkpoint read of a
+     * {@code start(true)} made under another start's lock, or a resume that blocks in the live delegate.
      * <p>
      * Called from inside the action of a replay or of a live call, or on a thread that holds a {@link #claim}, the
      * shutdown doesn't wait. This returns once {@code forgetTheCatchups} has run, and the lifecycle thread the children
@@ -5979,6 +5993,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 if (givesUpBehindCallersCode && heldUpByCallersCode(waitingSince)) {
                     handedOver = finishOnAThreadOfItsOwn(model, calls, shutDownTheLiveDelegate);
                     throw callersCodeHeldUp("shutdown()", aStartIsInTheLiveDelegate ? SHUT_DOWN_TO_END_A_START : shutDownWithoutTheLock ? SHUT_DOWN_PAST_A_WAIT : NOT_SHUT_DOWN);
+                }
+                // A wait for one subscription with no deadline of its own, such as the checkpoint read of a start made
+                // under another start's lock, or a resume inside the live delegate. Every other one gives up after
+                // LIFECYCLE_WAIT counted from about when it was marked, and clears the mark as it does, so this gives up
+                // behind one of those only when both reach the bound in the same poll
+                if (givesUpBehindCallersCode && perIdWaitSince != 0 && heldUpSince(perIdWaitSince, waitingSince)) {
+                    handedOver = finishOnAThreadOfItsOwn(model, calls, shutDownTheLiveDelegate);
+                    throw aWaitForOneSubscriptionHeldUp("shutdown()", SHUT_DOWN_PAST_A_WAIT);
                 }
             }
             try {

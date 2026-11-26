@@ -77,6 +77,7 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private final AtomicBoolean firstTakeOver = new AtomicBoolean(true);
     private volatile Runnable betweenTheFirstTakeOverPauseAndWhatFollows = () -> {
     };
+    private volatile Function<String, @Nullable Boolean> answersIsPaused = subscriptionId -> null;
     private volatile @Nullable Runnable resumesWhereItWasHeldOnceThisReturns;
     private volatile @Nullable Runnable startResumesWhereItWasHeldOnceThisReturns;
     private final Map<String, Held> runningWhereItWasHeld = new ConcurrentHashMap<>();
@@ -150,6 +151,13 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     LiveStartLosingSubscriptionModel betweenTheFirstTakeOverPauseAndWhatFollows(Runnable betweenTheFirstTakeOverPauseAndWhatFollows) {
         this.betweenTheFirstTakeOverPauseAndWhatFollows = betweenTheFirstTakeOverPauseAndWhatFollows;
+        return this;
+    }
+
+    // Answers isPaused(id) with what the function returns, and as it does without the function when that returns null, so a
+    // test can have a pause land between two asks
+    LiveStartLosingSubscriptionModel answeringIsPausedWith(Function<String, @Nullable Boolean> answer) {
+        this.answersIsPaused = answer;
         return this;
     }
 
@@ -352,6 +360,10 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public boolean isPaused(String subscriptionId) {
+        Boolean answered = answersIsPaused.apply(subscriptionId);
+        if (answered != null) {
+            return answered;
+        }
         return paused.containsKey(subscriptionId) || delegate.isPaused(subscriptionId);
     }
 
