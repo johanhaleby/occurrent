@@ -437,7 +437,9 @@ public class MongoCommons {
      * Writes only when {@code notOlderThan(writeVersion)} allows it, and then always with {@code writeVersion}. It
      * writes {@code candidateDocument} when nothing is stored. For a candidate with an {@link #OPERATION_TIME}, it also
      * writes it when the stored operation time is later, and keeps a stored operation time otherwise. For any other
-     * candidate it keeps a stored checkpoint equal to {@code candidateDocument}. Every other stored checkpoint can't be
+     * candidate it keeps a stored checkpoint equal to {@code candidateDocument}, and a generic checkpoint an older
+     * Occurrent version stored in {@link #LEGACY_GENERIC_CHECKPOINT} counts as equal when it holds the value
+     * {@code candidateDocument} holds in {@link #GENERIC_CHECKPOINT}. Every other stored checkpoint can't be
      * compared with {@code candidateDocument}, so the document is left as it is, and so is one with a newer stored
      * version.
      *
@@ -479,14 +481,27 @@ public class MongoCommons {
     }
 
     // True when every field a checkpoint is stored in holds what candidateDocument holds, and each one it lacks is
-    // missing from the stored document too
+    // missing from the stored document too. A generic checkpoint an older version stored in the legacy field is
+    // compared as if it were stored in the current one, the way calculateCheckpointFromMongoStreamPositionDocument
+    // reads it back, since candidateDocument never holds the legacy field
     private static Document storedCheckpointIsExpr(Document candidateDocument) {
-        return new Document("$and", Stream.of(RESUME_TOKEN, OPERATION_TIME, GENERIC_CHECKPOINT, LEGACY_GENERIC_CHECKPOINT,
-                        CATCHUP_LIVE_FROM, CATCHUP_REPLAY_ORIGIN, CATCHUP_REPLAY_TO)
+        Stream<Document> generic = Stream.of(candidateDocument.containsKey(GENERIC_CHECKPOINT)
+                ? new Document("$eq", asList(storedGenericCheckpointExpr(), new Document("$literal", candidateDocument.get(GENERIC_CHECKPOINT))))
+                : new Document("$and", asList(fieldIsMissingExpr(GENERIC_CHECKPOINT), fieldIsMissingExpr(LEGACY_GENERIC_CHECKPOINT))));
+        Stream<Document> others = Stream.of(RESUME_TOKEN, OPERATION_TIME, CATCHUP_LIVE_FROM, CATCHUP_REPLAY_ORIGIN, CATCHUP_REPLAY_TO)
                 .map(field -> candidateDocument.containsKey(field)
                         ? new Document("$eq", asList("$" + field, new Document("$literal", candidateDocument.get(field))))
-                        : fieldIsMissingExpr(field))
-                .toList());
+                        : fieldIsMissingExpr(field));
+        return new Document("$and", Stream.concat(generic, others).toList());
+    }
+
+    // The generic checkpoint stored, read from the legacy field only when the current one is missing, as
+    // calculateCheckpointFromMongoStreamPositionDocument reads it
+    private static Document storedGenericCheckpointExpr() {
+        return new Document("$cond", new Document(Map.of(
+                "if", fieldExistsExpr(GENERIC_CHECKPOINT),
+                "then", "$" + GENERIC_CHECKPOINT,
+                "else", "$" + LEGACY_GENERIC_CHECKPOINT)));
     }
 
     /**

@@ -612,8 +612,9 @@ again but skips none.
 A subscribe that starts from a checkpoint already stored now stores this node's version with it first, through the
 same three-argument `resolveFirstCheckpointRace` with that checkpoint as the candidate, and starts from the checkpoint
 the call answers. That covers the start position the Spring Boot starter stores at registration, which it writes
-without a version. In 0.34.0 a node that had lost its lease could store the checkpoint of a later event over the
-position the new lease holder started from. When the new holder stopped before its first save, the next one resumed
+without a version, and on the MongoDB storages a checkpoint an older Occurrent version stored under the legacy
+`subscriptionPosition` field. In 0.34.0 a node that had lost its lease could store the checkpoint of a later event
+over the position the new lease holder started from. When the new holder stopped before its first save, the next one resumed
 after the events in between and never delivered them. When the storage holds a newer version, `subscribe` throws
 `CheckpointWriteConditionNotFulfilledException`, and under `CompetingConsumerSubscriptionModel` it returns and the
 subscription waits for the lease, as for a first position above.

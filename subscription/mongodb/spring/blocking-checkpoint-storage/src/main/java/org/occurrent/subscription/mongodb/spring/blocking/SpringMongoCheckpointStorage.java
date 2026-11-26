@@ -155,7 +155,8 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
      * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
      * in the same {@code findOneAndUpdate}, see {@link MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
      * A {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} is stored when nothing is, and keeps a
-     * stored checkpoint equal to it. Answers empty and writes nothing when any other resume token or generic
+     * stored checkpoint equal to it, also one an older Occurrent version stored in the legacy
+     * {@code subscriptionPosition} field. Answers empty and writes nothing when any other resume token or generic
      * checkpoint is stored, since it can't be compared with {@code candidate}.
      */
     @Override

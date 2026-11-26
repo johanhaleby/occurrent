@@ -444,6 +444,44 @@ class NativeMongoCheckpointStorageFirstCheckpointRaceTest {
         assertThat(calls).as("one failed attempt and one that went through").hasValue(2);
     }
 
+    @Test
+    void a_generic_checkpoint_stored_in_the_legacy_field_equal_to_the_candidate_gets_the_version_and_is_answered() {
+        insertLegacyGenericCheckpoint("p");
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, storage.read(subscriptionId), 2);
+
+        assertThat(resolution).hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo("p"));
+        assertThat(storage.writeVersion(subscriptionId)).hasValue(2L);
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo("p");
+    }
+
+    @Test
+    void a_generic_checkpoint_stored_in_the_legacy_field_is_kept_when_a_node_with_an_older_version_saves_a_later_one() {
+        insertLegacyGenericCheckpoint("p");
+        storage.resolveFirstCheckpointRace(subscriptionId, storage.read(subscriptionId), 2);
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("later"), CheckpointWriteCondition.notOlderThan(1)))
+                .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo("p");
+    }
+
+    @Test
+    void a_generic_checkpoint_stored_in_the_legacy_field_that_differs_from_the_candidate_answers_empty_and_writes_nothing() {
+        insertLegacyGenericCheckpoint("p");
+        Document before = storedDocument();
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, new StringBasedCheckpoint("other"), 2);
+
+        assertThat(resolution).isEmpty();
+        assertThat(storedDocument()).as("stored document").isEqualTo(before);
+        assertThat(storage.writeVersion(subscriptionId)).as("stored version").isEmpty();
+    }
+
+    private void insertLegacyGenericCheckpoint(String position) {
+        database.getCollection(COLLECTION).insertOne(new Document(ID_FIELD, subscriptionId).append("subscriptionPosition", position));
+    }
+
     private Document storedDocument() {
         return database.getCollection(COLLECTION).find(eq(ID_FIELD, subscriptionId)).first();
     }
