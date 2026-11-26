@@ -310,6 +310,10 @@ public final class BlockingHandover<T, K> {
     // takes the replay turn, so asking again before then, from any thread, adds an ask to it rather than a second
     // replay.
     private @Nullable AskedCatchUp<T> askedByOwnCode = null;
+    // The thread of the catch-up between its last keepReplaying() check and the end of its markCaughtUp(), and how
+    // many actions runOutsideMarkerWrite(..) is running. Each waits for the other, so the two never overlap.
+    private @Nullable Thread marking = null;
+    private int actionsOutsideMarkerWrite = 0;
     // Starts the thread handOffCatchUpsAskedByOwnCode() hands the asked catch-ups to. Thread::start outside tests.
     private final Consumer<Thread> startAskedCatchUpThread;
 
@@ -586,6 +590,52 @@ public final class BlockingHandover<T, K> {
     }
 
     /**
+     * Run {@code action} at a moment when no catch-up of this handover is between its last
+     * {@link Source#keepReplaying()} check and the end of its {@link Source#markCaughtUp()}. A marker write already
+     * past that check ends, returned or thrown, before {@code action} starts. A catch-up that reaches that check while
+     * {@code action} runs asks only once {@code action} has returned or thrown, so it sees what {@code action}
+     * changed. That is what lets a caller order a change to who owns the marker, and a delete of it, against the
+     * marker write, with the write itself still inside the catch-up.
+     * <p>
+     * Runs on the calling thread, outside this handover's monitor, and several actions can run at once. Waiting for
+     * the marker write is not interruptible, and an interrupt meanwhile stays on the thread. {@code action} must not
+     * wait for a catch-up of this handover to end, or for anything {@link Source#markCaughtUp()} holds while it runs,
+     * since the catch-up can be waiting for {@code action}.
+     *
+     * @param action What to run.
+     * @throws IllegalStateException if called from inside the {@link Source#markCaughtUp()} it would wait for.
+     */
+    public void runOutsideMarkerWrite(Runnable action) {
+        Objects.requireNonNull(action, "action cannot be null");
+        synchronized (lock) {
+            if (marking == Thread.currentThread()) {
+                throw new IllegalStateException("Called from inside the marker write of the " + describe()
+                        + ", which it would wait for.");
+            }
+            boolean interrupted = false;
+            while (marking != null) {
+                try {
+                    lock.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            actionsOutsideMarkerWrite++;
+        }
+        try {
+            action.run();
+        } finally {
+            synchronized (lock) {
+                actionsOutsideMarkerWrite--;
+                lock.notifyAll();
+            }
+        }
+    }
+
+    /**
      * Whether a live payload fed right now would actually be delivered, immediately and synchronously, rather than
      * buffered against a replay's own drain, refused outright, or silently dropped. True only once
      * {@link #catchUp(Source)} has reached live. False before that, whether {@link #catchUp(Source)} has never been
@@ -836,7 +886,7 @@ public final class BlockingHandover<T, K> {
                     refusedForAnotherFailure = true;
                     throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), failedWhileWaiting);
                 }
-                return drainBufferAndGoLive(source);
+                return drainBufferAndGoLive(source, false);
             }
             if (Objects.requireNonNull(callDepth.get()) > 1) {
                 // Called from this handover's own code, which holds up everything the replay would wait for.
@@ -999,12 +1049,21 @@ public final class BlockingHandover<T, K> {
                 replayRunning = false;
                 draining = true;
             }
-            if (!drainBufferAndGoLive(source)) {
-                // Stopped after the history was read. No marker, so the next catch-up replays the history again.
-                return false;
+            try {
+                if (!drainBufferAndGoLive(source, true)) {
+                    // Stopped after the history was read. No marker, so the next catch-up replays the history again.
+                    return false;
+                }
+                source.markCaughtUp();
+                return true;
+            } finally {
+                synchronized (lock) {
+                    if (marking == Thread.currentThread()) {
+                        marking = null;
+                        lock.notifyAll();
+                    }
+                }
             }
-            source.markCaughtUp();
-            return true;
         } catch (Throwable e) {
             // Record the failure so a live payload fed after a failed catch-up fails fast instead of buffering until
             // overflow and hiding the error.
@@ -1403,14 +1462,16 @@ public final class BlockingHandover<T, K> {
         }
     }
 
-    // Answers false when source.keepReplaying() stopped the drain, which then writes no marker.
-    private boolean drainBufferAndGoLive(Source<T> source) {
-        return deliverBufferAndGoLive(source);
+    // Answers false when source.keepReplaying() stopped the drain, which then writes no marker. With marks set, the
+    // caller writes the marker once this answers true, and this answers true only as the marking drain, see
+    // runOutsideMarkerWrite(..).
+    private boolean drainBufferAndGoLive(Source<T> source, boolean marks) {
+        return deliverBufferAndGoLive(source, marks);
     }
 
     // The three drains without a source to ask go live whatever happens, so nothing stops them.
     private void deliverBufferAndGoLive() {
-        deliverBufferAndGoLive(null);
+        deliverBufferAndGoLive(null, false);
     }
 
     // The one drain of this handover. The caller set draining under the lock that decided this call drains, and this
@@ -1421,8 +1482,8 @@ public final class BlockingHandover<T, K> {
     // On false a handover that was not live before stops where it is and goes back to the phase it had, with the
     // payloads not delivered back at the front of the buffer. One that was live before delivers the rest and goes live.
     // Either way the answer is false.
-    private boolean deliverBufferAndGoLive(@Nullable Source<T> source) {
-        Drain<T> drain = new Drain<>(source);
+    private boolean deliverBufferAndGoLive(@Nullable Source<T> source, boolean marks) {
+        Drain<T> drain = new Drain<>(source, marks);
         try {
             if (source != null) {
                 // Every drain with a source runs through here, including the one for a source that was already
@@ -1442,6 +1503,22 @@ public final class BlockingHandover<T, K> {
         }
     }
 
+    // Assumes lock is held. Not interruptible, since a drain that gave up here would leave the handover neither live
+    // nor stopped. The interrupt stays on the thread.
+    private void awaitActionsOutsideMarkerWriteUnderLock() {
+        boolean interrupted = false;
+        while (actionsOutsideMarkerWrite > 0) {
+            try {
+                lock.wait();
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // Assumes lock is held.
     private void throwIfBufferOverflowedUnderLock() {
         if (bufferOverflow != null) {
@@ -1455,9 +1532,13 @@ public final class BlockingHandover<T, K> {
         // null once a stop came on a handover that goes live on a stop.
         private @Nullable Source<T> checked;
         private boolean stopped;
+        // Whether the marker is written once this drain goes live, so its go-live waits for the actions
+        // runOutsideMarkerWrite(..) runs and makes this thread the one marking.
+        private final boolean marks;
 
-        private Drain(@Nullable Source<T> checked) {
+        private Drain(@Nullable Source<T> checked, boolean marks) {
             this.checked = checked;
+            this.marks = marks;
         }
     }
 
@@ -1483,6 +1564,12 @@ public final class BlockingHandover<T, K> {
         Source<T> replayedBy;
         synchronized (lock) {
             throwIfBufferOverflowedUnderLock();
+            if (buffer.isEmpty() && drain.marks && drain.checked != null && actionsOutsideMarkerWrite > 0) {
+                // The last keepReplaying() below sees whatever such an action changed. Payloads fed while this
+                // waits are delivered in another round first.
+                awaitActionsOutsideMarkerWriteUnderLock();
+                throwIfBufferOverflowedUnderLock();
+            }
             if (buffer.isEmpty()) {
                 // Asked under the lock, so no payload can buffer between this answer and going live.
                 Source<T> checked = drain.checked;
@@ -1491,6 +1578,11 @@ public final class BlockingHandover<T, K> {
                     return true;
                 }
                 live = true;
+                if (drain.marks && !drain.stopped) {
+                    // Cleared once markCaughtUp() returns or throws. Set in the lock section of the last check, so
+                    // no action runOutsideMarkerWrite(..) runs can start between that check and the marker write.
+                    marking = Thread.currentThread();
+                }
                 lock.notifyAll();
                 return true;
             }
