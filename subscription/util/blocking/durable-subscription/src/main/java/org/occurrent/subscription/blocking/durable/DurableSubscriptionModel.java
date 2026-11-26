@@ -1259,6 +1259,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * at {@code StartAt.now()} resumes at the stored checkpoint, since a checkpoint stored before it can't lie after its
      * start.
      * <p>
+     * Before it resumes at the stored checkpoint, this model stores the write version with it, as a subscribe does, and
+     * resumes at the checkpoint {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint, long)} answers.
+     * So a node that has lost its lease can't store the checkpoint of a later event over the one this node resumes at.
+     * When the storage holds a newer write version, this throws that {@link CheckpointWriteConditionNotFulfilledException},
+     * nothing is resumed and the subscription stays paused. When nothing is stored any more by then, it goes on from the
+     * wrapped model's own position.
+     * <p>
      * An action still running when the subscription was paused, because the wrapped model stopped waiting for it,
      * doesn't store the checkpoint of its event once it returns, when the resume asked the wrapped model to resume at
      * the stored checkpoint, whatever the wrapped model's {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
@@ -1285,6 +1292,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * nothing.
      *
      * @throws SubscriptionAlreadyRunningException if the wrapped model reports the subscription as running.
+     * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a newer write version than this node's
+     *                                                       when it would resume at the stored checkpoint.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -1331,8 +1340,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 locks.addAll(saveLocksOf(writing));
                 underLocks(locks, () -> {
                     OptionalLong writeVersion = before == null || !before.known() ? OptionalLong.empty() : storage.writeVersion(subscriptionId);
-                    Checkpoint checkpoint = storage.read(subscriptionId);
-                    if (checkpoint != null && (before == null || !before.stillStored(checkpoint, writeVersion))) {
+                    Checkpoint read = storage.read(subscriptionId);
+                    // The version is stored before anything is noted on a registration, so a newer one refuses the resume
+                    // with the subscription still paused and nothing changed. Null when nothing is stored any more
+                    Checkpoint checkpoint = read == null || (before != null && before.stillStored(read, writeVersion))
+                            ? null
+                            : withThisNodesWriteVersionStored(subscriptionId, read);
+                    if (checkpoint != null) {
                         // A resume at the stored checkpoint, with nothing to write. A handler the pause stopped
                         // waiting for, or a quiet position handed out before, would store a checkpoint of the run
                         // this replaces over it, so their saves are refused whatever restartsAt answers. Another
