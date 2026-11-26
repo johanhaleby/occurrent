@@ -129,6 +129,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private final Object lifecycleLock = new Object();
     // Orders start(..), stop() and shutdown() of this model and of every other child of the same dispatcher
     private final ReentrantLock modelLock;
+    private final List<Runnable> leftUntilTheModelLockIsFree;
     // Runs the calls that runInTurn and shutDownInTurn don't run on the calling thread, shared with every other child of
     // the same dispatcher
     private final Executor lifecycleThread;
@@ -346,6 +347,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.handedOver = sharedState.handedOver;
         this.askedFirst = sharedState.askedFirst;
         this.modelLock = sharedState.modelLock;
+        this.leftUntilTheModelLockIsFree = sharedState.leftUntilTheModelLockIsFree;
         this.lifecycleThread = sharedState.lifecycleThread;
         this.handedCallsNotReturned = sharedState.handedCallsNotReturned;
         this.actionsHoldingHandedCalls = sharedState.actionsHoldingHandedCalls;
@@ -384,6 +386,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final Set<AskedFirst> askedFirst = ConcurrentHashMap.newKeySet();
         // Taken by start(..), stop() and shutdown(), so one of them runs at a time across every child
         private final ReentrantLock modelLock = new ReentrantLock();
+        // The takeovers left until the thread holding modelLock has released it, see onceTheModelLockIsFree. Read and
+        // written only under modelLock
+        private final List<Runnable> leftUntilTheModelLockIsFree = new ArrayList<>();
         // One thread at most, running what it is given in the order it came, and ending a second after the last of it.
         // A platform thread, since a virtual one gains nothing for a single mostly idle thread, and on JDK 21 a wait
         // inside synchronized in the live delegate would hold its carrier thread
@@ -1162,7 +1167,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * as that read answers, and read again when that read failed. So a checkpoint storage that doesn't answer for one
      * subscription holds up that subscription's resume alone, which this start then waits for without the lock. On a
      * thread that already holds the lock, it reads nothing before the turn, and resumes every one it left until after
-     * the turn on that thread, one after another, since a thread of their own would wait for that lock.
+     * the turn on that thread, one after another, since a thread of their own would wait for that lock. A takeover one of
+     * them starts runs once that thread has released the lock, as {@link #resumeReadingFirst} describes.
      */
     final class StartResumes {
         private final Object model;
@@ -1256,7 +1262,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (startCall == null || afterTheTurn.isEmpty()) {
                 return;
             }
-            Consumer<String> resume = id -> resumeReadingFirst(model, id, models, stopsAtTheTurn, shutdownsBegunBefore, false, lateReadOf(id),
+            Consumer<String> resume = id -> resumeReadingFirst(model, id, models, stopsAtTheTurn, shutdownsBegunBefore, false, lateReadOf(id), null,
                     read -> lastCallSince(startCall).liveDelegateStopped() ? null : alone.apply(id, read));
             if (modelLock.isHeldByCurrentThread()) {
                 resumeEach(afterTheTurn, resume);
@@ -1653,20 +1659,29 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * from a position read before it. When a {@code shutdown()} of {@code model} began after it, the turn changes
      * nothing, and the handle answers {@code false} from {@code waitUntilStarted}. {@code alone} returning {@code null}
      * does the same.
+     * <p>
+     * A resume made from code another call runs under the model lock, such as a resume of a {@code start(true)} made
+     * from inside another start, still holds the lock after its turn. When its turn throws {@link ReadAgain} to start a
+     * takeover, the rest of the resume, the takeover and the next turn, runs on a thread of its own once the calling
+     * thread has released the lock, so the takeover stores its position outside the lock. The handle it returns then
+     * starts once that turn has returned, and its {@code waitUntilStarted} throws what the rest threw, which is also
+     * logged at {@code ERROR}.
      */
     Subscription resumeReadingFirst(Object model, String subscriptionId, List<AbstractCatchupSubscriptionModel> models, Function<ResumeRead, @Nullable Subscription> alone) {
         awaitTheHandedCalls(subscriptionId, "resumeSubscription(" + subscriptionId + ")");
-        return resumeReadingFirst(model, subscriptionId, models, stopsOf(models), shutdownsBegun(model), true, null, alone);
+        return resumeReadingFirst(model, subscriptionId, models, stopsOf(models), shutdownsBegun(model), true, null, null, alone);
     }
 
     // As above, from the stops and shutdowns counted when the caller began. When a stop came since and throwsOnceStopped
     // is false, the turn changes nothing as it does after a shutdown, since the start whose resume this is came before it.
-    // The first turn uses readBefore when there is one, a read the caller made, and reads only when it moved
+    // The first turn uses readBefore when there is one, a read the caller made, and reads only when it moved. When there
+    // is a beforeReadingAgain, the takeover of a ReadAgain thrown on a thread that still held the lock, it runs first
     private Subscription resumeReadingFirst(Object model, String subscriptionId, List<AbstractCatchupSubscriptionModel> models, long stopsBefore, long shutdownsBegunBefore,
-                                            boolean throwsOnceStopped, @Nullable ResumeRead readBefore, Function<ResumeRead, @Nullable Subscription> alone) {
+                                            boolean throwsOnceStopped, @Nullable ResumeRead readBefore, @Nullable Supplier<@Nullable Subscription> beforeReadingAgain,
+                                            Function<ResumeRead, @Nullable Subscription> alone) {
         long[] stopsAtTheRead = {stopsBefore};
         ResumeRead notYetUsed = readBefore;
-        @Nullable Subscription startedBeforeReadingAgain = null;
+        @Nullable Subscription startedBeforeReadingAgain = beforeReadingAgain == null ? null : beforeReadingAgain.get();
         try {
             while (true) {
                 // Its replay may have handed over and gone live by the next turn, so that turn returns its handle rather
@@ -1694,12 +1709,37 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         return replayStarted != null ? replayStarted : alone.apply(Objects.requireNonNull(read));
                     });
                 } catch (ReadAgain moved) {
+                    // A resume made from code another call runs under the lock, such as the resumes of a start made from
+                    // inside a start, still holds the lock after its turn, and the takeover would throw ReadAgain again
+                    // here. So the rest of this resume runs once the thread has released the lock
+                    if (moved != ReadAgain.MOVED && modelLock.isHeldByCurrentThread()) {
+                        long stopsAtTheTakeover = stopsAtTheRead[0];
+                        return onceTheModelLockIsFree(model, subscriptionId, () -> resumeReadingFirst(model, subscriptionId, models, stopsAtTheTakeover, shutdownsBegunBefore,
+                                throwsOnceStopped, null, moved.beforeReadingAgain, alone));
+                    }
                     startedBeforeReadingAgain = moved.beforeReadingAgain.get();
                 }
             }
         } finally {
             handedCallBegins(subscriptionId);
         }
+    }
+
+    // Under the model lock. Runs rest on a thread of its own once the calling thread has released the lock, see
+    // unlockTheModel, and returns a handle that starts once rest has returned and the subscription it returned has
+    // started. Its waitUntilStarted throws what rest threw, which is also logged at ERROR naming model
+    private Subscription onceTheModelLockIsFree(Object model, String subscriptionId, Supplier<Subscription> rest) {
+        CompletableFuture<Subscription> resumed = new CompletableFuture<>();
+        leftUntilTheModelLockIsFree.add(() -> Thread.ofVirtual().name("occurrent-catchup-takeover-" + subscriptionId).start(() -> {
+            try {
+                resumed.complete(rest.get());
+            } catch (Throwable e) {
+                // Every Throwable, since one thrown out of here reaches nobody, and the handle would wait for good
+                resumed.completeExceptionally(e);
+                logHandedCallThrew(model, "resumeSubscription(" + subscriptionId + ")", e);
+            }
+        }));
+        return new CatchupSubscription(subscriptionId, resumed);
     }
 
     private static long stopsOf(List<AbstractCatchupSubscriptionModel> models) {
@@ -1769,8 +1809,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Thrown in the turn of a resume when what its {@link ResumeRead} read moved before the turn used it, so the resume
      * reads again outside the model lock and runs another turn. {@code beforeReadingAgain} runs first, outside the lock
-     * too, and answers the handle of a replay it started, which the next turn returns, or {@code null}. Has no stack
-     * trace, since it is a signal and never reaches a caller.
+     * too, and answers the handle of a replay it started, which the next turn returns, or {@code null}. On a thread that
+     * still holds the lock after the turn, both run on a thread of their own once the lock is free, as
+     * {@link #resumeReadingFirst} describes. Has no stack trace, since it is a signal and never reaches a caller.
      */
     static final class ReadAgain extends RuntimeException {
         private static final ReadAgain MOVED = new ReadAgain(() -> null);
@@ -2853,7 +2894,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * from, and the live delegate resumes the subscription it holds paused at a live start read again. The checkpoint the
      * replay starts from is stored first, so a restart in between replays as well, unless the live delegate must not
      * run, when it is kept in memory only. A call holding the model lock gets {@link ReadAgain} in place of that write,
-     * which runs this again outside the lock. A pause asked for since the live
+     * which runs this again outside the lock, on a thread of its own once the lock is free when the thread still holds
+     * it for another call, see {@link #resumeReadingFirst}. A pause asked for since the live
      * delegate paused the subscription keeps it paused, and the next resume replays from what is stored then, or,
      * without checkpoint storage, runs this replay. It counts towards the {@value #MAX_REPLAYS_AGAIN} times a replay
      * runs again, as {@link #replayUntilLiveStartHolds} describes.
@@ -5492,7 +5534,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             inTurn.run();
         } finally {
-            modelLock.unlock();
+            unlockTheModel();
         }
     }
 
@@ -5600,7 +5642,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 body.run();
             }
         } finally {
-            modelLock.unlock();
+            unlockTheModel();
         }
     }
 
@@ -5631,8 +5673,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             body.run();
         } finally {
-            modelLock.unlock();
+            unlockTheModel();
         }
+    }
+
+    // Every release of the model lock goes through here. Once the calling thread no longer holds it, what a call made
+    // under it left until then starts, each on a thread of its own, see onceTheModelLockIsFree
+    private void unlockTheModel() {
+        List<Runnable> left = List.of();
+        if (modelLock.getHoldCount() == 1 && !leftUntilTheModelLockIsFree.isEmpty()) {
+            left = List.copyOf(leftUntilTheModelLockIsFree);
+            leftUntilTheModelLockIsFree.clear();
+        }
+        modelLock.unlock();
+        left.forEach(Runnable::run);
     }
 
     // Takes the model lock unless code a caller supplied holds it up as heldUpByCallersCode describes, and answers
@@ -6009,7 +6063,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     shutDownUnlessShutDown(calls, shutDownTheLiveDelegate);
                 }
             } finally {
-                modelLock.unlock();
+                unlockTheModel();
             }
         } finally {
             if (!handedOver) {

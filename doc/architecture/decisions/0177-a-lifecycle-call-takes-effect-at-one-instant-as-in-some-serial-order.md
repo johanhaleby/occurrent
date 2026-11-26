@@ -237,7 +237,10 @@ thread of their own would wait for the lock while the `start(true)` waited for t
 those reads run under the lock that the wrapped model's own `start(..)` or the `StartAt.dynamic(..)` function already
 holds, two of the cases listed below that still hold the model lock. A `shutdown()` from another thread that waits
 for the lock behind one of those reads shuts the wrapped model down without the lock, and throws after 10 seconds, as
-described below.
+described below. When the wrapped model lost the history from the live start of one of those subscriptions and holds
+it paused for a takeover, the takeover stores the position its replay starts from, and that store doesn't run under
+the lock. So the rest of that resume, the takeover and the turn that returns the replay's handle, runs on a thread of
+its own once the thread that holds the lock has let go of it. The `start(true)` returns without waiting for it.
 
 A call for X that an action handed over, a subscribe, a resume, a positioned resume, a pause or a cancel, runs on a
 thread of its own without the model lock, as the same call made from another thread does. The lifecycle thread waits

@@ -72,6 +72,8 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     };
     private volatile Runnable beforeTheNextResumeAt = () -> {
     };
+    private volatile Runnable beforeTheNextStart = () -> {
+    };
     private volatile Runnable beforeTheNextCancel = () -> {
     };
     private final AtomicBoolean firstTakeOver = new AtomicBoolean(true);
@@ -141,6 +143,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     // Runs once, at the start of the next cancel, so a step that throws leaves the subscription held as it was
     LiveStartLosingSubscriptionModel beforeTheNextCancel(Runnable beforeTheNextCancel) {
         this.beforeTheNextCancel = beforeTheNextCancel;
+        return this;
+    }
+
+    // Runs once, at the start of the next start(..), on the thread that starts it
+    LiveStartLosingSubscriptionModel beforeTheNextStart(Runnable beforeTheNextStart) {
+        this.beforeTheNextStart = beforeTheNextStart;
         return this;
     }
 
@@ -334,6 +342,10 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        Runnable beforeThisStart = beforeTheNextStart;
+        beforeTheNextStart = () -> {
+        };
+        beforeThisStart.run();
         Runnable beforeTheStartResumes = startResumesWhereItWasHeldOnceThisReturns;
         if (resumeSubscriptionsAutomatically && beforeTheStartResumes != null) {
             startResumesWhereItWasHeldOnceThisReturns = null;

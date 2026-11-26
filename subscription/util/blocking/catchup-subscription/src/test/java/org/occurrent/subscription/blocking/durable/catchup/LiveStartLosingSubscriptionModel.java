@@ -64,6 +64,11 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     };
     private volatile Runnable beforeTheFirstPause = () -> {
     };
+    private volatile Runnable beforeTheNextStart = () -> {
+    };
+    private final AtomicBoolean firstTakeOver = new AtomicBoolean(true);
+    private volatile Runnable betweenTheFirstTakeOverPauseAndWhatFollows = () -> {
+    };
     private final AtomicInteger liveStartsRead = new AtomicInteger();
     private final Set<Checkpoint> lost = ConcurrentHashMap.newKeySet();
     private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
@@ -91,6 +96,17 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     LiveStartLosingSubscriptionModel beforeTheFirstOpen(Runnable beforeTheFirstOpen) {
         this.beforeTheFirstOpen = beforeTheFirstOpen;
+        return this;
+    }
+
+    // Runs once, at the start of the next start(..), on the thread that starts it
+    LiveStartLosingSubscriptionModel beforeTheNextStart(Runnable beforeTheNextStart) {
+        this.beforeTheNextStart = beforeTheNextStart;
+        return this;
+    }
+
+    LiveStartLosingSubscriptionModel betweenTheFirstTakeOverPauseAndWhatFollows(Runnable betweenTheFirstTakeOverPauseAndWhatFollows) {
+        this.betweenTheFirstTakeOverPauseAndWhatFollows = betweenTheFirstTakeOverPauseAndWhatFollows;
         return this;
     }
 
@@ -181,6 +197,9 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         for (HistoryLossListener listener : listeners) {
             if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver) {
                 paused.put(subscriptionId, new Held(filter, action));
+                if (firstTakeOver.compareAndSet(true, false)) {
+                    betweenTheFirstTakeOverPauseAndWhatFollows.run();
+                }
                 takeOver.afterPause().run();
                 takeOversAsked.incrementAndGet();
                 return;
@@ -233,6 +252,10 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        Runnable beforeThisStart = beforeTheNextStart;
+        beforeTheNextStart = () -> {
+        };
+        beforeThisStart.run();
         delegate.start(resumeSubscriptionsAutomatically);
     }
 
