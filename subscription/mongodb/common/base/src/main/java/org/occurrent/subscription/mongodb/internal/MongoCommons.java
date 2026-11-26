@@ -91,6 +91,14 @@ public class MongoCommons {
      * The field a catch-up's replay end is stored in next to {@link #GENERIC_CHECKPOINT}, see {@link GlobalCheckpoint#replayTo()}.
      */
     public static final String CATCHUP_REPLAY_TO = "catchupReplayTo";
+    /**
+     * The field the two-argument {@link #buildFirstCheckpointRaceResolution(Document)} sets when it writes a position
+     * over a later operation time, and that {@link #buildConditionalCheckpointWrite(Document, CheckpointWriteCondition)}
+     * refuses a {@link CheckpointWriteCondition#notOlderThan(long)} write of a change stream position for while it is
+     * stored. A node holding the version stored with that later operation time may already have delivered from it, and
+     * its next save would skip the events between the two positions. Any write that replaces the document drops it.
+     */
+    public static final String POSITION_MOVED_EARLIER = "positionMovedEarlier";
 
     public static Document generateResumeTokenStreamPositionDocument(String subscriptionId, BsonValue resumeToken) {
         Map<String, Object> data = new HashMap<>();
@@ -294,7 +302,8 @@ public class MongoCommons {
      * mechanics". Matched with a filter on {@code _id} alone against the unique index, with {@code upsert(true)}
      * and {@code returnDocument(AFTER)}, this is one round trip. The stage replaces the whole document with
      * {@code newCheckpointDocument} merged with the version the condition says to write when {@code condition}
-     * allows it, and otherwise yields {@code $$ROOT}, the document unchanged.
+     * allows it, and otherwise yields {@code $$ROOT}, the document unchanged. A {@code notOlderThan} write of a
+     * resume token or an operation time is also refused while {@link #POSITION_MOVED_EARLIER} is stored.
      * <p>
      * {@code newCheckpointDocument} is wrapped in {@code $literal} because an update pipeline evaluates what it
      * writes, unlike a replace, so a subscription id or checkpoint string starting with {@code $} would otherwise be
@@ -312,8 +321,9 @@ public class MongoCommons {
         WriteDecision decision = switch (condition) {
             // Always allowed, the stored version (if any) carries forward untouched.
             case CheckpointWriteCondition.Any any -> new WriteDecision(Boolean.TRUE, versionCarriedForwardExpr());
-            case CheckpointWriteCondition.NotOlderThan notOlderThan ->
-                    new WriteDecision(notOlderThanIsAllowedExpr(notOlderThan.writeVersion()), notOlderThan.writeVersion());
+            case CheckpointWriteCondition.NotOlderThan notOlderThan -> new WriteDecision(isChangeStreamPosition(newCheckpointDocument)
+                    ? new Document("$and", asList(notOlderThanIsAllowedExpr(notOlderThan.writeVersion()), fieldIsMissingExpr(POSITION_MOVED_EARLIER)))
+                    : notOlderThanIsAllowedExpr(notOlderThan.writeVersion()), notOlderThan.writeVersion());
             case CheckpointWriteCondition.IfAbsent ifAbsent -> new WriteDecision(ifAbsentIsAllowedExpr(), versionCarriedForwardExpr());
         };
 
@@ -383,7 +393,8 @@ public class MongoCommons {
      * the one {@code candidateDocument} carries. Leaves the document untouched otherwise, whether because the stored
      * position is earlier than or equal to the candidate's, or because it carries {@link #RESUME_TOKEN},
      * {@link #GENERIC_CHECKPOINT} or {@link #LEGACY_GENERIC_CHECKPOINT} instead, which
-     * {@link #interpretFirstCheckpointRaceResolution(Document)} is what tells apart.
+     * {@link #interpretFirstCheckpointRaceResolution(Document)} is what tells apart. A write over a later operation
+     * time also stores {@link #POSITION_MOVED_EARLIER}.
      *
      * @param candidateDocument The document {@link #generateCheckpointDocument(String, Checkpoint)} built for the
      *                          candidate position, which must carry {@link #OPERATION_TIME}
@@ -396,9 +407,11 @@ public class MongoCommons {
                         fieldExistsExpr(OPERATION_TIME),
                         new Document("$gt", asList("$" + OPERATION_TIME, candidateDocument.get(OPERATION_TIME)))))));
 
+        // Nothing is stored when the write doesn't replace an operation time, so only a write over a later one marks it
         Document newDocumentWithVersion = new Document("$mergeObjects", asList(
                 new Document("$literal", candidateDocument),
-                new Document(WRITE_VERSION, versionCarriedForwardExpr())));
+                new Document(WRITE_VERSION, versionCarriedForwardExpr()),
+                new Document(POSITION_MOVED_EARLIER, new Document("$cond", asList(fieldExistsExpr(OPERATION_TIME), true, "$$REMOVE")))));
 
         Document cond = new Document("$cond", new Document(Map.of(
                 "if", allow,
@@ -406,6 +419,18 @@ public class MongoCommons {
                 "else", "$$ROOT")));
 
         return new Document("$replaceWith", cond);
+    }
+
+    // The document stored without POSITION_MOVED_EARLIER, the one field a three-argument resolve that keeps the stored
+    // checkpoint drops, and so does storing a write version with it
+    private static Document storedWithoutMovedEarlierMarkExpr() {
+        return new Document("$arrayToObject", List.of(new Document("$filter", new Document(Map.of(
+                "input", new Document("$objectToArray", "$$ROOT"),
+                "cond", new Document("$ne", asList("$$this.k", POSITION_MOVED_EARLIER)))))));
+    }
+
+    private static boolean isChangeStreamPosition(Document checkpointDocument) {
+        return checkpointDocument.containsKey(RESUME_TOKEN) || checkpointDocument.containsKey(OPERATION_TIME);
     }
 
     /**
@@ -441,7 +466,7 @@ public class MongoCommons {
      * Occurrent version stored in {@link #LEGACY_GENERIC_CHECKPOINT} counts as equal when it holds the value
      * {@code candidateDocument} holds in {@link #GENERIC_CHECKPOINT}. Every other stored checkpoint can't be
      * compared with {@code candidateDocument}, so the document is left as it is, and so is one with a newer stored
-     * version.
+     * version. A stored checkpoint that is kept loses {@link #POSITION_MOVED_EARLIER}.
      *
      * @param candidateDocument The document {@link #generateCheckpointDocument(String, Checkpoint)} built for the
      *                          candidate position
@@ -464,7 +489,7 @@ public class MongoCommons {
                 new Document(WRITE_VERSION, writeVersion)));
         Document storedWithVersion = new Document("$cond", new Document(Map.of(
                 "if", keepStored,
-                "then", new Document("$mergeObjects", asList("$$ROOT", new Document(WRITE_VERSION, writeVersion))),
+                "then", new Document("$mergeObjects", asList(storedWithoutMovedEarlierMarkExpr(), new Document(WRITE_VERSION, writeVersion))),
                 "else", "$$ROOT")));
 
         Document written = new Document("$cond", new Document(Map.of(
@@ -541,8 +566,10 @@ public class MongoCommons {
 
     /**
      * Builds the {@code $replaceWith} stage that stores {@code writeVersion} with the checkpoint stored and leaves the
-     * checkpoint as it is. A stored version newer than {@code writeVersion} leaves the whole document as it is. Run
-     * it through {@code findOneAndUpdate} without upsert, so nothing is written when no checkpoint is stored.
+     * checkpoint as it is. It also removes {@link #POSITION_MOVED_EARLIER}, as a three-argument resolve that keeps the
+     * stored checkpoint does, so a {@code notOlderThan(writeVersion)} save is allowed again. A stored version newer
+     * than {@code writeVersion} leaves the whole document as it is. Run it through {@code findOneAndUpdate} without
+     * upsert, so nothing is written when no checkpoint is stored.
      *
      * @param writeVersion The version to store with the checkpoint stored
      * @return The {@code $replaceWith} pipeline stage to run through {@code findOneAndUpdate}
@@ -550,7 +577,7 @@ public class MongoCommons {
     public static Document buildWriteVersionStamp(long writeVersion) {
         Document cond = new Document("$cond", new Document(Map.of(
                 "if", notOlderThanIsAllowedExpr(writeVersion),
-                "then", new Document("$mergeObjects", asList("$$ROOT", new Document(WRITE_VERSION, writeVersion))),
+                "then", new Document("$mergeObjects", asList(storedWithoutMovedEarlierMarkExpr(), new Document(WRITE_VERSION, writeVersion))),
                 "else", "$$ROOT")));
         return new Document("$replaceWith", cond);
     }
@@ -596,8 +623,9 @@ public class MongoCommons {
      * write {@link #buildConditionalCheckpointWrite(Document, CheckpointWriteCondition)} attempted.
      * <p>
      * {@code any()} never refuses, so it is not checked. {@code notOlderThan(v)} is told apart by comparing the
-     * version on {@code afterDocument} to {@code v}. The pipeline stamps exactly {@code v} on success, and a refused
-     * write leaves the higher stored version untouched, so the two never coincide. {@code ifAbsent()} is told apart
+     * version on {@code afterDocument} to {@code v}. The pipeline writes exactly {@code v} on success, and a refused
+     * write leaves the higher stored version untouched. A write refused for {@link #POSITION_MOVED_EARLIER} can leave
+     * {@code v} itself stored, so the mark is checked too, which a successful write never leaves in place. {@code ifAbsent()} is told apart
      * by comparing the checkpoint value on {@code afterDocument} to the one offered, since the pipeline only ever
      * leaves a different value in place when it refused the write. Two {@code ifAbsent()} writes offering the exact
      * same checkpoint value back to back are indistinguishable this way, the second is read as success rather than
@@ -612,8 +640,10 @@ public class MongoCommons {
         boolean succeeded = switch (condition) {
             case CheckpointWriteCondition.Any any -> true;
             case CheckpointWriteCondition.NotOlderThan notOlderThan -> {
+                // A write replaces the whole document, so the mark is still there only when the write was refused
                 OptionalLong storedVersion = extractWriteVersion(afterDocument);
-                yield storedVersion.isPresent() && storedVersion.getAsLong() == notOlderThan.writeVersion();
+                yield storedVersion.isPresent() && storedVersion.getAsLong() == notOlderThan.writeVersion()
+                        && !afterDocument.containsKey(POSITION_MOVED_EARLIER);
             }
             case CheckpointWriteCondition.IfAbsent ifAbsent -> {
                 String storedCheckpointValue = calculateCheckpointFromMongoStreamPositionDocument(afterDocument).asString();

@@ -2491,6 +2491,10 @@ class StreamCatchupSubscriptionModelTest {
         }
 
         @Override
+        public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+        }
+
+        @Override
         public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
         }
     }

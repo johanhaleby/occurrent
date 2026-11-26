@@ -559,7 +559,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPausedInTheWrappedModel(subscriptionId, refusal);
         }
+
+        @Override
+        public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+            replayFromTheStoredPosition(subscriptionId);
+        }
     };
+    // Per competing consumer whose checkpoint save the wrapped model reported as refused because another node's start
+    // position moved the stored position earlier, until a try pauses the consumer in the wrapped model. The
+    // decision after that pause resumes it while this node holds the lease, and the resume replays from the stored
+    // position
+    private final Set<SubscriptionIdAndSubscriberId> replaysOwed = ConcurrentHashMap.newKeySet();
     // A handle waits for a refusal to be acted on only when the wrapped model reports it
     private final boolean wrappedModelReportsStartRefusals;
     // Waited for after a call failed, and doubled after each failure that follows, up to the most. A lease callback
@@ -2941,6 +2951,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             return null;
         });
         prohibitionsLeftToATry.clear();
+        replaysOwed.clear();
     }
 
     private void startTheWrappedModel() {
@@ -2956,6 +2967,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             return null;
         });
         prohibitionsLeftToATry.clear();
+        replaysOwed.clear();
     }
 
     private boolean wrappedModelIsRunning() {
@@ -3037,6 +3049,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     private void forgetTheProhibitionsLeftToATryFor(String subscriptionId) {
         prohibitionsLeftToATry.removeIf(key -> key.subscriptionId().equals(subscriptionId));
+        replaysOwed.removeIf(key -> key.subscriptionId().equals(subscriptionId));
     }
 
     /**
@@ -5022,7 +5035,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
             // An interrupted try still owes the pause, so a new one makes it. One that failed has backed off and tried
             // again above, and one that ended made the pause or found none owed.
-            if (!ended && !shutDown && prohibitionsLeftToATry.contains(key)) {
+            if (!ended && !shutDown && (prohibitionsLeftToATry.contains(key) || replaysOwed.contains(key))) {
                 reconcileLater(key, true);
             }
         }
@@ -5212,8 +5225,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } else if (!shutDown) {
             CompetingConsumer competingConsumer = competingConsumers.get(key);
             if (!runs) {
-                // Forgotten, or not run by the wrapped model, so no run is open that a pause would close
+                // Forgotten, or not run by the wrapped model, so no run is open that a pause would close. A resume of
+                // one the wrapped model holds paused goes to the stored position, so it owes no replay either
                 prohibitionsLeftToATry.remove(key);
+                replaysOwed.remove(key);
             }
             call = competingConsumer != null && competes(competingConsumer)
                     ? nextCallToCompete(competingConsumer, runs, holdsLease)
@@ -5252,8 +5267,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
         // A prohibition left to the try is a pause owed also when this node holds the lease again, since another node
         // may have delivered a waiting event meanwhile. The pause withdraws it, and the next decision resumes the
-        // consumer.
-        boolean pauseOwed = runs && prohibitionsLeftToATry.contains(key);
+        // consumer. So is a replay owed, whose delivery ended at the refused save, and the resume replays from the
+        // stored position
+        boolean pauseOwed = runs && (prohibitionsLeftToATry.contains(key) || replaysOwed.contains(key));
         if (holdsLease && !pauseOwed) {
             CompetingConsumerState previous = cc.state;
             if (previous instanceof CompetingConsumerState.Waiting waiting) {
@@ -5285,6 +5301,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     recordAsPausedUnlessItRuns(key, false, e);
                     throw e;
                 }
+                replaysOwed.remove(key);
                 // Paused for the lease it lost. Recorded before the next decision, which records a consumer still
                 // recorded as running as paused by the user once a stop() has begun. Recorded also when the wrapped
                 // model still runs it until the pause takes effect, as a catch-up does until its replay has ended, so
@@ -5386,6 +5403,18 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // at the present or because the history its subscription would go live from is gone
     private void heldPausedInTheWrappedModel(String subscriptionId, RuntimeException refused) {
         actOnReport(subscriptionId, startRefusal -> startRefusal.heldPaused.add(refused));
+    }
+
+    // Told on the thread that delivered the event, while the wrapped model holds the lock it saves under, so this takes no
+    // subscription lock and leaves the pause and the resume to a try. The delivery that reported it has ended by the time
+    // the pause closes the run, or ends when it does
+    private void replayFromTheStoredPosition(String subscriptionId) {
+        @Nullable SubscriptionIdAndSubscriberId key = competingConsumerWithId(subscriptionId);
+        if (key == null) {
+            return;
+        }
+        replaysOwed.add(key);
+        reconcileLater(key, true);
     }
 
     private void actOnReport(String subscriptionId, Consumer<StartRefusal> report) {

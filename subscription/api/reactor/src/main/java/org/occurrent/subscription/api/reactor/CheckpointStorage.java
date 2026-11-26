@@ -242,6 +242,10 @@ public interface CheckpointStorage {
      * {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} carry, and signals empty for a stored
      * checkpoint of any other shape, because only a real checkpoint from actual delivery is not one of those. See
      * ADR 130.
+     * <p>
+     * When {@code candidate} replaces a later operation time, {@code ReactorCheckpointStorage} also stores a mark with
+     * it, and refuses a {@code notOlderThan} save of a resume token or an operation time while the mark is stored, as
+     * the blocking MongoDB storages do. A write that replaces the stored checkpoint removes the mark.
      *
      * @param subscriptionId The id of the subscription whose first position is being contested
      * @param candidate      The position competing to be the subscription's first, whether a losing

@@ -157,6 +157,10 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
      * Compares by {@link MongoOperationTimeCheckpoint#operationTime}, the one shape both a stored and an offered
      * checkpoint carry when neither has ever been advanced by real delivery, and answers empty for any other stored
      * shape or for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} to begin with. See ADR 130.
+     * <p>
+     * When {@code candidate} replaces a later operation time, a mark is stored with it, and a
+     * {@code notOlderThan} save of a resume token or an operation time is refused until a write replaces the stored
+     * checkpoint, or the three-argument {@code resolveFirstCheckpointRace} keeps it.
      */
     @Override
     public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {

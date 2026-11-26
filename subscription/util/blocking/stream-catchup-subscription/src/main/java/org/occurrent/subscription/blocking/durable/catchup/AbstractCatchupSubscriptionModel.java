@@ -25,6 +25,7 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.HistoryLossHandling;
@@ -1062,9 +1063,31 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return null;
             }
             CheckpointWriteCondition writeCondition = writeConditionFor(cfg, subscriptionId);
-            cfg.storage().save(subscriptionId, position, writeCondition);
+            saveRepositioning(cfg, subscriptionId, position, writeCondition);
             return new StoredPositionReplaced(subscriptionId, cfg, previous, writeCondition, present);
         }).orElse(null);
+    }
+
+    // Once another node's start position moved the stored position earlier, the storage refuses a notOlderThan write of a
+    // change stream position, with a stored version that isn't newer, and nothing else would take that refusal away, so
+    // the resume would be refused on every try. This node's version is stored with the stored checkpoint first, which
+    // takes the refusal away and still refuses a newer version, and the write is made once more. The subscription goes
+    // on from the position written, as a resume at a position does
+    private static void saveRepositioning(UseCheckpointInStorage cfg, String subscriptionId, Checkpoint position, CheckpointWriteCondition writeCondition) {
+        try {
+            cfg.storage().save(subscriptionId, position, writeCondition);
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            if (!(writeCondition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan)
+                || e.storedVersion.isPresent() && e.storedVersion.getAsLong() > notOlderThan.writeVersion()) {
+                throw e;
+            }
+            Checkpoint stored = cfg.storage().read(subscriptionId);
+            if (stored == null) {
+                throw e;
+            }
+            cfg.storage().resolveFirstCheckpointRace(subscriptionId, stored, notOlderThan.writeVersion());
+            cfg.storage().save(subscriptionId, position, writeCondition);
+        }
     }
 
     // The position to store for a resume at given so a restart starts where the resume does, or null when none does. A

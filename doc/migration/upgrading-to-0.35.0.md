@@ -136,6 +136,9 @@ other sections compile fine and behave differently, so read them first.
   A `CheckpointStorage` of your own gets the version stored with the first position in one write only once it
   implements the three-argument `resolveFirstCheckpointRace`, and with a checkpoint already stored only once it
   implements `storeWriteVersion`. Compiles unchanged.
+- [A save from a later position is refused once a start position moved it earlier](#a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier).
+  On the MongoDB checkpoint storages, a durable subscription stops delivering at a refused save until it is paused and
+  resumed, which `CompetingConsumerSubscriptionModel` does. Compiles unchanged.
 - [A quiet position whose save throws a checked exception is logged](#a-quiet-position-whose-save-throws-a-checked-exception-is-logged).
   A checked exception that a `CheckpointStorage` throws from the save of a quiet position no longer reaches the
   wrapped subscription model. Compiles unchanged.
@@ -671,6 +674,48 @@ that had lost its lease can write over the first position, which delivers events
 version stored with the first position in one write, override the three-argument `resolveFirstCheckpointRace` as its
 javadoc describes. One that doesn't override `storeWriteVersion` stores no version with a checkpoint already stored,
 and the subscription starts from that checkpoint as in 0.34.0. Override it as its javadoc describes to close that.
+There is no OpenRewrite recipe for this.
+
+## A save from a later position is refused once a start position moved it earlier
+
+### Who is affected
+
+An application whose blocking `DurableSubscriptionModel` has a `CheckpointWriteVersionSource` and stores its
+checkpoints in `NativeMongoCheckpointStorage` or `SpringMongoCheckpointStorage`, with the same subscription started on
+more than one node, as under `CompetingConsumerSubscriptionModel`. Compiles unchanged. `ReactorCheckpointStorage`
+refuses the same saves, though the reactor durable model never makes one.
+
+### What changes
+
+Node H stores its first position and its version, and delivers from that position. When node B starts the same
+subscription at the present, at an earlier position, B's position is stored and keeps H's version. In 0.34.0 the next
+save of H stored a later position over B's, and no node delivered the events between the two.
+
+From 0.35.0 the MongoDB checkpoint storages refuse that save. A `notOlderThan` write of a resume token or an operation
+time throws `CheckpointWriteConditionNotFulfilledException`, with a stored version that isn't newer than the version
+of the write, until a write replaces the stored checkpoint. Storing a version with the stored checkpoint, as a plain
+`resumeSubscription(id)` does, ends the refusal too.
+
+The durable model calls `handleStoredPositionMovedEarlier` on each `StartRefusalListener` added with
+`addStartRefusalListener`, or logs an error when none is added, and throws the refusal on. The MongoDB subscription
+models log it and stop delivering to the subscription, and nothing resumes it on its own.
+`CompetingConsumerSubscriptionModel` pauses the subscription and resumes it while this node holds the lease. The
+resume replays from B's position, so the events after H's position are delivered again.
+
+A `resumeSubscription(id, startAt)`, on the durable model or on a stream catch-up model, and the position the durable
+model stores after a lost change stream history, store this node's version with the stored checkpoint when the storage
+refuses them this way, and write once more.
+
+### What to do
+
+Under `CompetingConsumerSubscriptionModel`, nothing. Without it, add a `StartRefusalListener` to the durable model, or
+watch for the error log, and pause and resume the subscription with `pauseSubscription(id)` and
+`resumeSubscription(id)`. Make the listener's work asynchronous, since the model calls it on the delivering thread,
+which a pause from that thread would wait for.
+
+If you treat every `CheckpointWriteConditionNotFulfilledException` as a moved lease, a stored version that isn't newer
+than the version of the write means this refusal instead.
+
 There is no OpenRewrite recipe for this.
 
 ## A quiet position whose save throws a checked exception is logged

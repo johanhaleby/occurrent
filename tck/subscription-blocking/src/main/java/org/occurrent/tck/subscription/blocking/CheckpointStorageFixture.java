@@ -97,6 +97,22 @@ public interface CheckpointStorageFixture {
     }
 
     /**
+     * Two change stream positions of this storage, the earlier one first, for a storage that refuses a
+     * {@link org.occurrent.subscription.CheckpointWriteCondition#notOlderThan(long) notOlderThan} save of a change
+     * stream position once {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint)} moved the stored
+     * position earlier.
+     * <p>
+     * The node that stored the later position, with its version, may already deliver from it, and its next save would
+     * otherwise skip the events between the two positions. Occurrent's MongoDB storages refuse that save and answer
+     * two operation times here. The empty list, the default, means the storage doesn't move a stored position earlier
+     * that way, and the suite skips the cases that need it. This is data rather than a flag because the suite can't
+     * build a position that the storage ranks without naming its types.
+     */
+    default List<Checkpoint> startPositionsEarlierFirst() {
+        return List.of();
+    }
+
+    /**
      * Releases whatever the fixture opened. Called after every test method, including a failing one.
      */
     default void close() {

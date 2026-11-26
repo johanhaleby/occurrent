@@ -33,6 +33,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnsupportedStartAtException;
@@ -212,6 +213,10 @@ class StreamCatchupResumeRacesALostLiveStartTest {
             }
 
             @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+            }
+
+            @Override
             public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
             }
         });
@@ -341,6 +346,10 @@ class StreamCatchupResumeRacesALostLiveStartTest {
         @Override
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(new Report(subscriptionId, refusal));
+        }
+
+        @Override
+        public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
         }
 
         @Override

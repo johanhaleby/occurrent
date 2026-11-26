@@ -57,6 +57,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.UnsupportedStartAtException;
@@ -722,6 +723,10 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             }
+
+            @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+            }
         });
         List<String> heldPaused = new CopyOnWriteArrayList<>();
         subscriptionModel.addStartRefusalListener(new StartRefusalListener() {
@@ -736,6 +741,10 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
 
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+            }
+
+            @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
             }
         });
         String subscriptionId = UUID.randomUUID().toString();
@@ -1327,6 +1336,10 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             }
+
+            @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+            }
         };
     }
 
@@ -1340,6 +1353,11 @@ class SpringMongoSubscriptionModelNoOperationTimeTest {
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
                 throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+                throw new AssertionError("A MongoDB model never reports a stored position moved earlier, but was asked to for " + subscriptionId, refusal);
             }
 
             @Override

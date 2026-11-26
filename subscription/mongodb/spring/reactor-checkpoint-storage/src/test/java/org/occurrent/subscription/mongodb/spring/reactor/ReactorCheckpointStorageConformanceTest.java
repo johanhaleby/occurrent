@@ -128,6 +128,11 @@ class ReactorCheckpointStorageConformanceTest extends CheckpointStorageConforman
         }
 
         @Override
+        public List<Checkpoint> startPositionsEarlierFirst() {
+            return List.of(new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)), new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689900, 1)));
+        }
+
+        @Override
         public void close() {
             mongoOperations.dropCollection(collection).block();
         }

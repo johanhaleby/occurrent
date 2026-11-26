@@ -48,6 +48,13 @@ public sealed interface CheckpointWriteCondition {
      * Nothing stored is accepted rather than refused, because it means a checkpoint written before this condition
      * existed, and every checkpoint written by an earlier release of Occurrent has to stay readable.
      * <p>
+     * The MongoDB checkpoint storages also refuse a write of a resume token or an operation time while the stored
+     * position is one that another node's start position moved earlier, with the two-argument
+     * {@code CheckpointStorage.resolveFirstCheckpointRace}. The stored version is then not greater than
+     * {@code writeVersion}. The node that stored the later position may already have delivered events after the earlier
+     * one, so its write would skip the events between the two. A write that replaces the stored checkpoint ends the
+     * refusal, and so does a three-argument {@code resolveFirstCheckpointRace} that keeps it.
+     * <p>
      * {@code writeVersion} must be non-negative. Every source of a version Occurrent ships hands out a fencing token
      * that starts at zero and only ever climbs, and a storage is entitled to rely on that. {@code SpringRedisCheckpointStorage}
      * already reserves negative numbers as its own internal result codes, and would misread a negative version it

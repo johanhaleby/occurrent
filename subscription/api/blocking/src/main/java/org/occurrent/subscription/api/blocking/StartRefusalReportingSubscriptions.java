@@ -18,6 +18,7 @@ package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 
 import java.util.Optional;
@@ -183,5 +184,24 @@ public interface StartRefusalReportingSubscriptions extends SubscriptionModelCap
          * @param refusal        What a handle that waits for the subscription to start throws.
          */
         void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal);
+
+        /**
+         * Called when the checkpoint storage refused a checkpoint save of {@code subscriptionId} because another
+         * node's start position moved the stored position earlier, after this node started delivering from
+         * a later one. The blocking {@code DurableSubscriptionModel} calls it, and the MongoDB checkpoint storages are
+         * the ones that refuse a save this way. The events between the two positions haven't been delivered yet, so
+         * the subscription has to replay from the stored position. The model throws the refusal on after the
+         * listeners return, which ends delivery, and it doesn't resume the subscription itself. A pause and a
+         * {@link SubscriptionModelLifeCycle#resumeSubscription(String)} resume it from the stored position.
+         * <p>
+         * Called on the thread that delivered the event or reported the quiet position, while the model holds the
+         * lock it saves under, so a listener mustn't pause or resume the subscription on that thread. The model calls
+         * each listener in the order they were added, and a listener that throws a {@link RuntimeException} is logged.
+         *
+         * @param subscriptionId The subscription whose checkpoint save was refused.
+         * @param refusal        What the storage refused the save with. Its stored version is not newer than the
+         *                       version of the save.
+         */
+        void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal);
     }
 }

@@ -1,0 +1,297 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.blocking.durable;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
+
+/**
+ * A checkpoint storage refuses the save of a delivered event with a stored version that is not newer than this node's
+ * once another node's start position moved the stored position earlier, since this node may have delivered events
+ * after that position. The model tells its start refusal listeners, or logs an error when it has none, and throws the
+ * refusal on, and it does not resume the subscription itself. A resume at a position stores this node's version with
+ * the stored checkpoint first, which takes the refusal away, and writes once more.
+ */
+@DisplayNameGeneration(ReplaceUnderscores.class)
+@Timeout(60)
+class DurableSubscriptionModelStoredPositionMovedEarlierTest {
+
+    private static final String SUBSCRIPTION_ID = "someSubscription";
+    private static final long VERSION = 2;
+    private static final Checkpoint START = new StringBasedCheckpoint("start");
+    private static final Checkpoint LATER_POSITION = new StringBasedCheckpoint("later-position");
+    private static final Checkpoint EARLIER_POSITION = new StringBasedCheckpoint("earlier-position");
+    private static final Checkpoint POSITION_OF_A_DELIVERED_EVENT = new StringBasedCheckpoint("position-of-a-delivered-event");
+    private static final Checkpoint RESUMED_AT = new StringBasedCheckpoint("resumed-at");
+
+    private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
+    private final Logger modelLog = (Logger) LoggerFactory.getLogger(DurableSubscriptionModel.class);
+    private @Nullable Level levelBefore;
+
+    private final RepositionableQuietPositionReportingModel wrapped = new RepositionableQuietPositionReportingModel();
+    private final StorageWithAMovedEarlierMark storage = new StorageWithAMovedEarlierMark();
+    private final List<CheckpointWriteConditionNotFulfilledException> reported = new CopyOnWriteArrayList<>();
+
+    @BeforeEach
+    void captureTheLog() {
+        levelBefore = modelLog.getLevel();
+        modelLog.setLevel(Level.ERROR);
+        logged.start();
+        modelLog.addAppender(logged);
+    }
+
+    @AfterEach
+    void stopCapturingTheLog() {
+        modelLog.detachAppender(logged);
+        modelLog.setLevel(levelBefore);
+    }
+
+    @Test
+    void a_refused_save_of_a_delivered_event_is_told_to_the_listeners_and_thrown_on_and_the_subscription_is_not_resumed() {
+        // Given a node that stored a later position with its version and delivers from it, and another node's start position that moved it earlier
+        DurableSubscriptionModel durable = subscribedWithAListener();
+        storage.aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier();
+
+        // When
+        Throwable thrown = catchThrowable(() -> wrapped.deliver(SUBSCRIPTION_ID, POSITION_OF_A_DELIVERED_EVENT));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown to the wrapped model").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(reported).as("refusals told to the listener").containsExactly((CheckpointWriteConditionNotFulfilledException) thrown),
+                () -> assertThat(reported.getFirst().storedVersion).as("stored version of the refusal").hasValue(VERSION),
+                () -> assertThat(wrapped.plainResumes).as("plain resumes of the wrapped model").hasValue(0),
+                () -> assertThat(wrapped.resumedAt).as("resumes of the wrapped model at a position").isEmpty(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(EARLIER_POSITION.asString()),
+                () -> assertThat(errors()).as("errors logged when a listener is told").isEmpty()
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_refused_save_of_a_delivered_event_with_no_listener_added_logs_an_error_and_throws_the_refusal_on_and_the_subscription_is_not_resumed() {
+        // Given
+        DurableSubscriptionModel durable = subscribed();
+        storage.aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier();
+
+        // When
+        Throwable thrown = catchThrowable(() -> wrapped.deliver(SUBSCRIPTION_ID, POSITION_OF_A_DELIVERED_EVENT));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown to the wrapped model").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(errors()).as("errors logged").singleElement().satisfies(error -> {
+                    assertThat(error.getFormattedMessage()).contains(SUBSCRIPTION_ID).contains("moved its stored position earlier");
+                    assertThat(error.getThrowableProxy()).as("exception logged").isNotNull();
+                }),
+                () -> assertThat(wrapped.plainResumes).as("plain resumes of the wrapped model").hasValue(0),
+                () -> assertThat(wrapped.resumedAt).as("resumes of the wrapped model at a position").isEmpty(),
+                () -> assertThat(wrapped.isPaused(SUBSCRIPTION_ID)).as("paused in the wrapped model").isFalse()
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_refused_save_of_a_delivered_event_for_a_newer_version_stored_is_not_told_to_the_listeners_and_not_logged_as_a_moved_position() {
+        // Given another node's lease took over and stored a newer version
+        DurableSubscriptionModel durable = subscribedWithAListener();
+        storage.delegate.save(SUBSCRIPTION_ID, LATER_POSITION, CheckpointWriteCondition.notOlderThan(VERSION + 3));
+
+        // When
+        Throwable thrown = catchThrowable(() -> wrapped.deliver(SUBSCRIPTION_ID, POSITION_OF_A_DELIVERED_EVENT));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown to the wrapped model").isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class,
+                        refusal -> assertThat(refusal.storedVersion).as("stored version of the refusal").hasValue(VERSION + 3)),
+                () -> assertThat(reported).as("refusals told to the listener").isEmpty(),
+                () -> assertThat(errors()).as("errors logged").isEmpty()
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_resume_at_a_position_after_a_start_position_moved_the_stored_position_earlier_stores_this_nodes_version_with_the_stored_checkpoint_and_then_the_position() {
+        // Given
+        DurableSubscriptionModel durable = subscribedWithAListener();
+        storage.aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier();
+        durable.pauseSubscription(SUBSCRIPTION_ID);
+
+        // When
+        Throwable thrown = catchThrowable(() -> durable.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(RESUMED_AT)));
+
+        // Then
+        Throwable saveOfAnOlderVersion = catchThrowable(() -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(VERSION - 1)));
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the resume").isNull(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(RESUMED_AT.asString()),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(VERSION),
+                () -> assertThat(storage.movedEarlier).as("stored position marked as moved earlier").isFalse(),
+                () -> assertThat(wrapped.resumedAt).as("positions the wrapped model resumed at").containsExactly(RESUMED_AT),
+                () -> assertThat(saveOfAnOlderVersion).as("save with an older version after the resume").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(reported).as("refusals told to the listener").isEmpty()
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_plain_resume_after_a_start_position_moved_the_stored_position_earlier_stores_this_nodes_version_and_resumes_the_wrapped_model_from_the_stored_position() {
+        // Given
+        DurableSubscriptionModel durable = subscribedWithAListener();
+        storage.aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier();
+        durable.pauseSubscription(SUBSCRIPTION_ID);
+
+        // When
+        durable.resumeSubscription(SUBSCRIPTION_ID);
+        Throwable saveOfThisNode = catchThrowable(() -> wrapped.deliver(SUBSCRIPTION_ID, POSITION_OF_A_DELIVERED_EVENT));
+
+        // Then
+        assertAll(
+                () -> assertThat(saveOfThisNode).as("thrown by the save of an event delivered after the resume").isNull(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(POSITION_OF_A_DELIVERED_EVENT.asString()),
+                () -> assertThat(wrapped.resumedAt).as("positions the wrapped model resumed at").containsExactly(EARLIER_POSITION)
+        );
+        durable.shutdown();
+    }
+
+    private DurableSubscriptionModel subscribedWithAListener() {
+        DurableSubscriptionModel durable = subscribed();
+        durable.addStartRefusalListener(new StartRefusalListener() {
+            @Override
+            public void handleStartRefusal(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
+            }
+
+            @Override
+            public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
+            }
+
+            @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+                reported.add(refusal);
+            }
+        });
+        return durable;
+    }
+
+    private DurableSubscriptionModel subscribed() {
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, id -> OptionalLong.of(VERSION));
+        durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(START), cloudEvent -> {
+        });
+        return durable;
+    }
+
+    private List<ILoggingEvent> errors() {
+        return logged.list.stream().filter(event -> event.getLevel().equals(Level.ERROR)).toList();
+    }
+
+    /**
+     * Delegates to a real {@link InMemoryCheckpointStorage}, which evaluates write conditions, and stands in for the
+     * MongoDB storages' refusal. After {@link #aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier()}
+     * a {@code notOlderThan} save is refused with the stored version, until a write goes through or a resolution with
+     * a version keeps the stored checkpoint.
+     */
+    private static final class StorageWithAMovedEarlierMark implements CheckpointStorage {
+        final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
+        volatile boolean movedEarlier;
+
+        void aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier() {
+            delegate.save(SUBSCRIPTION_ID, LATER_POSITION, CheckpointWriteCondition.notOlderThan(VERSION));
+            delegate.save(SUBSCRIPTION_ID, EARLIER_POSITION, CheckpointWriteCondition.any());
+            movedEarlier = true;
+        }
+
+        @Override
+        public @Nullable Checkpoint read(String subscriptionId) {
+            return delegate.read(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (movedEarlier && condition instanceof CheckpointWriteCondition.NotOlderThan) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, delegate.writeVersion(subscriptionId), condition);
+            }
+            Checkpoint saved = delegate.save(subscriptionId, checkpoint, condition);
+            movedEarlier = false;
+            return saved;
+        }
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return delegate.evaluatesWriteConditions();
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return delegate.writeVersion(subscriptionId);
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            delegate.delete(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return delegate.exists(subscriptionId);
+        }
+
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            return delegate.resolveFirstCheckpointRace(subscriptionId, candidate);
+        }
+
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            Optional<Checkpoint> resolution = delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+            movedEarlier = false;
+            return resolution;
+        }
+    }
+}
