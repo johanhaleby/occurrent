@@ -25,8 +25,9 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * An extension of a skipped input that is a {@code Number} of a class the saga state store doesn't hold as that class,
- * such as an {@code AtomicLong}, and the number a release hands back for it. Every store works that number out here, so
- * a release hands back the same value as the same class from any of them, and every store logs the same warning.
+ * such as an {@code AtomicLong}, and the number a release hands back for it. {@code InMemorySagaStateStore} and
+ * {@code SpringMongoSagaStateStore} work that number out here, so a release hands back the same value as the same class
+ * from either, and both log the same warning.
  *
  * @param extension the name of the extension
  * @param delivered the class of the number the event was delivered with

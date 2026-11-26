@@ -35,6 +35,8 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
@@ -52,6 +54,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -598,6 +601,30 @@ class SpringMongoSagaStateStoreReleaseTest {
 
         assertThat(warnings).singleElement().satisfies(warning -> assertThat(warning)
                 .isEqualTo("Deleting saga instance 'order-warn-1', which is quarantined under '" + QUARANTINE_ID + "', deletes the 2 inputs it recorded as skipped with it. Once that delete commits, no release can replay them."));
+    }
+
+    @Test
+    void the_warning_for_deleting_a_quarantined_instance_is_logged_before_the_callers_transaction_ends_and_the_instance_and_its_records_are_all_kept_after_that_transaction_rolled_back() {
+        MongoTemplate template = (MongoTemplate) mongoOperations();
+        SpringMongoSagaStateStore<Payment> store = store(template);
+        instances(store, "order-warn-3");
+        skip(store, "order-warn-3", QUARANTINE_ID, new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-warn-3", QUARANTINE_ID, new SkippedInput(1, "b@2", heldEvent("b@2")));
+        skip(store, "order-warn-3", "q-other", new SkippedInput(0, "c@3", heldEvent("c@3")));
+        AtomicReference<List<String>> warnings = new AtomicReference<>();
+
+        new TransactionTemplate(new MongoTransactionManager(template.getMongoDatabaseFactory())).executeWithoutResult(status -> {
+            warnings.set(warningsLoggedBy(() -> store.delete("order-warn-3")));
+            status.setRollbackOnly();
+        });
+
+        assertAll(
+                () -> assertThat(warnings.get()).as("the warnings logged before the callers transaction ended").singleElement().satisfies(warning -> assertThat(warning)
+                        .isEqualTo("Deleting saga instance 'order-warn-3', which is quarantined under '" + QUARANTINE_ID + "', deletes the 2 inputs it recorded as skipped with it. Once that delete commits, no release can replay them.")),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-warn-3")).as("the instance after the rollback").isPresent(),
+                () -> assertThat(store.findSkippedInputs("order-warn-3", QUARANTINE_ID, 10)).as("the records of its quarantine after the rollback").hasSize(2),
+                () -> assertThat(store.findSkippedInputs("order-warn-3", "q-other", 10)).as("the records of the other quarantine after the rollback").hasSize(1)
+        );
     }
 
     @Test

@@ -1035,7 +1035,7 @@ application changes during the check is recorded as it was first read. When the 
 the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
 name of the data's class in `dataClass`, and once the record is written the store logs a `WARN` that names the
 instance, the input and the difference. It logs that `WARN` at the same point as the `WARN` for a number, inside a
-MongoDB transaction of yours and outside one, and logs neither when it throws on a commit whose result MongoDB can't
+MongoDB transaction of yours and outside one, and logs neither when it throws on a commit of its own whose result MongoDB can't
 tell. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
 doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
 `BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from

@@ -198,7 +198,7 @@ The check compares the data it reads back from the bytes with the data a release
 class, and any other value equals only an equal value of the same node class. Once the record is written, the store
 logs a warning that names the instance, the input and the difference, since the converter then gets bytes where it was
 delivered a map or an object. It logs that warning at the same point as the `WARN` for a number, inside a MongoDB
-transaction of the caller's and outside one, and logs neither when it throws on a commit whose result MongoDB can't
+transaction of the caller's and outside one, and logs neither when it throws on a commit of its own whose result MongoDB can't
 tell.
 
 A record that doesn't fit in one document, at most 16 MiB, or in the write that sends it, at most 16 MiB and 16 KiB

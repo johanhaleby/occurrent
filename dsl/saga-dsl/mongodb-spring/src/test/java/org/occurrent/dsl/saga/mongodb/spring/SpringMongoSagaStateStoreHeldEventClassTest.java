@@ -713,6 +713,25 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
+    void the_warning_for_data_held_as_its_bytes_is_logged_before_the_callers_transaction_ends_and_nothing_the_write_did_is_kept_after_that_transaction_rolled_back() {
+        CloudEvent event = eventWithDataHeldAsBytes();
+        StoredSaga instance = anInstance();
+        AtomicReference<List<String>> warningsInTransaction = new AtomicReference<>();
+        AtomicReference<Boolean> savedInTransaction = new AtomicReference<>();
+
+        new TransactionTemplate(new MongoTransactionManager(template.getMongoDatabaseFactory())).executeWithoutResult(status -> {
+            warningsInTransaction.set(warningsLoggedBy(() -> savedInTransaction.set(stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(1, KEY, event)))));
+            status.setRollbackOnly();
+        });
+
+        assertAll(
+                () -> assertThat(savedInTransaction.get()).as("saved in the callers transaction").isTrue(),
+                () -> assertThat(warningsInTransaction.get()).as("the warnings logged before the callers transaction ended").singleElement().asString().contains("can hold the data of the input '" + KEY + "' it skips only as its bytes"),
+                () -> assertNothingWritten()
+        );
+    }
+
+    @Test
     void no_warning_for_data_held_as_its_bytes_is_logged_when_the_compare_and_set_loses_because_the_expected_version_is_wrong() {
         CloudEvent event = eventWithDataHeldAsBytes();
         StoredSaga instance = anInstance();
