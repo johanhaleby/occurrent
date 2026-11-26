@@ -206,7 +206,8 @@ public final class CatchupProjectionFeed<E> {
      *                               {@link RoutingOutcome.Disposition#HOLD} describes. Also thrown when this is called
      *                               while the feed is not live from inside the feed's own folds or callbacks, the
      *                               projection's or a view's included, since the wait could only end once that same
-     *                               thread moved on.
+     *                               thread moved on. The feed is not live yet while it folds the events it held
+     *                               during the replay.
      */
     public void acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -240,7 +241,8 @@ public final class CatchupProjectionFeed<E> {
      * {@link RoutingOutcome.Disposition#HOLD} describes.
      * <p>
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
-     * feed live, while a replay runs, after {@link #stopCatchUp()} stopped a replay before the feed went live, and while
+     * feed live, while a replay runs, while the events held during it are folded, after {@link #stopCatchUp()} stopped a
+     * replay before the feed went live, and while
      * another delivery of the same event is still being folded. {@link RoutingOutcome#DELIVERED} also covers an event
      * the replay or an earlier delivery already folded, which is not folded again while its id is among the latest
      * {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed remembers. An event older than that is folded a
