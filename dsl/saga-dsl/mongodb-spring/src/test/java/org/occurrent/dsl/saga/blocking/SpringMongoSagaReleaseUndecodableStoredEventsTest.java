@@ -284,7 +284,7 @@ class SpringMongoSagaReleaseUndecodableStoredEventsTest {
     }
 
     @Test
-    void a_poll_charges_the_record_after_stored_received_events_that_no_longer_decode_and_quarantines_the_instance_again_on_it_past_its_budget_with_every_record_stored() {
+    void a_poll_charges_the_record_after_stored_received_events_that_no_longer_decode_and_quarantines_the_instance_again_on_it_past_its_budget_with_it_and_the_one_after_it_stored() {
         poisonFails = false;
         corruptAfterReplay = 1;
         Instant chargedAt = now.get();
@@ -363,7 +363,7 @@ class SpringMongoSagaReleaseUndecodableStoredEventsTest {
     }
 
     @Test
-    void a_write_without_the_state_does_not_fit_when_the_stored_state_alone_takes_the_document_past_the_limit_of_mongodb() {
+    void a_write_without_the_state_does_not_fit_when_the_stored_state_and_the_fields_it_sets_together_take_the_document_past_the_limit_of_mongodb() {
         // The state alone is under the limit of 16 MiB, so only measuring it with the fields the write sets can refuse
         assertThat(template.getCollection(COLLECTION).updateOne(new Document("_id", ORDER), Updates.set(RECEIVED, List.of("s".repeat(15_000_000)))).getModifiedCount()).isEqualTo(1L);
         StoredSaga small = writeWithAMessageOf(10);
@@ -382,8 +382,9 @@ class SpringMongoSagaReleaseUndecodableStoredEventsTest {
         StoredSaga ofAnotherInstance = new StoredSaga("another", large.version(), large.encoded(), large.index());
 
         assertAll(
-                () -> assertThat(mongo.fitsWithoutState(large, large.version() - 1)).as("stored at another version, though it would not fit at this one").isTrue(),
-                () -> assertThat(mongo.fitsWithoutState(large, large.version() + 1)).as("stored at another version, though it would not fit at this one").isTrue(),
+                () -> assertThat(mongo.fitsWithoutState(large, large.version())).as("control: it does not fit at the stored version").isFalse(),
+                () -> assertThat(mongo.fitsWithoutState(large, large.version() - 1)).as("expected below the stored version").isTrue(),
+                () -> assertThat(mongo.fitsWithoutState(large, large.version() + 1)).as("expected above the stored version").isTrue(),
                 () -> assertThat(mongo.fitsWithoutState(ofAnotherInstance, large.version())).as("not stored").isTrue()
         );
     }

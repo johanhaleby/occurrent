@@ -150,7 +150,7 @@ class SagaReleaseStaleInstanceTest {
         SagaEnvelope<Order> after = envelopes.find(ORDER).orElseThrow();
         String evidence = "released " + result + ", the other release ran " + overtaken.otherReleaseRan + ", items " + after.state().items() + ", dispatched " + dispatched;
         assertAll(
-                () -> assertThat(overtaken.otherReleaseRan).as("the other release applied the first record after the pair was read. " + evidence).isTrue(),
+                () -> assertThat(overtaken.otherReleaseRan).as("the other release ran after the pair was read. " + evidence).isTrue(),
                 () -> assertThat(dispatched).as("no command is dispatched from the state that lacks the first record's effect. " + evidence)
                         .noneMatch(command -> command instanceof Pack pack && pack.item().endsWith(STALE)),
                 () -> assertThat(result).as(evidence).isEqualTo(ReleaseResult.RELEASED),

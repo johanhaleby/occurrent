@@ -494,7 +494,10 @@ class SpringMongoSagaStateStoreReleaseTest {
     void records_cannot_be_read_with_a_limit_below_1_since_mongo_reads_0_as_no_limit() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
 
-        assertThatThrownBy(() -> store.findSkippedInputs("order-11", "q-1", 0)).isInstanceOf(IllegalArgumentException.class);
+        assertAll(
+                () -> assertThatThrownBy(() -> store.findSkippedInputs("order-11", "q-1", 0)).as("a limit of 0").isInstanceOf(IllegalArgumentException.class),
+                () -> assertThatThrownBy(() -> store.findSkippedInputs("order-11", "q-1", -1)).as("a limit of -1").isInstanceOf(IllegalArgumentException.class)
+        );
     }
 
     @Test

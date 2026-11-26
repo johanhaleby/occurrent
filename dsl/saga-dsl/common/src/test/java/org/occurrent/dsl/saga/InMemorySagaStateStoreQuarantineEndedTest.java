@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey.RecordKey;
 import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.net.URI;
 import java.time.Instant;
@@ -51,16 +52,18 @@ class InMemorySagaStateStoreQuarantineEndedTest {
     private final SagaCodec<String> codec = SagaCodec.of(store.stateCodec(), null);
 
     @Test
-    void ending_a_quarantine_leaves_the_stored_state_and_current_step_alone_and_writes_every_other_field() {
+    void ending_a_quarantine_leaves_the_stored_state_alone_and_writes_every_other_field() {
         store.compareAndSave(codec.encode(releasing("s1", "original", 1)), 0);
+        StoredSaga handed = codec.encodeWithoutState(active("s1", "ignored", 2));
 
-        boolean ended = store.compareAndSaveQuarantineEnded(codec.encodeWithoutState(active("s1", "ignored", 2)), 1, QUARANTINE_ID);
+        boolean ended = store.compareAndSaveQuarantineEnded(handed, 1, QUARANTINE_ID);
 
         Map<String, Object> fields = store.find("s1").orElseThrow().encoded().fields();
         SagaEnvelope<String> found = codec.decode(store.find("s1").orElseThrow());
         assertAll(
                 () -> assertThat(ended).isTrue(),
                 () -> assertThat(fields).as("the stored state").containsEntry(SagaCodec.STATE, "original"),
+                () -> assertThat(fields).as("every field it was handed").containsAllEntriesOf(handed.encoded().fields()),
                 () -> assertThat(found.state()).isEqualTo("original"),
                 () -> assertThat(found.status()).isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(found.version()).isEqualTo(2L),
@@ -120,7 +123,7 @@ class InMemorySagaStateStoreQuarantineEndedTest {
         assertAll(
                 () -> assertThat(read).isPresent(),
                 () -> assertThat(read.orElseThrow().first()).isEqualTo(new RecordKey(3, "a@1")),
-                () -> assertThat(read.orElseThrow().saga().version()).as("the instance is the one the record was read with").isEqualTo(4L)
+                () -> assertThat(read.orElseThrow().saga().version()).as("the instance is at the version the last write left").isEqualTo(4L)
         );
     }
 
@@ -139,6 +142,8 @@ class InMemorySagaStateStoreQuarantineEndedTest {
     @Test
     void the_key_read_returns_no_record_for_an_instance_without_a_quarantine_id() {
         store.compareAndSave(codec.encode(active("s1", "state", 1)), 0);
+        assertThat(store.compareAndSaveSkipped(codec.encodeWithoutState(active("s1", "state", 2)), 1, QUARANTINE_ID, new SkippedInput(1L, "left@1", heldEvent("left@1")))).isTrue();
+        assertThat(store.findSkippedInputs("s1", QUARANTINE_ID, 10)).as("control: a record is held under the id").hasSize(1);
 
         Optional<StoredSagaWithFirstSkippedInputKey> read = store.findWithFirstSkippedInputKey("s1");
 

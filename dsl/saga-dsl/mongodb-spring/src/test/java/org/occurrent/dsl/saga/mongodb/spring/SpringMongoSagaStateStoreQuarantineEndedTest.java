@@ -38,6 +38,7 @@ import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey.RecordKey;
 import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -52,6 +53,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -142,7 +145,7 @@ class SpringMongoSagaStateStoreQuarantineEndedTest {
         assertAll(
                 () -> assertThat(read).isPresent(),
                 () -> assertThat(read.orElseThrow().first()).isEqualTo(new RecordKey(3, "a@1")),
-                () -> assertThat(read.orElseThrow().saga().version()).as("the instance is the one the record was read with").isEqualTo(4L)
+                () -> assertThat(read.orElseThrow().saga().version()).as("the instance is at the version the last write left").isEqualTo(4L)
         );
     }
 
@@ -171,8 +174,8 @@ class SpringMongoSagaStateStoreQuarantineEndedTest {
         Throwable keyRead = catchThrowable(() -> read.set(store.findWithFirstSkippedInputKey("order-1")));
 
         assertAll(
-                () -> assertThat(wholeRead).as("the event no longer decodes").isNotNull(),
-                () -> assertThat(keyRead).as("the key read decodes nothing of the event").isNull(),
+                () -> assertThat(wholeRead).as("the read that decodes the event throws").isNotNull(),
+                () -> assertThat(keyRead).as("the key read does not throw").isNull(),
                 () -> assertThat(read.get()).isNotNull().isPresent(),
                 () -> assertThat(read.get().orElseThrow().first()).isEqualTo(new RecordKey(1, "a@1"))
         );
@@ -191,7 +194,7 @@ class SpringMongoSagaStateStoreQuarantineEndedTest {
 
         assertAll(
                 () -> assertThat(wholeRead).as("the chunks of the record are gone").isNotNull().hasMessageContaining("chunks"),
-                () -> assertThat(keyRead).as("the key read reads no chunk").isNull(),
+                () -> assertThat(keyRead).as("the key read does not throw").isNull(),
                 () -> assertThat(read.get()).isNotNull().isPresent(),
                 () -> assertThat(read.get().orElseThrow().first()).isEqualTo(new RecordKey(1, "a@1"))
         );
@@ -200,6 +203,7 @@ class SpringMongoSagaStateStoreQuarantineEndedTest {
     @Test
     void the_key_read_returns_no_record_for_an_instance_without_a_quarantine_id() {
         assertThat(envelopes.compareAndSave("order-2", active("order-2", "state", 1), 0)).isTrue();
+        assertThat(template.getCollection(SKIPPED_COLLECTION).insertOne(new Document("sagaId", "order-2").append("quarantineId", QUARANTINE_ID).append("seq", 1L).append("key", "left@1").append("event", "{}")).wasAcknowledged()).isTrue();
 
         Optional<StoredSagaWithFirstSkippedInputKey> read = store.findWithFirstSkippedInputKey("order-2");
 
@@ -240,7 +244,8 @@ class SpringMongoSagaStateStoreQuarantineEndedTest {
         storedReleasing("order-1", "original");
         Document before = rawInstance("order-1");
 
-        boolean ended = store.compareAndSaveQuarantineEnded(codec.encode(active("order-1", "handed another state", 2)), 1, QUARANTINE_ID);
+        StoredSaga handed = codec.encode(active("order-1", "handed another state", 2));
+        boolean ended = store.compareAndSaveQuarantineEnded(handed, 1, QUARANTINE_ID);
 
         Document after = rawInstance("order-1");
         SagaEnvelope<String> found = envelopes.findWithoutState("order-1").orElseThrow();
@@ -252,7 +257,14 @@ class SpringMongoSagaStateStoreQuarantineEndedTest {
                 () -> assertThat(found.version()).isEqualTo(2L),
                 () -> assertThat(found.failure()).as("the failure the quarantine left").isNull(),
                 () -> assertThat(found.quarantineId()).isNull(),
-                () -> assertThat(found.quarantineSkipCount()).isNull()
+                () -> assertThat(found.quarantineSkipCount()).isNull(),
+                () -> assertThat(after.keySet()).as("the fields of the instance are the ones handed, the state and the id").containsExactlyInAnyOrderElementsOf(Stream.concat(handed.encoded().fields().keySet().stream(), Stream.of(SagaCodec.STATE, "_id")).collect(Collectors.toSet())),
+                () -> assertThat(before.keySet()).as("control: the quarantine left fields that the write removes").contains(SagaCodec.FAILURE_INPUT),
+                () -> assertThat(after).as("every field but the state is the one handed").allSatisfy((field, value) -> {
+                    if (!field.equals(SagaCodec.STATE) && !field.equals("_id")) {
+                        assertThat(value).usingRecursiveComparison().isEqualTo(handed.encoded().fields().get(field));
+                    }
+                })
         );
     }
 

@@ -242,11 +242,12 @@ abstract class SkippedDataReleaseContract {
     }
 
     @Test
-    void a_map_from_another_feed_held_as_a_document_and_its_bytes_whose_record_goes_over_16_MiB_is_held_released_and_equal_to_the_original() {
+    void a_map_from_another_feed_whose_document_and_bytes_together_go_over_16_MiB_is_held_released_and_equal_to_the_original() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("blob", "x".repeat(9 * 1024 * 1024));
         byte[] bytes = new byte[8 * 1024 * 1024];
         new Random(13).nextBytes(bytes);
+        assertThat(((String) data.get("blob")).length() + bytes.length).as("control: the map and its bytes together are over 16 MiB").isGreaterThan(16 * 1024 * 1024);
 
         assertHeldAndReleasedAsDelivered(event("case", PojoCloudEventData.wrap(data, ignored -> bytes.clone())), PojoCloudEventData.class);
     }
@@ -265,7 +266,7 @@ abstract class SkippedDataReleaseContract {
     }
 
     @Test
-    void data_that_does_not_round_trip_does_not_stop_the_subscription_and_the_instance_keeps_skipping_what_comes_after_it() {
+    void data_with_a_BigDecimal_in_a_map_does_not_stop_the_subscription_and_the_instance_keeps_skipping_what_comes_after_it() {
         quarantineTheInstance();
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("price", new BigDecimal("1.10"));
@@ -276,7 +277,7 @@ abstract class SkippedDataReleaseContract {
         write(eventFor(OTHER_ORDER, "later", BytesCloudEventData.wrap(new byte[]{2})));
 
         await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(dispatched).as("another instance is still served").containsExactly(new Pack("later")));
-        assertThat(held()).as("the instance holds the event that failed, the one that does not round trip and the one after it").hasSize(3);
+        assertThat(held()).as("the instance holds the event that failed, the one with the BigDecimal and the one after it").hasSize(3);
     }
 
     @Test
@@ -296,12 +297,13 @@ abstract class SkippedDataReleaseContract {
     }
 
     @Test
-    void a_decimal_json_number_that_reads_back_as_a_double_is_held_and_released_with_the_delivered_numeric_value() {
+    void a_decimal_json_number_of_1_10_is_held_and_released_with_the_delivered_numeric_value() {
         CloudEvent delivered = event("case", JsonCloudEventData.wrap(objectHolding(DecimalNode.valueOf(new BigDecimal("1.10")))));
 
         HeldAndReleased run = heldAndReleased(delivered);
 
         assertAll(
+                () -> assertThat(valueOf(run.original())).as("the event is delivered with a DecimalNode").isInstanceOf(DecimalNode.class),
                 () -> assertThat(valueOf(run.held()).isNumber()).as("held value is a number").isTrue(),
                 () -> assertThat(valueOf(run.held()).decimalValue()).as("held value").isEqualByComparingTo(new BigDecimal("1.1")),
                 () -> assertThat(valueOf(run.released()).isNumber()).as("released value is a number").isTrue(),

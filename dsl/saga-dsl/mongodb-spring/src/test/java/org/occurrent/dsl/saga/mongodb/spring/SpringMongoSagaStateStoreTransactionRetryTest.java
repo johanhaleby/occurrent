@@ -489,15 +489,21 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
         void a_commit_that_fails_with_the_unknown_result_label_on_every_attempt_the_retry_strategy_allows_makes_compareAndSaveSkipped_throw_and_log_no_warning_and_the_record_is_not_kept() {
             assertTheStoreWouldHaveWarned("order-control-2");
             StoredSaga instance = anInstanceToSkipAnInputOf("order-14");
-            var store = storeOn(template, RetryStrategy.none());
+            var store = storeOn(template, retryingWithAHook());
             long recordsBefore = records();
+            int commitsBefore = commits.get();
+            int retriesBefore = retries.get();
 
             Logged skipped;
-            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", 1, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", ATTEMPTS, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
                 skipped = logged(() -> store.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(0, "order-14@7", eventWithTwoWarnings("order-14@7"))));
             }
 
-            assertSkipAndItsWarningsAreNotKept("order-14", recordsBefore, skipped);
+            assertAll(
+                    () -> assertSkipAndItsWarningsAreNotKept("order-14", recordsBefore, skipped),
+                    () -> assertThat(commits.get() - commitsBefore).as("commitTransaction commands sent, the first and the store's retries").isEqualTo(ATTEMPTS),
+                    () -> assertThat(retries.get() - retriesBefore).as("retries the store's strategy made").isEqualTo(ATTEMPTS - 1)
+            );
         }
 
         @Test
@@ -519,14 +525,18 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
 
         @Test
         void a_commit_that_fails_with_the_unknown_result_label_on_every_attempt_the_retry_strategy_allows_makes_delete_of_a_quarantined_instance_throw_and_log_no_warning_and_the_instance_and_its_records_are_still_stored() {
-            var store = aQuarantinedInstanceWithTwoRecords("order-16", storeOn(template, RetryStrategy.none()));
+            var store = aQuarantinedInstanceWithTwoRecords("order-16", storeOn(template, retryingWithAHook()));
+            int commitsBefore = commits.get();
+            int retriesBefore = retries.get();
 
             Logged deleted;
-            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", 1, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", ATTEMPTS, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
                 deleted = logged(() -> store.delete("order-16"));
             }
 
             assertAll(
+                    () -> assertThat(commits.get() - commitsBefore).as("commitTransaction commands sent, the first and the store's retries").isEqualTo(ATTEMPTS),
+                    () -> assertThat(retries.get() - retriesBefore).as("retries the store's strategy made").isEqualTo(ATTEMPTS - 1),
                     () -> assertThat(deleted.thrown()).as("what the store threw").isNotNull(),
                     () -> assertThat(deleted.warnings()).as("the warnings logged").isEmpty(),
                     () -> assertThat(store.find("order-16")).as("the instance").isPresent(),

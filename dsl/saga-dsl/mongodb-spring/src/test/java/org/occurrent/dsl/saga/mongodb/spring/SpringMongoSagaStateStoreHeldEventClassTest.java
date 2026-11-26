@@ -76,6 +76,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -195,7 +196,11 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         eventStore.write(STREAM, converter.toCloudEvents(List.of(new ItemAdded(ORDER, "pen", 5))));
 
         await().dontCatchUncaughtExceptions().ignoreExceptions().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("the event it failed on and the one after it are held").isEqualTo(2));
+        List<Document> records = template.getCollection(SKIPPED_INPUTS).find().sort(new Document("seq", 1)).into(new ArrayList<>());
         assertAll(
+                () -> assertThat(records.get(0).get("dataClass")).as("the data of the event it failed on is held as its bytes with their class").isNotNull(),
+                () -> assertThat(records.get(0).containsKey("data")).as("the bytes of the data of the event it failed on").isTrue(),
+                () -> assertThat(records.get(1).containsKey("dataClass")).as("the data of the event after it, which has no map data, is not held with a class").isFalse(),
                 () -> assertThat(refused).as("no record is refused, so the subscription is not stopped").isEmpty(),
                 () -> assertThat(dispatched).as("nothing is dispatched while the instance is quarantined").isEmpty()
         );
@@ -574,7 +579,7 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
-    void an_extension_of_a_custom_Number_class_with_40_significant_digits_is_held_and_released_as_a_BigDecimal_with_its_exact_value() {
+    void an_extension_of_a_custom_Number_class_with_41_significant_digits_is_held_and_released_as_a_BigDecimal_with_its_exact_value() {
         assertReleasedAs(new Reading("1234567890123456789012345678901234567890.5"), new BigDecimal("1234567890123456789012345678901234567890.5"));
     }
 
@@ -609,7 +614,10 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     @Test
     void an_extension_whose_value_changes_on_every_read_is_held_and_released_as_one_value_without_falling_back_to_the_data_as_bytes() {
         Ticking ticking = new Ticking(1_000);
-        Held held = heldAndReadWarned(baseEvent().withExtension("number", (Number) ticking).build());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("orderId", ORDER);
+        Held held = heldAndReadWarned(baseEvent().withExtension("number", (Number) ticking).withDataContentType("application/json")
+                .withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(UTF_8))).build());
 
         Object released = held.event().getExtension("number");
         Document record = requireNonNull(template.getCollection(SKIPPED_INPUTS).find().first());
@@ -618,7 +626,8 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 () -> assertThat(ticking.reads()).as("the values the number wrote when it was read").contains((Long) released),
                 () -> assertThat(storedExtension("number")).as("the stored extension").isEqualTo(new Document("type", "number").append("class", Ticking.class.getName()).append("value", released)),
                 () -> assertThat(held.warnings()).as("the warnings").containsExactly(warning("number", Ticking.class, Long.class)),
-                () -> assertThat(record.containsKey("dataClass")).as("the record holds the data as its bytes").isFalse()
+                () -> assertThat(record.containsKey("dataDocument")).as("the record holds the map data as a document").isTrue(),
+                () -> assertThat(record.containsKey("dataClass")).as("the record does not hold the data as its bytes with a class").isFalse()
         );
     }
 
@@ -635,7 +644,8 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         Document record = requireNonNull(template.getCollection(SKIPPED_INPUTS).find().first());
         assertAll(
                 () -> assertThat(held.event().getExtension("raw")).as("the released extension").isEqualTo(new byte[]{1, 2, 3}),
-                () -> assertThat(record.containsKey("dataClass")).as("the record holds the data as its bytes").isFalse(),
+                () -> assertThat(record.containsKey("dataDocument")).as("the record holds the map data as a document").isTrue(),
+                () -> assertThat(record.containsKey("dataClass")).as("the record does not hold the data as its bytes with a class").isFalse(),
                 () -> assertThat(held.warnings()).as("the warnings").isEmpty()
         );
     }

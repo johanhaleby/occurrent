@@ -597,7 +597,11 @@ class SagaReleaseSupportTest {
 
             Outcome<OrderState, OrderCommand> outcome = replay(current, new SkippedInput(0, "e:1", heldEvent("e:1")), new OrderPlaced("o1"), new EventMeta(null, null, 7L));
 
-            assertThat(outcome.processed()).isTrue();
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().state()).as("the state the event evolves to").isEqualTo(new AwaitingPayment("o1")),
+                    () -> assertThat(outcome.envelope().streamWatermarks()).as("the stream watermarks, which an event without a stream does not move").isEqualTo(current.streamWatermarks())
+            );
         }
 
         @Test

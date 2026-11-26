@@ -139,6 +139,7 @@ class SpringMongoSagaStateStoreStandaloneFirstSkippedInputTest {
     @Test
     void returns_no_record_for_an_instance_without_a_quarantine_id_and_empty_for_an_absent_one() {
         stored("order-2", null);
+        record("order-2", QUARANTINE_ID, 1, "left@1");
 
         Optional<StoredSagaWithFirstSkippedInput> read = store.findWithFirstSkippedInput("order-2");
 

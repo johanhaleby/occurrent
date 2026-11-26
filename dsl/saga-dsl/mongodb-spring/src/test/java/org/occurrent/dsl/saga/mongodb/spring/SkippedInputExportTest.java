@@ -158,7 +158,12 @@ class SkippedInputExportTest {
     void a_map_with_every_kind_of_leaf_is_rebuilt_with_the_class_and_value_delivered() throws Exception {
         record(mapEvent("held-1", deliveredMap(), null));
 
-        assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+        List<Document> restored = assertEveryRestoredRecordRebuildsToWhatTheStoreReturns();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rebuilt = (Map<String, Object>) ((PojoCloudEventData<?>) requireNonNull(rebuild(restored.getFirst()).getData())).getValue();
+        assertThat(rebuilt).as("the leaves of the rebuilt map").containsEntry("int", 3).containsEntry("long", 5L).containsEntry("double", 7.0d)
+                .containsEntry("decimal", DECIMAL).containsEntry("date", DATE).containsEntry("raw", RAW);
     }
 
     @Test
@@ -261,6 +266,10 @@ class SkippedInputExportTest {
         assertThat(first.getExtension("surrogateext")).as("extension of the first rebuilt event").isEqualTo("a\uD800b");
         assertThat(second.getExtension("surrogateext")).as("extension of the second rebuilt event").isEqualTo("\uDC00");
         assertThat(second.getExtension("pairedext")).as("a well formed String").isEqualTo("😀");
+        Document stored = restored.get(0).get("extensions", Document.class).get("surrogateext", Document.class);
+        assertThat(stored.getString("type")).as("type of the stored extension").isEqualTo("utf16");
+        assertThat(bytesOf(stored.get("value"))).as("bytes of the stored extension").isEqualTo(new byte[]{0, 'a', (byte) 0xD8, 0, 0, 'b'});
+        assertThat(restored.get(1).get("extensions", Document.class).get("pairedext")).as("the stored well formed String").isEqualTo("😀");
     }
 
     @Test

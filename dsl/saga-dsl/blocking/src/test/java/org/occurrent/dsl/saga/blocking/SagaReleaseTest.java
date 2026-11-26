@@ -1246,7 +1246,7 @@ class SagaReleaseTest {
         }
 
         @Test
-        void a_release_whose_instance_another_call_released_after_it_read_the_record_returns_released_and_does_not_apply_the_record_again() {
+        void a_release_whose_instance_another_call_released_after_it_read_the_record_returns_released_and_dispatches_the_record_once_more_without_adding_it_to_the_state_again_or_deleting_a_record() {
             quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             failing.clear();
             now.set(start.plus(Duration.ofHours(1)));
@@ -1271,7 +1271,7 @@ class SagaReleaseTest {
         }
 
         @Test
-        void a_release_whose_instance_another_call_released_and_quarantined_again_under_a_new_quarantine_id_after_it_read_the_record_does_not_apply_the_record_of_the_old_id_again() {
+        void a_release_whose_instance_another_call_released_and_quarantined_again_under_a_new_quarantine_id_after_it_read_the_record_dispatches_the_record_once_more_without_adding_it_to_the_state_again_or_deleting_a_record_of_the_old_id() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
             failing.clear();
             now.set(start.plus(Duration.ofHours(1)));
@@ -2134,7 +2134,7 @@ class SagaReleaseTest {
         }
 
         @Test
-        void is_released_by_a_second_release_that_applies_the_input_it_was_quarantined_on_and_then_the_records() {
+        void is_released_by_a_release_after_the_one_that_quarantined_it_again_that_applies_the_input_it_was_quarantined_on_and_then_the_records() {
             quarantinedOnPoisonWithTwoSkipped();
             Instant releasedAt = start.plus(Duration.ofHours(1));
             now.set(releasedAt);
@@ -2252,7 +2252,7 @@ class SagaReleaseTest {
     class TheInputTheInstanceWasQuarantinedOn {
 
         @Test
-        void is_recorded_with_its_event_in_the_write_that_quarantines_the_instance_at_a_number_below_every_other() {
+        void is_recorded_with_its_event_at_a_number_below_every_other() {
             Quarantined quarantined = quarantinedOnPoisonWithTwoStreamKeyedSkipped();
 
             List<SkippedInput> recorded = records();

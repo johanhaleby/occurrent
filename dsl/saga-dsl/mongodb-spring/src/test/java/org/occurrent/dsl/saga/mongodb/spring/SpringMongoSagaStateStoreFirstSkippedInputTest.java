@@ -227,13 +227,14 @@ class SpringMongoSagaStateStoreFirstSkippedInputTest {
                 () -> assertThat(read).isPresent(),
                 () -> assertThat(read.orElseThrow().firstSkippedInput()).isEqualTo(new SkippedInput(3, "a@1", heldEvent("a@1"))),
                 () -> assertThat(SagaEnvelopes.of(store, null).findWithFirstSkippedInput(store, "order-1").orElseThrow().envelope().version())
-                        .as("the instance is the one the first record was read with").isEqualTo(4L)
+                        .as("the instance is at the version the last write left").isEqualTo(4L)
         );
     }
 
     @Test
     void returns_no_record_for_an_instance_without_a_quarantine_id() {
         stored("order-2", null);
+        skipped("order-2", QUARANTINE_ID, 1, "left@1");
 
         Optional<StoredSagaWithFirstSkippedInput> read = store.findWithFirstSkippedInput("order-2");
 

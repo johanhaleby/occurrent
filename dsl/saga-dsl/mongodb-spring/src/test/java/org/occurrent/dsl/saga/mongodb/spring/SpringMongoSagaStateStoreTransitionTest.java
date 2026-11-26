@@ -191,7 +191,7 @@ class SpringMongoSagaStateStoreTransitionTest {
 
             assertAll(
                     () -> assertThat(thrown).as("the failure of the second write must reach the caller").isNotNull(),
-                    () -> assertThat(stateOf(store, sagaId)).as("neither the instance nor its records may change").isEqualTo(before),
+                    () -> assertThat(stateOf(store, sagaId)).as("neither the version of the instance nor its records may change").isEqualTo(before),
                     () -> assertThat(transition.getAsBoolean()).as("the same transition applies once the failure is gone, so it was the failure that stopped it").isTrue()
             );
         }

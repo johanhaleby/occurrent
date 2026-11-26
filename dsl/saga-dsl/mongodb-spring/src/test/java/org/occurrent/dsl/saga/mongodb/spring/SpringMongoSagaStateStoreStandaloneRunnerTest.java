@@ -320,7 +320,7 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
 
         Document instanceAfter = requireNonNull(mongoTemplate.findById(ORDER, Document.class, COLLECTION));
         assertAll(
-                () -> assertThat(thrown).as("the release is refused before it dispatches the first record's commands and fails on the write that applies it")
+                () -> assertThat(thrown).as("the release throws, naming the instance and the atomic write the server cannot take")
                         .isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("cannot release instance '" + ORDER + "'")
                         .hasMessageContaining("one atomic write"),
@@ -344,7 +344,7 @@ class SpringMongoSagaStateStoreStandaloneRunnerTest {
                 () -> assertThat(mongoTemplate.findById(ORDER, Document.class, COLLECTION)).as("the stored instance document is unchanged").isEqualTo(instanceBefore),
                 () -> assertThat(heldRecords()).as("the skipped-input collection is unchanged").isEqualTo(recordsBefore)
         ));
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(errors()).as("one ERROR across the 20 or so polls of the second above")
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(errors()).as("one ERROR is logged")
                 .singleElement().asString().contains("does not go on with the release of instances").contains(ORDER));
     }
 

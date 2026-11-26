@@ -246,7 +246,7 @@ class SagaReleaseConcurrentCallersTest {
                 () -> assertThat(rResult).as("R. " + evidence).isEqualTo(ReleaseResult.RELEASED),
                 () -> assertThat(pResult).as("P. " + evidence).isEqualTo(ReleaseResult.RELEASED),
                 () -> assertThat(after.state().items()).as("the input recorded after the start event is applied once. " + evidence).containsExactly("r1"),
-                () -> assertThat(dispatched).as("its command is dispatched at least once, and by a call whose write then loses once more. " + evidence).isNotEmpty().containsOnly(new Pack(ORDER, "r1"))
+                () -> assertThat(dispatched).as("its command is dispatched at least once and only its command. " + evidence).isNotEmpty().containsOnly(new Pack(ORDER, "r1"))
         );
     }
 

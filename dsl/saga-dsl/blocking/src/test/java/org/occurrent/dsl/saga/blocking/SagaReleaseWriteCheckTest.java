@@ -264,9 +264,10 @@ class SagaReleaseWriteCheckTest {
     }
 
     @Test
-    void when_the_store_cannot_write_the_applied_instance_or_either_requarantine_release_writes_nothing_returns_STILL_RELEASING_and_says_to_delete_the_instance() {
+    void when_the_store_cannot_write_the_applied_instance_or_either_requarantine_release_writes_only_its_start_returns_STILL_RELEASING_and_says_to_delete_the_instance() {
         SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped();
         fits = candidate -> candidate.isReleasing() && !appliedItem(candidate, "poison");
+        long versionBeforeTheRelease = instance().version();
 
         ReleaseResult first = execution.release(ORDER);
         SagaEnvelope<Order> afterTheFirst = instance();
@@ -277,7 +278,8 @@ class SagaReleaseWriteCheckTest {
                 () -> assertThat(second).isEqualTo(ReleaseResult.STILL_RELEASING),
                 () -> assertThat(afterTheFirst.isReleasing()).isTrue(),
                 () -> assertThat(afterTheFirst.state().items()).isEmpty(),
-                () -> assertThat(instance().version()).as("the second release writes nothing either").isEqualTo(afterTheFirst.version()),
+                () -> assertThat(afterTheFirst.version()).as("only the write that started the release").isEqualTo(versionBeforeTheRelease + 1),
+                () -> assertThat(instance().version()).as("the second release writes nothing").isEqualTo(afterTheFirst.version()),
                 () -> assertThat(records()).hasSize(3),
                 () -> assertThat(dispatched).isEmpty(),
                 () -> assertThat(errors()).hasSize(2).allSatisfy(message -> assertThat(message).contains(ORDER).contains("SagaStateStore.delete"))
@@ -307,7 +309,7 @@ class SagaReleaseWriteCheckTest {
     }
 
     @Test
-    void a_store_that_cannot_write_the_deletion_of_a_record_whose_input_the_instance_applied_already_returns_STILL_RELEASING_and_writes_nothing() {
+    void a_store_that_cannot_write_the_deletion_of_a_record_whose_input_the_instance_applied_already_returns_STILL_RELEASING_and_writes_only_the_start_of_the_release() {
         SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped();
         markPoisonApplied();
         long versionBeforeTheRelease = instance().version();

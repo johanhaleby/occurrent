@@ -188,7 +188,7 @@ class SkippedInputDataTest {
     }
 
     @Test
-    void a_path_names_a_position_of_a_kind_inside_the_path_before_it_and_never_a_key() {
+    void a_path_names_a_position_of_a_kind_inside_the_path_before_it() {
         assertAll(
                 () -> assertThat(SkippedInputData.pathTo("", "entry", 2)).isEqualTo("entry 2"),
                 () -> assertThat(SkippedInputData.pathTo("entry 2", "element", 0)).isEqualTo("entry 2 > element 0")
@@ -232,7 +232,7 @@ class SkippedInputDataTest {
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> SkippedInputData.fromBytes(JSON_CLOUD_EVENT_DATA, bytes));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class)
-                .hasMessageStartingWith("A skipped input's JSON data can't be read back from its bytes, since reading them throws com.fasterxml.jackson.core.")
+                .hasMessageStartingWith("A skipped input's JSON data can't be read back from its bytes, since reading them throws com.fasterxml.jackson.core.JsonParseException")
                 .hasMessageContaining(" at byte ")
                 .hasNoCause()
                 .message().doesNotContain("secret-key-5d1c").doesNotContain("not-json");

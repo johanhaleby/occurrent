@@ -389,11 +389,14 @@ class SagaReleaseTooLargeTest {
         seedVersionsAndLimitStoreToThem();
         SagaExecution<OrderEvent, Order, Object> withoutQuarantine = execution(predicateStore, CONFIG_WITHOUT_QUARANTINE);
 
+        List<Object> dispatchedBefore = List.copyOf(dispatched);
         ReleaseResult stopped = withoutQuarantine.release(ORDER);
+        List<Object> dispatchedByTheStoppedRelease = List.copyOf(dispatched);
         ReleaseResult further = withoutQuarantine.release(ORDER);
 
         assertAll(
                 () -> assertThat(stopped).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                () -> assertThat(dispatchedByTheStoppedRelease).as("what the stopped release dispatched").isEqualTo(dispatchedBefore),
                 () -> assertThat(further).isEqualTo(ReleaseResult.RELEASED),
                 () -> assertThat(dispatched).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b")),
                 () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE)
@@ -418,7 +421,7 @@ class SagaReleaseTooLargeTest {
         ReleaseResult further = execution.release(ORDER);
 
         assertAll(
-                () -> assertThat(stoppedOnA).as("control: the first release stopped on 'a'").isEqualTo(ReleaseResult.STILL_RELEASING),
+                () -> assertThat(stoppedOnA).as("control: the first release stopped with the instance still releasing").isEqualTo(ReleaseResult.STILL_RELEASING),
                 () -> assertThat(dispatchedByThePoll).as("the poll dispatched nothing").isEmpty(),
                 () -> assertThat(afterThePoll.status()).isEqualTo(SagaStatus.QUARANTINED),
                 () -> assertThat(afterThePoll.isReleasing()).isFalse(),
