@@ -158,6 +158,24 @@ class RabbitMqConfirmPublisherTest {
         verify(channel).close();
     }
 
+    /**
+     * {@code ChannelN.close} rethrows a plain {@link ShutdownSignalException}, not an {@link AlreadyClosedException},
+     * when the connection drops after the close request was sent and before the broker's reply arrived.
+     */
+    @Test
+    void close_returns_normally_when_the_channel_close_throws_a_plain_ShutdownSignalException() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        when(channel.isOpen()).thenReturn(true);
+        doThrow(new ShutdownSignalException(true, false, null, channel)).when(channel).close();
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+
+        assertThatCode(publisher::close).doesNotThrowAnyException();
+
+        verify(channel).close();
+    }
+
     @Test
     void close_propagates_an_unrelated_IOException_and_leaves_the_publisher_closed() throws Exception {
         Connection connection = mock(Connection.class);
