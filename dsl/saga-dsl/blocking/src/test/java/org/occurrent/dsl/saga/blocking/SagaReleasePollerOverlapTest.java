@@ -126,7 +126,7 @@ class SagaReleasePollerOverlapTest {
                 dispatchingA.countDown();
                 await(mayFinishA);
             }
-        }, converter, CONFIG, event -> true, now::get, eventStore);
+        }, converter, CONFIG, now::get);
     }
 
     private CloudEvent append(OrderEvent event) {

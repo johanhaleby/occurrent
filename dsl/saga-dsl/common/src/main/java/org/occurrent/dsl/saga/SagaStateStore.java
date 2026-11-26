@@ -42,9 +42,9 @@ import java.util.Optional;
  * left out.
  * <p>
  * Quarantine needs a second capability. A store that also implements {@link SagaStateStoreSkippedInputs} records the
- * inputs a quarantined instance skips and lets the instance be released. On a subscription model that holds every
- * event, the runner refuses to start a saga with quarantine on when its store does not implement it, and
- * {@code SagaRunnerConfig.disableQuarantine()} runs the saga without quarantine on such a store.
+ * events a quarantined instance skips and lets the instance be released. The runner refuses to start a saga with
+ * quarantine on when its store does not implement it, and {@code SagaRunnerConfig.disableQuarantine()} runs the saga
+ * without quarantine on such a store.
  * <p>
  * Observing instances is an optional capability layered on top. A store that also implements
  * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A
@@ -141,7 +141,13 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * the terminal instance and is skipped rather than resurrecting it.
      * <p>
      * A store that implements {@link SagaStateStoreSkippedInputs} also deletes the records under the quarantine id the
-     * deleted instance had, in the same atomic write as the instance.
+     * deleted instance had, in the same atomic write as the instance. A record of a quarantined instance can be the only
+     * copy of an input the subscription has already acknowledged, so deleting such an instance discards the inputs it
+     * skipped, and no release can replay them. A TTL index or any job that removes instances from the database without
+     * this method deletes none of their records, so no release can replay those inputs, and the records stay in the
+     * database with no instance. For the MongoDB store they are in the
+     * collections named after the instances with {@code _skipped_inputs} and {@code _skipped_input_chunks} appended. So
+     * leave quarantined instances out of such a job, or clean those two collections in it.
      */
     void delete(String sagaId);
 

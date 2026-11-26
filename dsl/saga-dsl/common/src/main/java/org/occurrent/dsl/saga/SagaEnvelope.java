@@ -67,8 +67,8 @@ import static java.util.Objects.requireNonNull;
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
  * @param quarantineSkipCount the {@link SkippedInput#seq()} the next input this quarantined instance skips is recorded
- *                          under, raised by one in the write before each record. Written as 0 by the write that
- *                          quarantines the instance, and {@code null} once it is active again, and on an instance
+ *                          under, raised by one in the write before each record. Written as 1 by the write that
+ *                          quarantines the instance, which records the input it quarantines on at 0, and {@code null} once it is active again, and on an instance
  *                          quarantined by 0.34.0
  * @param <S>               the user state type
  */
@@ -215,7 +215,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     /**
      * Whether the instance is quarantined and a release of it is running, which is when its failure record has
      * {@link SagaFailure#releasedAt()} set. The status stays {@link SagaStatus#QUARANTINED} until the release has
-     * applied every input it skipped.
+     * applied every input it recorded.
      */
     public boolean isReleasing() {
         return isQuarantined() && failure != null && failure.isReleasing();

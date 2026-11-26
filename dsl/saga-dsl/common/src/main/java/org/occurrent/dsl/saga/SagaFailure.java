@@ -54,9 +54,8 @@ import static java.util.Objects.requireNonNull;
  * {@code null} here. Read {@code input} when you want the identity and {@code position} when you have a feed that
  * numbers its events and you want the number.
  * <p>
- * A release that quarantines the instance again because a recorded input cannot be replayed names that input by the
- * key it was recorded under. That happens when the event store no longer has the input's event, or when the event it
- * returns has no stream id and stream version. The key can then be a CloudEvent key of the form
+ * A release that quarantines the instance again because a replayed event fails names that event by the key it was
+ * recorded under. The key can be a CloudEvent key of the form
  * {@code cloudevent:<length of id>:<id>:<source>@cloudevent} rather than a stream id with a stream version, see
  * {@link SkippedInput}.
  * <p>
@@ -64,27 +63,20 @@ import static java.util.Objects.requireNonNull;
  * {@code input}. The executor treats such a record as no record, so a new failure starts a fresh budget and the
  * instance's next successful delivery clears it.
  *
- * @param input          the failing input's redelivery key, which is its stream id with its stream version. The same
- *                       string the executor compares against to tell one failing input from the next. An instance a
- *                       release quarantined again because an input's event is missing from the event store, or has no
- *                       stream id and stream version, names that input here by the key it was recorded under, which
- *                       can be a CloudEvent key, {@code cloudevent:<length of id>:<id>:<source>@cloudevent}, see
- *                       {@link SkippedInput}
+ * @param input          the failing input's redelivery key, which is its stream id with its stream version, or the
+ *                       CloudEvent key a release names an event with no stream by. The same string the executor
+ *                       compares against to tell one failing input from the next
  * @param position       the global subscription position of the failing event, or {@code null} when the event carries
- *                       none, or when a release quarantined the instance again because a recorded input other than the
- *                       one it stopped on could not be replayed
+ *                       none
  * @param firstFailedAt  when {@code input} first failed, which is when its quarantine budget started running.
  *                       Strictly it is when its first failure was recorded, on this record or on its pending entry, and
  *                       it may have been failing for longer, because several ways of failing record nothing, a write
  *                       that loses its compare-and-set on every attempt among them
- * @param failureType    the class name of the exception the saga or its dispatcher threw, or {@code EventMissingFromStore}
- *                       when a release quarantined the instance again because the event of {@code input} is missing
- *                       from the event store, or {@code EventWithoutStreamKey} when that event has no stream id and
- *                       stream version
+ * @param failureType    the class name of the exception the saga or its dispatcher threw
  * @param failureMessage that exception's message, or {@code null} when it had none
  * @param releasedAt     when a release of the quarantined instance started, or {@code null} when none is running. An
  *                       instance that is {@link SagaStatus#QUARANTINED} with this set is releasing. It replays
- *                       {@code input} and then every input it skipped while quarantined, and turns
+ *                       {@code input} and then every input it recorded while quarantined, and turns
  *                       {@link SagaStatus#ACTIVE} in a write after the last of them, once a read finds none left.
  *                       Cleared when the instance is quarantined again
  * @param quarantineId   a random UUID that names the quarantine the instance is in, or {@code null} when it is not

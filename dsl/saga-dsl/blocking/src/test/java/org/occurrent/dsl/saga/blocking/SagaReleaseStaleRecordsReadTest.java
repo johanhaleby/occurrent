@@ -48,12 +48,11 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * A release turns an instance active when its read of the skipped-input records finds none. A read can miss a record
- * the instance skipped, such as on a new primary right after a failover, so a store that reads no record there must not
- * let the release turn the instance active or delete the record. The release then goes on with the records the next
- * read returns, and applies every input.
+ * A release applies the first record under the quarantine id the instance was read with, and an instance whose read
+ * returns no record of the input it stopped on is not turned active. The release refuses it at once, deletes no record
+ * and dispatches nothing, and a later release applies every input once the store returns the records again.
  */
-@DisplayName("A release whose read of the skipped inputs misses them")
+@DisplayName("A release whose read of the instance returns no record of the input it stopped on")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaReleaseStaleRecordsReadTest {
 
@@ -126,7 +125,7 @@ class SagaReleaseStaleRecordsReadTest {
     // An instance quarantined on "poison", with the records of "a" and "b" that it skipped afterwards
     @BeforeEach
     void aQuarantinedInstanceThatHasSkippedTwoInputs() {
-        execution = new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+        execution = new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
         execution.onCloudEvent(append(new OrderPlaced(nextEventId(), ORDER)));
         poisonFails = true;
         CloudEvent poison = append(new ItemAdded(nextEventId(), ORDER, "poison"));
@@ -144,16 +143,20 @@ class SagaReleaseStaleRecordsReadTest {
     }
 
     @Test
-    void does_not_turn_the_instance_active_or_delete_a_record_while_the_read_finds_none() {
+    void refuses_at_once_and_does_not_turn_the_instance_active_or_delete_a_record_while_the_read_returns_no_record() {
         List<SkippedInput> recordsBefore = inMemory.findSkippedInputs(ORDER, quarantineId, 10);
         store.hidesRecords = true;
+        store.pairReads.set(0);
 
         Throwable thrown = catchThrowable(() -> execution.release(ORDER));
 
         SagaEnvelope<Order> after = envelopes.find(ORDER).orElseThrow();
         String evidence = "thrown " + thrown + ", status " + after.status() + ", dispatched " + dispatched;
         assertAll(
-                () -> assertThat(thrown).as("a release that keeps reading no record gives up on its attempts. " + evidence).isInstanceOf(SagaConcurrencyException.class),
+                () -> assertThat(thrown).as("a release that reads no record of the input it stopped on is refused, naming the input. " + evidence)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("'o1@2'"),
+                () -> assertThat(store.pairReads.get()).as("the refusal comes from the first read and not from a retry of it. " + evidence).isEqualTo(1),
                 () -> assertThat(after.status()).as("the instance is not turned active. " + evidence).isEqualTo(SagaStatus.QUARANTINED),
                 () -> assertThat(inMemory.findSkippedInputs(ORDER, quarantineId, 10)).as("no record is deleted, and the release has put the input it replays first back as a record").containsAll(recordsBefore),
                 () -> assertThat(dispatched).as("nothing is dispatched. " + evidence).isEmpty()
@@ -179,25 +182,25 @@ class SagaReleaseStaleRecordsReadTest {
         );
     }
 
-    @Test
-    void goes_on_in_the_same_call_when_the_read_returns_the_records_again_after_a_few_attempts() {
-        store.missesTheNextReads = 3;
-
-        ReleaseResult result = execution.release(ORDER);
-
-        SagaEnvelope<Order> after = envelopes.find(ORDER).orElseThrow();
-        String evidence = "released " + result + ", status " + after.status() + ", items " + after.state().items() + ", dispatched " + dispatched;
-        assertAll(
-                () -> assertThat(result).as(evidence).isEqualTo(ReleaseResult.RELEASED),
-                () -> assertThat(after.state().items()).as(evidence).containsExactly("poison", "a", "b"),
-                () -> assertThat(dispatched).as(evidence).containsExactly(new Pack(ORDER, "poison"), new Pack(ORDER, "a"), new Pack(ORDER, "b"))
-        );
-    }
-
-    // A store that passes every call on, except that its read of the skipped inputs returns none while it misses them
+    // A store that passes every call on, except that its read of the instance and its first record returns no record while it hides them
     private final class MissesTheRecords implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
         volatile boolean hidesRecords = false;
-        volatile int missesTheNextReads = 0;
+        final AtomicInteger pairReads = new AtomicInteger();
+
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return inMemory.fits(candidate);
+        }
+
+        @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return inMemory.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
+        public void requireAtomicTransitions() {
+            inMemory.requireAtomicTransitions();
+        }
 
         @Override
         public SagaStateCodec<Order> stateCodec() {
@@ -240,11 +243,6 @@ class SagaReleaseStaleRecordsReadTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
-        }
-
-        @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
             return inMemory.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
         }
@@ -256,14 +254,26 @@ class SagaReleaseStaleRecordsReadTest {
 
         @Override
         public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
-            if (hidesRecords) {
-                return List.of();
-            }
-            if (missesTheNextReads > 0) {
-                missesTheNextReads--;
-                return List.of();
-            }
             return inMemory.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            pairReads.incrementAndGet();
+            Optional<StoredSagaWithFirstSkippedInput> read = inMemory.findWithFirstSkippedInput(sagaId);
+            if (hidesRecords) {
+                return read.map(whole -> new StoredSagaWithFirstSkippedInput(whole.saga(), null));
+            }
+            return read;
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            Optional<StoredSagaWithFirstSkippedInputKey> read = inMemory.findWithFirstSkippedInputKey(sagaId);
+            if (hidesRecords) {
+                return read.map(whole -> new StoredSagaWithFirstSkippedInputKey(whole.saga(), null));
+            }
+            return read;
         }
 
         @Override

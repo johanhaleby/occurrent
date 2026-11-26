@@ -35,8 +35,8 @@ A quarantined instance applies no further events and fires no timers, and its re
 nothing it skipped is recorded as handled. The subscription still delivers those events, and the runner still reads
 the instance before skipping each one, which step 6 comes back to.
 
-From 0.35.0 the runner also records the key of each input it skips, in the order they arrive, as a record of its own
-outside the instance's document, and step 5 releases the instance by replaying them. In 0.34.0 nothing brings an instance out of quarantine, and deleting it in
+From 0.35.0 the runner also records the key and the event of the inputs it skips, in the order they arrive, as a
+record of its own outside the instance's document, and step 5 releases the instance by replaying them. In 0.34.0 nothing brings an instance out of quarantine, and deleting it in
 step 6 is the only ending.
 
 ### When no instance stopped at all
@@ -51,8 +51,8 @@ Nothing is written for it, so `findByStatus(QUARANTINED, ..)` does not list it a
 apply. What you get is a `WARN` from `SagaExecution` on the first failure and an `ERROR` once per interval after that,
 each saying the saga could not work out which instance the event belongs to and logging what stopped it. That interval
 is the quarantine budget when one is configured, and a fixed five minutes when it is not, so this `ERROR` still
-fires on a subscription model this saga cannot quarantine anything on, such as a push feed, including one a broker
-source feeds, for as long as each offer of the event comes within twice that interval of the one before. A model that
+fires for a saga with quarantine off, for as long as each offer of the event comes within twice that interval of the
+one before. A model that
 offers it further apart gets a `WARN` on every offer, because the saga forgets an event it hasn't been offered for
 that long. A model that does not offer a refused delivery again gets only the first `WARN`, and `DeliveryFailurePolicy` is where a broker source's choice is configured. The event is named by its
 redelivery key when it has one, and otherwise by its CloudEvent
@@ -183,10 +183,7 @@ SagaFailure failure = instance.failure();
 // failure.failureType()    the class name of the exception that stopped the processing. Usually one the
 //                          saga or its command dispatcher threw, and it can also be a store or
 //                          converter failure, since the runner catches the whole path including the
-//                          read that decodes the state. EventMissingFromStore when a release in
-//                          step 5 found the event missing from the event store, and
-//                          EventWithoutStreamKey when it got the event back without a stream id
-//                          and stream version
+//                          read that decodes the state
 // failure.failureMessage() that exception's message, or null when it had none. Cut to the first
 //                          1000 characters with "... (truncated)" appended when it was longer,
 //                          so the log lines are where a long message survives whole
@@ -255,7 +252,7 @@ runner. On 0.34.0 nothing replays it, and step 6 is what ends it.
 anything of your saga's. Repair the converter or restore the event class, deploy, and read the instance again with
 `SagaStateStore.find` and `SagaCodec`, as in step 3. If it decodes now, you know what the instance held, and step 5 can release it. A release reads
 the instance with its state, so while the state still doesn't decode, `release` throws an `IllegalStateException`
-that names the decoding failure.
+that names the decoding failure, unless a release of the instance is running already.
 
 **A downstream service was refusing the command.** The instance stopped on an event it would handle correctly today,
 and step 5 replays it. On 0.34.0 nothing does.
@@ -271,9 +268,10 @@ that event has been failing since then.
 
 ### 5. [you] Release the instance
 
-From 0.35.0 `SagaSubscription.release(sagaId)` brings a quarantined instance back. It reads the event the instance
-stopped on from the event store and applies it the way a delivery is applied, and then does the same for every input
-the instance skipped while it was quarantined, in the order they arrived. The instance stays `QUARANTINED` while that
+From 0.35.0 `SagaSubscription.release(sagaId)` brings a quarantined instance back. A quarantined instance records the
+event of the input it stopped on, and of the inputs it skips, so the release reads nothing from the event store. It
+applies the event the instance stopped on the way a delivery is applied, and then does the same for every input the
+instance recorded while it was quarantined, in the order they arrived. The instance stays `QUARANTINED` while that
 runs and becomes `ACTIVE` once no recorded input is left, so an event that arrives during the release is recorded and
 replayed too. Once it is `ACTIVE`, its timers fire again.
 
@@ -296,18 +294,13 @@ timer is involved. A timer that came due fires only after the replay, as the par
 timer a replayed input sets counts from the release, not from when the input arrived. Make sure the
 process has not finished some other way in the meantime, which is what step 4 was for.
 
-`release` reads the events with the `EventStoreQueries` the runner was given through `SagaRunner.eventStoreQueries(..)`.
-The Spring Boot starter passes its own `EventStoreQueries` bean when the context has exactly one, or several with one
-of them primary. Point it at the store the saga's subscription reads from.
-
 What `release` returns, and what to do next:
 
 | Result | What it means | What to do |
 |---|---|---|
 | `RELEASED` | The instance replayed every input and is `ACTIVE`, or `COMPLETED` when one of them completed it. | Go to step 7. |
 | `STILL_RELEASING` | An input failed again during the release. The instance is still `QUARANTINED`, with the release under way. | See below. The timer poller tries the input again. |
-| `QUARANTINED_AGAIN` | An input kept failing during the release until its quarantine budget ran out, or the event store handed back an input's event without a stream id and stream version, which only an `EventStoreQueries` other than Occurrent's own event stores can do. The instance is quarantined on that input, and the release has stopped. | Go back to step 2. The failure record names the new input, which stays recorded with the inputs after it, so the next release starts from it. For an event without a stream id and version, give the runner an `EventStoreQueries` that returns them and release again, or delete the instance in step 6. When the release replayed nothing, check that the stored instance has `failureReleasedAt`. A store that drops it ends every release this way, and the `INFO` line a release logs when it starts names that cause. |
-| `QUARANTINED_EVENT_MISSING` | The event store no longer has the event of one of the inputs. The instance is quarantined on that input at once, and the release has stopped. | See below. |
+| `QUARANTINED_AGAIN` | An input kept failing during the release until its quarantine budget ran out, or the store couldn't write the instance with the next input applied, see below. The instance is quarantined on that input, and the release has stopped. | When the `ERROR` says the store couldn't write the input applied, do what it says, see below. Otherwise go back to step 2. The failure record names the new input, which stays recorded with the inputs after it, so the next release starts from it. When the release replayed nothing, check that the stored instance has `failureReleasedAt`. A store that drops it ends every release this way, and the `INFO` line a release logs when it starts names that cause. |
 | `NOT_QUARANTINED` | The instance is not quarantined, so there was nothing to release. | Nothing. Another call or node may have released it already. |
 | `NOT_FOUND` | No instance has that id. | Check the saga id and the bean name. |
 
@@ -355,34 +348,67 @@ same way as in step 4. If the input keeps failing until its quarantine budget ru
 release for the input the instance stopped on, the instance is quarantined again and the release stops, which is
 `QUARANTINED_AGAIN`. With quarantine off the poller keeps trying the input until it succeeds.
 
-**When an event is missing.** The instance's failure record names the input whose event is gone, and its
-`failureType()` is `EventMissingFromStore`. The `ERROR` line says the same. That input stays recorded with the inputs after it, and the next release starts
-from it.
-Three ways on from there:
+**When the write doesn't fit.** A release keeps every stream version it applies in the instance's stream marks until it
+ends, so the instance's document grows by one number per replayed stream event. The release asks the store before
+every write whether it can take it, and for the write that applies an input it asks before it dispatches the input's
+commands. On MongoDB the store refuses a document of more than 16 MiB, and a write of more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id, so a long saga id lowers the limit. When the store can't take the instance with the
+input applied, or with the input's failure recorded, the release applies and dispatches nothing for that input. The instance is quarantined again on that input with its marks trimmed, the release returns
+`QUARANTINED_AGAIN`, and an `ERROR` names the instance and the input. That happens with quarantine off too, and on a
+store that doesn't write atomically. The `ERROR` says which of two cases it is:
 
-- Restore the event in the event store and call `release` again.
-- If the event is in the store, `release` is reading another one. Check that the runner's `EventStoreQueries` reads the
-  store the saga's subscription reads from, and call `release` again.
-- Delete the instance in step 6, once you have decided not to recover it.
+- The store can write the input applied to the trimmed instance. Call `release` again, and it goes on from that input.
+  A long enough backlog takes more than one release.
+- A further release stops on that input too, since the instance doesn't fit even with the marks trimmed, such as an
+  instance with tens of thousands of streams or a large state. Delete the instance, or handle that input and the ones
+  after it by hand. They stay recorded until you do.
+
+When the store can't take the write that quarantines the instance again either, even with no pending entry for the
+input and no failure message, the release writes nothing, dispatches nothing and returns `STILL_RELEASING`. Its `ERROR`
+names the instance and says to delete it. The timer poller tries the instance again on every poll and logs that `ERROR`
+again until you do. The same happens when the store can't take the write that releases the instance, or the one that
+deletes the record of an input the instance applied already. Deleting the instance deletes the inputs it recorded, so
+dump them first with `mongodump`, as step 6 of the rollback below does. When the store can't take the write that starts a release,
+the release starts with the marks trimmed to the reorder window instead, since a write outside a release doesn't ask
+the store and can leave more marks than a release may write. When the store can't take that either, `release` throws
+an `IllegalStateException` that names the instance and says the same.
+
+A store of your own whose `SagaStateStoreSkippedInputs.fits` answers `true` to every instance refuses nothing, so a
+release on it dispatches the commands of an input whose write the store then fails.
 
 **When `release` throws.** It throws an `IllegalStateException` before it writes anything when:
 
 - The instance was quarantined by 0.34.0, which recorded none of the inputs it skipped.
-- The instance's state doesn't decode. The message names the decoding failure.
-- The runner has no `EventStoreQueries`. The message names `SagaRunner.eventStoreQueries(..)`.
+- The instance's state doesn't decode, and no release of it is running. The message names the decoding failure.
+- The event of a held record doesn't decode, and no release of it is running. `release` throws the failure of the read
+  as the store threw it.
 - The state store doesn't implement `SagaStateStoreSkippedInputs`. The message names the interface. `release`
   throws for it even when the store doesn't hold the saga id, instead of returning `NOT_FOUND`.
 - The instance is stored as `QUARANTINED_RECORDING` without its failure input, quarantine id or skip count, which a
   state store of your own does when it doesn't persist every field it is given. The message names the missing field.
+- The state store holds no record of the input the instance was quarantined on, as for an instance restored from a
+  backup without its records in `<sagaCollection>_skipped_inputs`. Releasing it would make it `ACTIVE` without ever
+  applying that input. The message names the input.
 
 The first can't be released at all. Its message names `SagaStateStore.delete(sagaId)`, and step 6 is what is left.
 For the second, fix how the state decodes, as in step 4, and release the instance again, or delete it in step 6.
+For a record that doesn't decode, restore the event class or repair the converter the same way, and release the
+instance again, or delete it in step 6.
 For the last, fix the store so it persists every field. An instance it already wrote stays without the field, so set
 the field on it by hand or delete it in step 6. Until then every delivery to the instance throws the same refusal, and
-so does a `findByStatus` page that holds it.
+so does a `findByStatus` page that holds it. For a missing record, restore the records from the same backup as the
+instance and release it again, or delete it in step 6.
 
-An instance whose state stops decoding while it is releasing stays releasing. On a store that can list the releasing
-instances, each poll logs the failure at `WARN` and tries again, so the release goes on once the state decodes.
+An instance whose state stops decoding while it is releasing stays releasing, and each poll that fails to read it
+counts against the budget of the record the release is on, the way an input that fails again does. A `release` call
+on it returns `STILL_RELEASING` instead of throwing. Once the budget runs out, the instance is quarantined again on
+that record, and `release` throws the decoding failure until the state decodes. A held record whose event stops
+decoding while the instance is releasing counts against its own budget the same way, and the instance is quarantined
+again on it once that budget runs out.
+
+When the replay that saved the state that no longer decodes applied the last record, no record is left to count the
+failure against. The release then ends the quarantine and returns `RELEASED`. It writes no state, so the stored state
+stays as the replay saved it. The instance is `ACTIVE`, and its next input fails on the decoding the way it does for any `ACTIVE` instance,
+so it can be quarantined again on that input, as [Why an instance stops](#why-an-instance-stops) describes.
 
 **Checking on a release.** `SagaInstance.failure().isReleasing()` is `true` while a release is under way, and
 `failure().releasedAt()` says when it started. Against MongoDB:
@@ -394,8 +420,11 @@ db.getCollection("saga-order-fulfilment")
 ```
 
 `failureReleasedAt` is stored as epoch milliseconds. The inputs still to replay are documents in the collection named
-after the saga collection with `_skipped_inputs` appended, one per skipped input, each with `sagaId`, `quarantineId`,
-`seq` and `key`. A release replays them in order of `seq`, and only those under the instance's `failureQuarantineId`:
+after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the input the instance
+stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`, `dataDocument`, `data` and
+`dataClass` when the event has them. A record too large for one document holds `chunks` and `size` in place of the
+event, and the event is in the collection named after the saga collection with `_skipped_input_chunks` appended. A
+release replays them in order of `seq`, and only those under the instance's `failureQuarantineId`:
 
 ```javascript
 db.getCollection("saga-order-fulfilment_skipped_inputs")
@@ -406,12 +435,97 @@ db.getCollection("saga-order-fulfilment_skipped_inputs")
 
 A key is `<streamId>@<streamVersion>` for an event from a stream.
 
+`event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `URI`, an
+`OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a string
+with a tag that names the class. A `String` with an unpaired surrogate is stored as its UTF-16 code units with the tag
+`utf16`. A subclass of `BigInteger` or `BigDecimal` is stored with the `bigInteger` or `bigDecimal` tag, and a `Number` of any other
+class than those and `Integer`, `Long`, `Double` and `Decimal128`, such as an `AtomicLong`, with the tag `number` and
+the name of its class. Any other extension is stored as it is. Data delivered
+as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in
+`data` unless they are the document's own JSON. Other data is held in `data` as its bytes in BSON binary, and a release
+hands it to the converter as a `BytesCloudEventData`.
+
+A release hands back every extension as it was delivered, except a subclass of `BigInteger` or `BigDecimal` and one
+stored with the tag `number`. A subclass comes back as a plain `BigInteger` or `BigDecimal` with its value, and a `BigDecimal` keeps its scale. One
+stored with the tag `number` comes back with its value as a `Long` when the value is an integer that fits in one,
+otherwise as a `BigDecimal` with its value and scale, and as a `Double` when the number's `toString` isn't a decimal,
+such as for `NaN` or an infinity. The value is the decimal the number's `toString` writes, and a `Double` is the
+number's `doubleValue`. Once the record is written, the store logs a `WARN` that names the instance, the input, the
+extension, the delivered class and the class a release hands back. It logs nothing for an event it refuses, a write
+that loses its compare-and-set, or an event whose key it has recorded already. Inside a MongoDB transaction of yours,
+it logs once the record is written in that transaction, before you commit it. When you then roll back, the `WARN` is for a
+record that was never kept, and the store logs one again only when a redelivery records the event. Outside such a
+transaction, it logs once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the
+commit still fails after the retries the store's `RetryStrategy` allows, the store throws and logs no `WARN`. When that
+commit took effect, a redelivery finds the key recorded and logs none either. The MongoDB event store never delivers such an extension,
+so it comes from an in-memory event store or one of your own. `InMemorySagaStateStore` hands such an extension back by
+the same rule and logs the same `WARN`, and it hands a `Decimal128` extension back as the same `Decimal128`.
+
+Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
+the way MongoDB stores it, decodes it, and reads the event back the way a release does. It writes the copy of the
+record it checked, decoded from the record's BSON, so a change your application makes to the delivered event after the
+check doesn't reach the record. It reads each extension once and checks a copy of a `byte[]`, so an extension your
+application changes during the check is recorded as it was first read. When the data read back isn't
+the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
+name of the data's class in `dataClass`, and once the record is written the store logs a `WARN` that names the
+instance, the input and the difference. It logs that `WARN` at the same point as the `WARN` for a number, inside a
+MongoDB transaction of yours and outside one, and logs neither when it throws on a commit of its own whose result MongoDB can't
+tell. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
+doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
+`BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
+those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
+reads a map or an object from the data gets its bytes instead. The bytes are read the way a `JsonFormat` with its
+default options reads them, so a JSON format you register with `withForceJsonDataToBase64()` doesn't turn the
+`JsonCloudEventData` into a `BytesCloudEventData`. When a `double` can't hold one of the decimal numbers in the data,
+such as `1234567890.123456789`, every decimal number in it is read as a `BigDecimal`, so each number comes back with
+its value, though `1.10` may come back as `1.1`.
+
+A record that doesn't fit in the 16 MiB MongoDB stores in one document is split into chunks of 8 MiB in
+`<sagaCollection>_skipped_input_chunks`, each with `sagaId`, `quarantineId`, `key`, `chunk` and `bytes`. The record
+then holds `chunks`, the number of chunks, and `size`, their total size in bytes, in place of the event, and a release
+joins the chunks again.
+
+`compareAndSaveSkipped` throws an `IllegalStateException`, so the instance and its records stay as they were, only when
+an attribute or an extension doesn't come back as it was delivered, such as a `UUID` that a `CloudEventExtension` sets
+as an extension, when the record doesn't encode even with the data held as its bytes, when JSON data reads back from its bytes as
+another value, such as a binary value that comes back as its base64 text, or when the saga id, the quarantine id and the
+key take about 8 MiB between them and leave no room for a chunk. The message names the instance, the input and, when
+it's known, where in the event the difference is. A subscription that retries such an event stops on it.
+
+Neither that message nor the `WARN` quotes the event. A value in the data is named by its position, such as
+`entry 2 > element 0`, which counts the entries of a map, the fields of a JSON object and the elements of a list from
+0, and by its class. Look the value up in the event in the event store. When the record is kept, it also holds the
+data's bytes in `data`.
+
+These records and their chunks are the only copy of the skipped events that the saga keeps, and erasing an event
+from the event store doesn't erase its copy here. Release or delete the quarantined instances before you erase an
+event from the event store, or a later release applies the event you erased. The same goes for an event you redact in place with
+`EventStoreOperations.updateEvent`. The record keeps the event as it was when the instance skipped it, and a release
+applies that copy, not the redacted one.
+
+To find the records that hold the events of a stream, look up their `key` in the saga's `_skipped_inputs` collection.
+An event with a stream id and a stream version is recorded under `<streamId>@<streamVersion>`, and every event the event
+store hands a saga has both. Escape any character of the stream id that a regular expression treats as special, such
+as `.`:
+
+```javascript
+db.getCollection("saga-order-fulfilment_skipped_inputs").find(
+  { key: { $regex: "^order-42@[0-9]+$" } },
+  { sagaId: 1, quarantineId: 1, key: 1 }
+)
+```
+
+The `[0-9]+$` keeps out the records of a stream whose id starts with `order-42@`. For one event, ask for its key
+exactly, such as `{ key: "order-42@7" }`. No index starts with `key`, so both read the whole collection. Each record
+names the `sagaId` of the instance that holds it, the one to release or delete before you erase the event. An event
+that reached the saga without a stream id and a stream version, such as one from a broker, is recorded under
+`cloudevent:<length of the id>:<id>:<source>@cloudevent` instead.
+
 **What a release logs.** All from the same logger as the quarantine `ERROR`:
 
 - `INFO` when the release starts, with the event it replays first.
 - `WARN` when an input fails again and the instance stays releasing.
-- `ERROR` when the instance is `QUARANTINED` again, because an input ran out of budget, because an event is missing
-  from the event store, or because the event store handed an event back without a stream id and stream version.
+- `ERROR` when the instance is `QUARANTINED` again, because an input ran out of budget.
 
 ### 6. [you] Delete the instance, once you have decided not to recover it
 
@@ -424,8 +538,17 @@ happens.
 So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
 until then is safe, because the runner skips every event addressed to it. It is not free, though. Every later event
 addressed to that instance is still delivered and still reads the instance from the state store before the runner
-skips it. From 0.35.0 the skip also records the event's key, in one write of the instance and the record together, a
+skips it. From 0.35.0 the skip also records the event, in one write of the instance and the record together, a
 transaction on MongoDB, so a correlation id that keeps receiving events costs a read and that write for each one.
+
+Deleting a quarantined instance deletes the only copy the saga keeps of what it skipped. The records hold the events the instance
+skipped, and both deletes below remove them with the instance, so nothing can apply those events afterwards. Release
+the instance in step 5 instead when any of them matter. The Java delete logs a `WARN` with the number of records it
+deletes, and the shell commands log nothing. Inside a MongoDB transaction of yours, the Java delete logs it before you
+commit, so a rollback can leave a `WARN` for a delete that was never kept. When the store throws on a commit of its own
+whose result MongoDB can't tell, it logs none. A TTL index or a retention job that removes instances from the
+collection deletes none of their records. The records and their chunks stay with no instance, where no release can
+replay them and nothing deletes them, so keep quarantined instances out of such a job.
 
 `SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
 wired.
@@ -446,12 +569,13 @@ const removed = db.getCollection("saga-order-fulfilment").findOneAndDelete({ _id
 ```
 
 That removes the same document, since the instance is one document keyed by its saga id. From 0.35.0 the Java call
-also deletes the records of the inputs the instance skipped, under the quarantine id the instance had. When `removed`
-has a `failureQuarantineId`, delete those records too:
+also deletes the records of the inputs the instance skipped, under the quarantine id the instance had, and their
+chunks. When `removed` has a `failureQuarantineId`, delete those records and chunks too:
 
 ```javascript
 if (removed && removed.failureQuarantineId) {
   db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({ sagaId: "order-4711", quarantineId: removed.failureQuarantineId })
+  db.getCollection("saga-order-fulfilment_skipped_input_chunks").deleteMany({ sagaId: "order-4711", quarantineId: removed.failureQuarantineId })
 }
 ```
 
@@ -511,21 +635,34 @@ on it. `SagaRunnerConfig.defaults()` sets it to 5 minutes from 0.35.0, and in 0.
 On the annotation path it is `occurrent.saga.quarantine-after` instead, which is 5 minutes when it is left out. A
 blank value stops an application with at least one `@Saga` from starting while quarantine is enabled.
 
-With quarantine on, from the defaults or set yourself, a `SagaRunner` on a subscription model that retains every
-event it delivers refuses to start without an `EventStoreQueries`, since `release` in step 5 reads the skipped inputs
-back with it. Pass the event store with `SagaRunner.eventStoreQueries(..)`, or call
-`SagaRunnerConfig.disableQuarantine()`. On the annotation path, no `EventStoreQueries` bean, or several with none of
-them `@Primary`, fails at startup the same way, so define the event store as a bean, mark one `@Primary`, or set
-`occurrent.saga.quarantine-enabled=false`. It refuses to start in the same way when the saga's state store doesn't
-implement `SagaStateStoreSkippedInputs`, which records what a quarantined instance skips. The in-memory store and
-`SpringMongoSagaStateStore` implement it, so only a store of your own can hit this. A decorator around one of them, for
-metrics or caching, hides the interface unless it implements `SagaStateStoreSkippedInputs` too and passes each call on,
-so make every decorator around such a store do that. Where the saga still starts, on a model that doesn't retain every
-event or with quarantine off, a decorator that doesn't makes `release` throw, and makes an instance quarantined before
-the decorator was put in place throw on each input it has to record as skipped. On a
-model that doesn't retain every event, or on a push feed, `SagaRunner` turns quarantine off each time the saga starts.
-It logs that at `WARN` for a budget you set and at `DEBUG` for the default one. `SagaRunnerConfig.disableQuarantine()`
-or `occurrent.saga.quarantine-enabled=false` turns quarantine off without either line.
+Quarantine applies whichever subscription model feeds the saga, a push feed included. With quarantine on, from the
+defaults or set yourself, a saga refuses to start when its state store doesn't implement
+`SagaStateStoreSkippedInputs`, which records what a quarantined instance skips. `SagaRunner.run` throws, and on the
+annotation path the application fails at startup. The in-memory store and `SpringMongoSagaStateStore` implement it, so
+only a store of your own can hit this. A decorator around one of them, for metrics or caching, hides the interface
+unless it implements `SagaStateStoreSkippedInputs` too and passes each call on, so make every decorator around such a
+store do that. Where the saga still starts, with quarantine off, a decorator that doesn't makes `release` throw, and
+makes an instance quarantined before the decorator was put in place throw on each input it has to record as skipped.
+
+On a standalone MongoDB server, `SpringMongoSagaStateStore` makes a saga with quarantine on refuse to start too, since
+the server refuses the transactions a quarantine writes. A saga with quarantine off works there. Set
+`occurrent.saga.quarantine-enabled=false` on the annotation path, or call `SagaRunnerConfig.disableQuarantine()` on a
+`SagaRunner`, or run MongoDB as a replica set, which can have a single member. Restart the application after you
+convert a standalone server to a replica set. The store asks the server what it is once, when it's created, so until
+the restart it still refuses quarantine, and it skips the read that makes sure an instance it doesn't find right after
+an election really is missing.
+
+An instance quarantined while the data was on a replica set, such as data restored from one onto a standalone server,
+can't record the inputs it skips there. A redelivery of an input it applied before it was quarantined needs no record,
+so it's skipped and acknowledged as on a replica set. Every other input addressed to it fails, a redelivery of one it
+recorded as skipped on the replica set included, which a replica set acknowledges. The subscription delivers the input
+again. A subscription that delivers an event again before any
+later one, as a MongoDB subscription does, holds up every later event of that saga subscription meanwhile, for every
+instance of the saga, not only the events of the quarantined instance. That lasts until you do one of two things.
+Move the data back to a replica set and release the instance there in step 5, or delete it by hand with the shell
+commands in step 6. The release in step 5 throws on a standalone server before it reads or writes anything, and the
+timer poller doesn't go on with an instance marked releasing there. The Java `delete(sagaId)` in step 6 doesn't work on
+a standalone server either, since it writes in a transaction that the server refuses.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
@@ -580,14 +717,108 @@ the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is l
    all only when it returns fewer than its `limit`. Raise the limit until it does.
 3. When a release returns `STILL_RELEASING`, an input failed again. With quarantine off there is no budget to run out,
    so the instance stays releasing and the timer poller retries the input until it succeeds. Fix what makes the input
-   fail and call `release` again. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
+   fail and call `release` again. When the release's `ERROR` says instead that the store can't write the instance,
+   nothing moves that release on, and the instance counts as one that keeps failing in step 5. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
    takes no expected version, so a delete that reaches the store after the poller has finished the release deletes
    the released instance.
 4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
-   longer decodes or an event store read that failed, and release the instance again.
-5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `QUARANTINED_AGAIN` or
-   `QUARANTINED_EVENT_MISSING`, or that keeps failing for a cause you can't fix.
-6. Stop every 0.35.0 node. Then, from a process that runs no `SagaRunner`, store every instance that is still
+   longer decodes, and release the instance again.
+5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `RELEASED`, or that keeps
+   failing for a cause you can't fix. With quarantine off, a release returns `QUARANTINED_AGAIN` only when the store
+   couldn't write the instance with the next input applied, or with that input's failure recorded, and its `ERROR` says
+   what to do. When it says
+   to release the instance again, call `release` again on that instance, since after step 6 nothing replays the inputs
+   it still holds recorded. When it says a further release stops on that input too, the instance can't be released and
+   stays quarantined through the downgrade, like an instance that keeps failing. Every instance that keeps failing
+   still holds records of inputs that were acknowledged and never applied, and after step 6 no release replays them.
+6. Stop every 0.35.0 node. Before you change any instance, dump every record still in
+   `<sagaCollection>_skipped_inputs`, and every chunk in `<sagaCollection>_skipped_input_chunks`, with `mongodump`.
+   Those records are the only copy of the inputs the instances that keep failing never applied, so handle them by hand
+   from that dump. On MongoDB, run this for each saga's collection, with your own connection string, which names the
+   database the saga collection is in:
+
+   ```
+   mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" --out skipped-inputs-dump
+   mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_input_chunks" --out skipped-inputs-dump
+   ```
+
+   `mongodump` writes the records as BSON to `skipped-inputs-dump/<database>/saga-order-fulfilment_skipped_inputs.bson`,
+   and the chunks to `saga-order-fulfilment_skipped_input_chunks.bson` next to it, where `<database>` is the database
+   in your connection string. BSON keeps the type of every value, so the dump is the copy to keep and to rebuild events
+   from. It holds personal data when the events hold any, so keep it where such data
+   may be kept.
+
+   Don't rebuild events from a JSON export, such as the one `mongoexport` writes, also with `--jsonFormat=canonical`.
+   Extended JSON writes a `Long` as `{"$numberLong": "42"}`, and it writes a map in the data that holds the key
+   `$numberLong` the same way, so a parser of Extended JSON, such as `Document.parse` in the Java driver, reads that map
+   back as a `Long`. A map with the key `$date` or `$binary` reads back as a date or as binary data in the same way.
+
+   To read the records, restore the dump into a database of its own, here `skipped-inputs`, with a connection string
+   that names no database:
+
+   ```
+   mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_inputs" \
+     --nsFrom "<database>.saga-order-fulfilment_skipped_inputs" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_inputs" \
+     skipped-inputs-dump
+   mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_input_chunks" \
+     --nsFrom "<database>.saga-order-fulfilment_skipped_input_chunks" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_input_chunks" \
+     skipped-inputs-dump
+   ```
+
+   `--nsInclude` names the one collection to restore. Without it `mongorestore` restores every collection in
+   `skipped-inputs-dump`, and `--nsFrom` and `--nsTo` only rename the one they match. A dump of another saga's
+   collection in the same directory, or of a collection you have deleted since, would then be written back into the
+   database it came from.
+
+   Read the restored collection with a MongoDB driver that has the UUID representation of the application's client,
+   such as the one `spring.mongodb.representation.uuid` sets. With another one, the Java driver reads a UUID in the data
+   as an `org.bson.types.Binary`. Each record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order
+   the instance would have applied them in. A record holds its event in up to five fields:
+
+   | Field | What it holds |
+   | --- | --- |
+   | `event` | The attributes, such as `id`, `source`, `type` and `time`, as a CloudEvents JSON string, with no data and no extensions. |
+   | `extensions` | The extensions, when the event has any. |
+   | `dataDocument` | The data, when it was delivered as a map. |
+   | `data` | The data as bytes. A record with `dataDocument` has `data` only when the delivered bytes differ from the JSON of `dataDocument`. |
+   | `dataClass` | The class of the data, when the record holds as bytes data it couldn't hold as it was delivered. |
+
+   A record too large for one document holds `chunks` and `size` in place of those fields. Its chunks are the
+   documents in the restored `saga-order-fulfilment_skipped_input_chunks` with the record's `sagaId`, `quarantineId` and
+   `key`. Take those whose `chunk` is below `chunks`, in order of `chunk`, and join their `bytes`, read as bytes the
+   way binary data in an extension is. The joined bytes, `size` of them, are a BSON document that holds the record's
+   `seq` and the five fields above. Decode it, such as with `new RawBsonDocument(bytes).decode(codec)` in the Java
+   driver, and rebuild the event from that document. A record whose chunks are missing, or whose joined bytes aren't
+   `size` long, can't be rebuilt from this dump.
+
+   Rebuild each event from its record the way a release in `SpringMongoSagaStateStore` reads it:
+
+   - Read the attributes from `event` with the CloudEvents JSON format.
+   - Add each entry of `extensions` as an extension. A string, a 32-bit or 64-bit integer, a double, a decimal128 or a
+     boolean is the value of the extension as it is, and the Java driver reads a decimal128 as an
+     `org.bson.types.Decimal128`. Binary data is its bytes. The Java driver reads it as an
+     `org.bson.types.Binary`, and its bytes are `getData()`. A value the driver gives as a `byte[]` is those bytes. A
+     document holds a value in `value` and its class in `type`. For `uri`, `timestamp`, `byte`, `short`, `float`,
+     `bigInteger` and `bigDecimal` the value is a string, and the extension is a `URI`, an `OffsetDateTime`, a `Byte`, a
+     `Short`, a `Float`, a `BigInteger` or a `BigDecimal` of it.
+   - For `utf16` the value is binary, and the extension is the `String` whose UTF-16 code units, big-endian, are its
+     bytes. Read them without a charset decoder, such as with `ByteBuffer.wrap(bytes).asCharBuffer().toString()`, since
+     a decoder replaces an unpaired surrogate.
+   - For `number` the extension is the one a release hands back. A 64-bit integer is a `Long`, a double a `Double`,
+     and a string a `BigDecimal` of it.
+   - When the record has `dataClass`, the data is `data`, read as bytes the way binary data in an extension is. When
+     `dataClass` is `io.cloudevents.jackson.JsonCloudEventData`, it is a `JsonCloudEventData` of those bytes read as
+     JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. When a
+     `double` can't hold one of its decimal numbers, read it with Jackson's `USE_BIG_DECIMAL_FOR_FLOATS` instead, so
+     the number keeps its value. Data of any other class is a `BytesCloudEventData` of those bytes.
+   - When the record has `dataDocument`, the data is a `PojoCloudEventData` of that document. Its bytes are `data` when
+     the record has it, read as bytes the way binary data in an extension is, and otherwise the document as the Java
+     driver's `Document.toJson()` writes it, in UTF-8.
+   - When the record has `data` and neither `dataDocument` nor `dataClass`, the data is those bytes, read as bytes the
+     same way.
+   - A record with neither field holds an event without data.
+
+   Then, from a process that runs no `SagaRunner`, store every instance that is still
    `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time, and every
    `ACTIVE_MARKED` instance as `ACTIVE`. A released instance is `ACTIVE_MARKED` when it holds stream marks. On MongoDB,
    run this on each saga's collection:
@@ -609,10 +840,24 @@ No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one
 and the input it stopped on. It skips every input addressed to the instance and fires none of its timers, and the
 instance stays quarantined until you delete it, as in 0.34.0. After a later upgrade to 0.35.0, `release` refuses it,
 because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
-`<sagaCollection>_skipped_inputs`, where nothing reads them. They take up storage and nothing else. The
+`<sagaCollection>_skipped_inputs`, with their chunks in `<sagaCollection>_skipped_input_chunks`. Each one holds a full
+copy of the event it stands for, personal data included when the event holds any, and 0.34.0 never reads or deletes
+them. Step 6 removed the quarantine ids they are filed under, so no release can replay them either, also after a later
+upgrade to 0.35.0. Delete them once step 6 has run, and only when the collections restored from the dump in step 6
+hold as many records as `<sagaCollection>_skipped_inputs` and as many chunks as
+`<sagaCollection>_skipped_input_chunks`, since the delete removes the last copy of every input that was never applied.
+A JSON export is not such a copy. Rebuild the events you still need from the restored records first, as step 6
+describes:
+
+```javascript
+db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})
+db.getCollection("saga-order-fulfilment_skipped_input_chunks").deleteMany({})
+```
+
+The
 [0.35.0 upgrade guide](../migration/upgrading-to-0.35.0.md#upgrading-from-0340-and-rolling-back-to-it) also
 covers the upgrade from 0.34.0.
 
 Deleting an instance is not reversible from inside Occurrent. Take a backup first if you want one, of both the saga
-collection and `<sagaCollection>_skipped_inputs`. The delete removes the instance's skipped-input records too, and an
-instance restored without them releases as if it skipped nothing, so every input it skipped stays unapplied.
+collection, `<sagaCollection>_skipped_inputs` and `<sagaCollection>_skipped_input_chunks`. The delete removes the instance's skipped-input records too, and
+`release` refuses an instance restored without them, since it has no record of the input it was quarantined on.

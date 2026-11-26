@@ -25,6 +25,7 @@ import org.occurrent.annotation.Saga;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -41,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.withSettings;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -134,7 +136,7 @@ class SagaAnnotationTimerPollerCompetingConsumerTest {
         @SuppressWarnings("unchecked")
         @Bean
         SagaStateStore<TestState> sagaStateStore() {
-            SagaStateStore<TestState> store = mock(SagaStateStore.class);
+            SagaStateStore<TestState> store = mock(SagaStateStore.class, withSettings().extraInterfaces(SagaStateStoreSkippedInputs.class));
             when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
             return store;
         }

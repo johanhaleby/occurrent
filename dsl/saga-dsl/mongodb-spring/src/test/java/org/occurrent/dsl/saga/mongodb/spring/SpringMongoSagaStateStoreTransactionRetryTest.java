@@ -16,6 +16,12 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.data.PojoCloudEventData;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoException;
@@ -33,12 +39,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.SessionSynchronization;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -50,13 +58,17 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -370,7 +382,7 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
 
             Throwable thrown;
             try (FailPoint failure = FailPoint.failing(client, "commitTransaction", ATTEMPTS, BAD_VALUE)) {
-                thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-11@7")));
+                thrown = catchThrowable(() -> store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-11@7", heldEvent("order-11@7"))));
             }
 
             assertAll(
@@ -386,12 +398,149 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
 
             boolean saved;
             try (FailPoint failure = FailPoint.failing(client, "commitTransaction", 1, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
-                saved = store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-12@7"));
+                saved = store.compareAndSaveSkipped(instance, 1, "q-1", new SkippedInput(0, "order-12@7", heldEvent("order-12@7")));
             }
 
             assertAll(
                     () -> assertThat(saved).isTrue(),
                     () -> assertThat(commits.get()).as("commitTransaction commands sent, the failed one and its retry").isEqualTo(2)
+            );
+        }
+
+        private static final String QUARANTINE_ID = "q-1";
+        private static final String SKIPPED_INPUTS = COLLECTION + "_skipped_inputs";
+
+        // What a call threw and the warnings the store logged during exactly that call
+        private record Logged(Throwable thrown, List<String> warnings) {
+        }
+
+        private static Logged logged(Runnable call) {
+            Logger storeLog = (Logger) LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            storeLog.addAppender(appender);
+            Throwable thrown;
+            try {
+                thrown = catchThrowable(call::run);
+            } finally {
+                storeLog.detachAppender(appender);
+                appender.stop();
+            }
+            return new Logged(thrown, appender.list.stream().filter(event -> event.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList());
+        }
+
+        // A number extension the store holds as another class and data it holds only as its bytes, one warning each
+        private static CloudEvent eventWithTwoWarnings(String key) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("price", new BigDecimal("1234567890.123456789"));
+            return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test")
+                    .withExtension("number", (Number) new AtomicLong(1_234_567))
+                    .withDataContentType("application/json").withData(PojoCloudEventData.wrap(data, value -> "{}".getBytes(StandardCharsets.UTF_8))).build();
+        }
+
+        private static SagaEnvelope<Payment> quarantined(String sagaId, long version) {
+            return new SagaEnvelope<>(sagaId, new Payment(12L), SagaStatus.QUARANTINED, version, List.of(), Map.of(), null, NOW.minusSeconds(600), NOW, null, null, true,
+                    new SagaFailure(sagaId + "@7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, QUARANTINE_ID), Map.of(), 0L);
+        }
+
+        private SpringMongoSagaStateStore<Payment> aQuarantinedInstanceWithTwoRecords(String sagaId, SpringMongoSagaStateStore<Payment> store) {
+            var envelopes = SagaEnvelopes.of(store, null);
+            assertThat(envelopes.compareAndSave(sagaId, quarantined(sagaId, 1), 0)).isTrue();
+            assertThat(envelopes.compareAndSaveSkipped(store, quarantined(sagaId, 2), 1, QUARANTINE_ID, new SkippedInput(0, sagaId + "@8", heldEvent(sagaId + "@8")))).isTrue();
+            assertThat(envelopes.compareAndSaveSkipped(store, quarantined(sagaId, 3), 2, QUARANTINE_ID, new SkippedInput(1, sagaId + "@9", heldEvent(sagaId + "@9")))).isTrue();
+            return store;
+        }
+
+        private long records() {
+            return template.getCollection(SKIPPED_INPUTS).countDocuments();
+        }
+
+        private void assertSkipAndItsWarningsAreNotKept(String sagaId, long recordsBefore, Logged skipped) {
+            assertAll(
+                    () -> assertThat(skipped.thrown()).as("what the store threw").isNotNull(),
+                    () -> assertThat(skipped.warnings()).as("the warnings logged").isEmpty(),
+                    () -> assertThat(records()).as("the records kept").isEqualTo(recordsBefore),
+                    () -> assertThat(storeOn(template, RetryStrategy.none()).find(sagaId).orElseThrow().version()).as("the version of the instance").isEqualTo(1L)
+            );
+        }
+
+        private void assertTheStoreWouldHaveWarned(String sagaId) {
+            StoredSaga control = anInstanceToSkipAnInputOf(sagaId);
+            Logged skipped = logged(() -> storeOn(template, RetryStrategy.none()).compareAndSaveSkipped(control, 1, QUARANTINE_ID, new SkippedInput(0, sagaId + "@7", eventWithTwoWarnings(sagaId + "@7"))));
+            assertThat(skipped.warnings()).as("the warnings of the same call when nothing fails").hasSize(2);
+        }
+
+        @Test
+        void a_commit_that_fails_before_it_applies_makes_compareAndSaveSkipped_throw_and_log_no_warning_for_a_number_or_for_data_held_as_its_bytes() {
+            assertTheStoreWouldHaveWarned("order-control-1");
+            StoredSaga instance = anInstanceToSkipAnInputOf("order-13");
+            var store = storeOn(template, RetryStrategy.none());
+            long recordsBefore = records();
+
+            Logged skipped;
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", 1, BAD_VALUE)) {
+                skipped = logged(() -> store.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(0, "order-13@7", eventWithTwoWarnings("order-13@7"))));
+            }
+
+            assertSkipAndItsWarningsAreNotKept("order-13", recordsBefore, skipped);
+        }
+
+        @Test
+        void a_commit_that_fails_with_the_unknown_result_label_on_every_attempt_the_retry_strategy_allows_makes_compareAndSaveSkipped_throw_and_log_no_warning_and_the_record_is_not_kept() {
+            assertTheStoreWouldHaveWarned("order-control-2");
+            StoredSaga instance = anInstanceToSkipAnInputOf("order-14");
+            var store = storeOn(template, retryingWithAHook());
+            long recordsBefore = records();
+            int commitsBefore = commits.get();
+            int retriesBefore = retries.get();
+
+            Logged skipped;
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", ATTEMPTS, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
+                skipped = logged(() -> store.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, new SkippedInput(0, "order-14@7", eventWithTwoWarnings("order-14@7"))));
+            }
+
+            assertAll(
+                    () -> assertSkipAndItsWarningsAreNotKept("order-14", recordsBefore, skipped),
+                    () -> assertThat(commits.get() - commitsBefore).as("commitTransaction commands sent, the first and the store's retries").isEqualTo(ATTEMPTS),
+                    () -> assertThat(retries.get() - retriesBefore).as("retries the store's strategy made").isEqualTo(ATTEMPTS - 1)
+            );
+        }
+
+        @Test
+        void a_commit_that_fails_before_it_applies_makes_delete_of_a_quarantined_instance_throw_and_log_no_warning_and_the_instance_and_its_records_are_still_stored() {
+            var store = aQuarantinedInstanceWithTwoRecords("order-15", storeOn(template, RetryStrategy.none()));
+
+            Logged deleted;
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", 1, BAD_VALUE)) {
+                deleted = logged(() -> store.delete("order-15"));
+            }
+
+            assertAll(
+                    () -> assertThat(deleted.thrown()).as("what the store threw").isNotNull(),
+                    () -> assertThat(deleted.warnings()).as("the warnings logged").isEmpty(),
+                    () -> assertThat(store.find("order-15")).as("the instance").isPresent(),
+                    () -> assertThat(records()).as("the records kept").isEqualTo(2)
+            );
+        }
+
+        @Test
+        void a_commit_that_fails_with_the_unknown_result_label_on_every_attempt_the_retry_strategy_allows_makes_delete_of_a_quarantined_instance_throw_and_log_no_warning_and_the_instance_and_its_records_are_still_stored() {
+            var store = aQuarantinedInstanceWithTwoRecords("order-16", storeOn(template, retryingWithAHook()));
+            int commitsBefore = commits.get();
+            int retriesBefore = retries.get();
+
+            Logged deleted;
+            try (FailPoint failure = FailPoint.failing(client, "commitTransaction", ATTEMPTS, BAD_VALUE, UNKNOWN_COMMIT_RESULT)) {
+                deleted = logged(() -> store.delete("order-16"));
+            }
+
+            assertAll(
+                    () -> assertThat(commits.get() - commitsBefore).as("commitTransaction commands sent, the first and the store's retries").isEqualTo(ATTEMPTS),
+                    () -> assertThat(retries.get() - retriesBefore).as("retries the store's strategy made").isEqualTo(ATTEMPTS - 1),
+                    () -> assertThat(deleted.thrown()).as("what the store threw").isNotNull(),
+                    () -> assertThat(deleted.warnings()).as("the warnings logged").isEmpty(),
+                    () -> assertThat(store.find("order-16")).as("the instance").isPresent(),
+                    () -> assertThat(records()).as("the records kept").isEqualTo(2)
             );
         }
     }
@@ -431,5 +580,9 @@ class SpringMongoSagaStateStoreTransactionRetryTest {
                     () -> assertThat(strategy.attempts.get()).as("attempts").isEqualTo(2)
             );
         }
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

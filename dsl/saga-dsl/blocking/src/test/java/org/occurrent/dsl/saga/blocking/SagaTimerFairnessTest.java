@@ -195,7 +195,7 @@ class SagaTimerFairnessTest {
                 .build();
         CommandDispatcher<CancelOrder> dispatcher = dispatched::add;
         SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), batchLimit, 50);
-        return new SagaExecution<>("saga-timer-fairness", saga, store, dispatcher, converter, config, event -> true, now::get);
+        return new SagaExecution<>("saga-timer-fairness", saga, store, dispatcher, converter, config, now::get);
     }
 
     sealed interface OrderEvent permits OrderPlaced {

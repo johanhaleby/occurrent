@@ -16,16 +16,19 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import com.mongodb.ClientSessionOptions;
 import com.mongodb.MongoException;
 import com.mongodb.MongoServerException;
 import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import com.mongodb.client.ClientSession;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.FindOneAndDeleteOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
@@ -33,24 +36,41 @@ import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.BytesCloudEventData;
+import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.BsonDocument;
 import org.bson.Document;
+import org.bson.RawBsonDocument;
+import org.bson.codecs.Codec;
+import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.conversions.Bson;
+import org.bson.types.Binary;
+import org.bson.types.Decimal128;
+import org.bson.types.ObjectId;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.saga.SagaReadRefusedException;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import org.occurrent.dsl.saga.codec.EncodedSaga;
 import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.dsl.saga.internal.SkippedInputData;
+import org.occurrent.dsl.saga.internal.SkippedInputNumber;
+import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,14 +86,23 @@ import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -104,7 +133,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * {@code timeoutMS} of 0 a single write still fails after 10 seconds, and a commit waits without limit. A server without
  * journaling refuses {@code j: true}, and the store throws an {@link IllegalStateException}.
  * <p>
- * Every read the saga acts on ({@link #find}, {@link #findWithoutState}, {@link #findWithDueTimers},
+ * Every other read the saga acts on ({@link #find}, {@link #findWithoutState}, {@link #findWithDueTimers},
  * {@link #findByStatus}, {@link #findReleasingSagaIds} and {@link #findSkippedInputs}) goes to the primary at read
  * concern {@code majority}, so it returns only writes a majority of the replica set has. A write that reached the primary
  * but not a majority reads as absent until it reaches a majority or a failover rolls it back, so the saga never
@@ -113,18 +142,51 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * again at read concern {@code linearizable}. MongoDB documents that a linearizable read on the primary returns every
  * write a majority acknowledged before the read started, in
  * <a href="https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/">read concern "linearizable"</a>.
+ * A standalone server has no failover and refuses that read concern, so there the store skips the second read.
  * The transactions below read at read concern {@code snapshot}, everything the primary has when the transaction
  * starts, and their commit at {@code majority} returns only once a majority has all of it. A release ends the
- * quarantine of an instance only in such a transaction that finds no skipped input left.
+ * quarantine of an instance only in such a transaction, one that finds no skipped input left or completes the instance.
  * <p>
- * The four writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
+ * A release reads with {@link #findWithFirstSkippedInput}, which reads the instance and its first skipped input in one
+ * transaction of the store's at read concern {@code snapshot}, so both are what the primary had at the same moment, on
+ * a sharded cluster too when the two are on different shards. An instance that read doesn't find is read again at read
+ * concern {@code linearizable}, as {@link #find} does. When that read finds it, the store reads both again in a new
+ * transaction that starts after the linearizable read, so it has every write that read saw, also on a new primary right
+ * after an election. A standalone server refuses transactions, and so every write of a skipped input there, so the
+ * store reads the instance and then its first skipped input at read concern {@code majority}.
+ * <p>
+ * {@link #findWithFirstSkippedInput} throws a {@link SagaReadRefusedException} inside a MongoDB transaction of the
+ * caller's, and inside a Spring transaction of another resource that synchronizes its resources, before it reads
+ * anything, so a release can't run in either. In the second a template with {@code SessionSynchronization.ALWAYS} starts
+ * a MongoDB transaction at the release's first write, and the store can't tell how the template synchronizes. A
+ * transaction at read concern {@code local} or
+ * {@code majority} on a sharded cluster reads each shard as it is at its own moment, and could return an instance with a
+ * record that a later version of it already deleted. The store can't tell the read concern of a transaction it joins,
+ * so it refuses one at read concern {@code snapshot} too.
+ * <p>
+ * The three writes of {@link SagaStateStoreSkippedInputs} and the {@link #delete(String)} of a quarantined instance write
  * the instance and its skipped inputs in one MongoDB transaction, through a {@link MongoTransactionManager} on the
  * template's {@link MongoDatabaseFactory}. So quarantine needs a replica set or a sharded cluster, and the store throws an
- * {@link IllegalStateException} when the server refuses a transaction. Such a transaction that fails with the
+ * {@link IllegalStateException} when the server refuses a transaction. A transaction that fails with the
  * {@code TransientTransactionError} label is run again from the start with the store's {@link RetryStrategy}, and a
  * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again. Any other failure of such a
  * transaction is thrown at once, and so is a server's refusal of a transaction or of journaling on any call, whatever
  * the strategy retries, a {@code RetryStrategy} you implement yourself included.
+ * <p>
+ * The constructor asks the server for its deployment once, with {@code hello}, and the store keeps that answer. So a
+ * standalone server converted to a replica set while the application runs is still a standalone server to the store,
+ * which keeps refusing quarantine and skips the {@code linearizable} read of an instance it doesn't find, so an
+ * election before a restart can let an input addressed to an instance be skipped as if the instance didn't exist.
+ * Restart the application after the conversion. On a standalone server
+ * {@link #requireAtomicTransitions()} throws, so a saga with quarantine on refuses to start. With quarantine off a saga
+ * runs there, as long as the server journals its writes, since every write asks for {@code j: true}. The delivery of
+ * an input that an instance quarantined earlier, such as one in data restored from a replica set, has to record as
+ * skipped fails there, so the input is delivered again until the instance is moved back to a replica set
+ * or resolved by hand. {@code SagaSubscription.release(sagaId)} throws there before it reads or writes anything, since
+ * the write that starts a release asks for no transaction and the server would refuse the write that applies a replayed
+ * input only after the release dispatched its commands. The timer poller replays nothing there, so an instance marked releasing stays
+ * as it is. A {@link #delete(String)} of such an instance writes in a transaction, which the server refuses with the
+ * replica set message.
  * <p>
  * Called inside a MongoDB transaction of the caller's on the same {@link MongoDatabaseFactory}, those writes join it.
  * Inside such a transaction the store sends each read and write once, and a failure reaches the caller as MongoDB
@@ -151,15 +213,19 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * leave no document behind when the transaction commits, and a change stream on the collection may see them. The
  * collection must accept a document that holds only {@code _id}, so a validator that requires other fields makes such a
  * read of an absent instance fail. In a Spring transaction of another resource where no MongoDB transaction has started,
- * the two methods read as they do outside a transaction.
+ * the two methods read as they do outside a transaction, while {@link #findWithFirstSkippedInput} refuses to read.
  * <p>
  * {@link #findReleasingSagaIds(String, int)} finds the instances that have {@code failureReleasedAt} set. The inputs a
  * quarantined instance skips are stored one document each, in a collection next to the instances named after it with
  * {@code _skipped_inputs} appended. Each holds {@code sagaId}, {@code quarantineId}, {@code seq} and {@code key}, with a
  * unique index on {@code sagaId}, {@code quarantineId} and {@code key}, and an index on {@code sagaId},
- * {@code quarantineId} and {@code seq} for the order a release reads them in. The constructor refuses a collection name
- * that ends in {@code _skipped_inputs}, because a store on {@code orders} keeps its skipped inputs in
- * {@code orders_skipped_inputs}, and a store on that name would share the collection.
+ * {@code quarantineId} and {@code seq} for the order a release reads them in. A record too large for one document holds
+ * {@code chunks} and {@code size} in place of the event, and its BSON is split across documents in a collection named
+ * after the instances with {@code _skipped_input_chunks} appended. Each of those holds {@code sagaId},
+ * {@code quarantineId}, {@code key}, {@code chunk} and {@code bytes}, with a unique index on the first four. The
+ * constructor refuses a collection name that ends in either suffix, because a store on {@code orders} keeps its skipped
+ * inputs in {@code orders_skipped_inputs} and their chunks in {@code orders_skipped_input_chunks}, and a store on either
+ * name would share a collection with it.
  * <p>
  * An instance quarantined with a quarantine id is stored with the status {@value #QUARANTINED_RECORDING} rather than
  * {@code QUARANTINED}, and both read back as {@link SagaStatus#QUARANTINED}. In the same way an active instance that holds
@@ -175,6 +241,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
     private static final String SKIPPED_INPUTS_SUFFIX = "_skipped_inputs";
+    private static final String SKIPPED_INPUT_CHUNKS_SUFFIX = "_skipped_input_chunks";
     // How long each attempt of a write waits for a journaled majority before it fails. A client timeoutMS above 0 bounds
     // the attempt instead
     private static final Duration WRITE_TIMEOUT = Duration.ofSeconds(10);
@@ -192,8 +259,17 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // CommandOperationHelper.transformWriteException
     private static final int TRANSACTIONS_NOT_SUPPORTED_ERROR_CODE = 20;
     private static final String TRANSACTIONS_NOT_SUPPORTED_ERROR_MESSAGE = "Transaction numbers";
-    static final String REPLICA_SET_REQUIRED_MESSAGE = "SpringMongoSagaStateStore needs a MongoDB replica set or sharded cluster for quarantine, since it writes a quarantined saga instance and the inputs it skips in one transaction. "
-                                                       + "The server refused the transaction. Run MongoDB as a replica set, which can have a single member, or turn quarantine off for the saga.";
+    private static final String QUARANTINE_NEEDS_TRANSACTIONS = "SpringMongoSagaStateStore needs a MongoDB replica set or sharded cluster for quarantine, since it writes a quarantined saga instance and the inputs it skips in one transaction. ";
+    private static final String WAYS_TO_RUN_THE_SAGA = "Run MongoDB as a replica set, which can have a single member, or as a sharded cluster, or turn quarantine off for the saga with occurrent.saga.quarantine-enabled=false on Spring Boot "
+                                                       + "or SagaRunnerConfig.disableQuarantine() on a SagaRunner.";
+    static final String REPLICA_SET_REQUIRED_MESSAGE = QUARANTINE_NEEDS_TRANSACTIONS + "The server refused the transaction. " + WAYS_TO_RUN_THE_SAGA;
+    static final String STANDALONE_SERVER_MESSAGE = QUARANTINE_NEEDS_TRANSACTIONS + "The server is a standalone server, which refuses transactions. " + WAYS_TO_RUN_THE_SAGA;
+    // A transaction at read concern local or majority on a sharded cluster reads each shard at its own moment, so the
+    // instance and its records could come from two. Only snapshot reads every shard at one moment, and the store can't
+    // see the read concern of a transaction it joins
+    static final String CALLERS_TRANSACTION_MESSAGE = "SpringMongoSagaStateStore releases a quarantined saga instance outside a transaction of the caller's, and was called inside one, a MongoDB transaction or a Spring transaction of another resource, in which a template with SessionSynchronization.ALWAYS starts a MongoDB transaction at the first write. "
+                                                      + "A release reads the instance and its first skipped input in a transaction of its own at read concern snapshot, since a transaction at another read concern can read the two from different moments on a sharded cluster. "
+                                                      + "Call SagaSubscription.release outside the transaction.";
     private static final String ID = "_id";
     private static final String STATE = SagaCodec.STATE;
     private static final String STATUS = SagaCodec.STATUS;
@@ -214,6 +290,35 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String SKIPPED_QUARANTINE_ID = "quarantineId";
     private static final String SKIPPED_SEQ = "seq";
     private static final String SKIPPED_KEY = "key";
+    private static final String SKIPPED_EVENT = "event";
+    private static final String SKIPPED_DATA = "data";
+    private static final String SKIPPED_DATA_DOCUMENT = "dataDocument";
+    // The class of data held as its bytes because it doesn't come back from a document, which a release rebuilds
+    private static final String SKIPPED_DATA_CLASS = "dataClass";
+    private static final String SKIPPED_EXTENSIONS = "extensions";
+    // A record too large for one document holds seq, chunks and size, and its fields are split across that many
+    // chunks in the chunks collection, each keyed by the record's sagaId, quarantineId and key and its index in chunk
+    private static final String SKIPPED_CHUNKS = "chunks";
+    private static final String SKIPPED_SIZE = "size";
+    private static final String CHUNK_INDEX = "chunk";
+    private static final String CHUNK_BYTES = "bytes";
+    // Leaves a chunk room for its sagaId, quarantineId and key in both the document and the write that sends it
+    private static final int CHUNK_SIZE = 8 * 1024 * 1024;
+    private static final String EXTENSION_TYPE = "type";
+    private static final String EXTENSION_VALUE = "value";
+    private static final String EXTENSION_URI = "uri";
+    private static final String EXTENSION_TIMESTAMP = "timestamp";
+    private static final String EXTENSION_BYTE = "byte";
+    private static final String EXTENSION_SHORT = "short";
+    private static final String EXTENSION_FLOAT = "float";
+    private static final String EXTENSION_BIG_INTEGER = "bigInteger";
+    private static final String EXTENSION_BIG_DECIMAL = "bigDecimal";
+    // A String with an unpaired surrogate, held as its UTF-16 code units in BSON binary
+    private static final String EXTENSION_UTF16 = "utf16";
+    // A Number of a class BSON doesn't hold, held with its class as a Long, a decimal string or a Double, and released
+    // as a Long, a BigDecimal or a Double
+    private static final String EXTENSION_NUMBER = "number";
+    private static final String EXTENSION_CLASS = "class";
 
     /**
      * How many times a read or a write calls MongoDB before it gives up, 10, the same number
@@ -231,9 +336,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private final TransactionTemplate transactions;
     private final String collectionName;
     private final String skippedInputsCollectionName;
+    private final String skippedInputChunksCollectionName;
     private final Class<S> stateType;
     private final boolean flowSaga;
     private final RetryStrategy retryStrategy;
+    private final MongoDeployment deployment;
     private final SagaStateCodec<S> stateCodec = new SagaStateCodec<>() {
         @Override
         public Object encode(S state) {
@@ -259,12 +366,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * says.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName  the collection the instances are stored in, which must not end in {@code _skipped_inputs}
+     * @param collectionName  the collection the instances are stored in, which must end in neither {@code _skipped_inputs} nor {@code _skipped_input_chunks}
      * @param stateType       the user state type, needed to read the stored state back into an object
      * @throws IllegalArgumentException when {@code mongoOperations} is not a {@link MongoTemplate}, since the store writes a
      *                                  quarantined instance and its skipped inputs in a transaction on the template's
      *                                  {@link MongoDatabaseFactory}, or when {@code collectionName} ends in
-     *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
+     *                                  {@code _skipped_inputs} or {@code _skipped_input_chunks}. Pass the
+     *                                  {@code MongoTemplate} bean.
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType) {
         this(mongoOperations, collectionName, stateType, null);
@@ -276,13 +384,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * only marks the store as a flow saga's.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
+     * @param collectionName      the collection the instances are stored in, which must end in neither {@code _skipped_inputs} nor {@code _skipped_input_chunks}
      * @param stateType           the user state type, needed to read the stored state back into an object
      * @param cloudEventConverter the converter of a flow saga's application, or {@code null} for a core saga
      * @throws IllegalArgumentException when {@code mongoOperations} is not a {@link MongoTemplate}, since the store writes a
      *                                  quarantined instance and its skipped inputs in a transaction on the template's
      *                                  {@link MongoDatabaseFactory}, or when {@code collectionName} ends in
-     *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
+     *                                  {@code _skipped_inputs} or {@code _skipped_input_chunks}. Pass the
+     *                                  {@code MongoTemplate} bean.
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter) {
         this(mongoOperations, collectionName, stateType, cloudEventConverter, defaultRetryStrategy());
@@ -294,14 +403,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * MongoDB transaction isn't retried, as the class javadoc says.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
-     * @param collectionName      the collection the instances are stored in, which must not end in {@code _skipped_inputs}
+     * @param collectionName      the collection the instances are stored in, which must end in neither {@code _skipped_inputs} nor {@code _skipped_input_chunks}
      * @param stateType           the user state type, needed to read the stored state back into an object
      * @param cloudEventConverter the converter of a flow saga's application, or {@code null} for a core saga
      * @param retryStrategy       the strategy used when a read or a write fails
      * @throws IllegalArgumentException when {@code mongoOperations} is not a {@link MongoTemplate}, since the store writes a
      *                                  quarantined instance and its skipped inputs in a transaction on the template's
      *                                  {@link MongoDatabaseFactory}, or when {@code collectionName} ends in
-     *                                  {@code _skipped_inputs}. Pass the {@code MongoTemplate} bean.
+     *                                  {@code _skipped_inputs} or {@code _skipped_input_chunks}. Pass the
+     *                                  {@code MongoTemplate} bean.
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
         this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
@@ -320,12 +430,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // Joins a transaction the caller started on the same MongoDatabaseFactory
         this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
-        if (collectionName.endsWith(SKIPPED_INPUTS_SUFFIX)) {
-            String sharedWith = collectionName.substring(0, collectionName.length() - SKIPPED_INPUTS_SUFFIX.length());
-            throw new IllegalArgumentException("collectionName '" + collectionName + "' ends in '" + SKIPPED_INPUTS_SUFFIX + "', and a store on '" + sharedWith
-                                               + "' keeps its skipped inputs in that collection, so the two would share it. Pick a name that does not end in '" + SKIPPED_INPUTS_SUFFIX + "'.");
+        for (String suffix : List.of(SKIPPED_INPUTS_SUFFIX, SKIPPED_INPUT_CHUNKS_SUFFIX)) {
+            if (collectionName.endsWith(suffix)) {
+                String sharedWith = collectionName.substring(0, collectionName.length() - suffix.length());
+                throw new IllegalArgumentException("collectionName '" + collectionName + "' ends in '" + suffix + "', and a store on '" + sharedWith
+                                                   + "' keeps its skipped inputs in that collection, so the two would share it. Pick a name that ends in neither '"
+                                                   + SKIPPED_INPUTS_SUFFIX + "' nor '" + SKIPPED_INPUT_CHUNKS_SUFFIX + "'.");
+            }
         }
         this.skippedInputsCollectionName = collectionName + SKIPPED_INPUTS_SUFFIX;
+        this.skippedInputChunksCollectionName = collectionName + SKIPPED_INPUT_CHUNKS_SUFFIX;
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
         this.flowSaga = cloudEventConverter != null;
         if (stateType == FlowState.class && cloudEventConverter == null) {
@@ -338,6 +452,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // setting changes it, so nothing a user configures can make MongoDB refuse one permanently. An index an operator
         // has already created with different options fails the constructor after the attempt limit rather than being
         // retried forever. The unique index on the skipped inputs is what makes recording a key twice store one document.
+        // The deployment is asked once here, like the indexes, and a failure of the probe other than a server that does
+        // not know hello propagates once the attempts are used. A Runnable, like the indexes, so a caller's strategy
+        // tells setup apart from the store's reads and writes
+        AtomicReference<MongoDeployment> detected = new AtomicReference<>();
+        retryStrategy.execute(() -> detected.set(MongoDeployment.detect(mongoOperations::executeCommand)));
+        this.deployment = Objects.requireNonNull(detected.get(), "deployment");
         retryStrategy.execute(() -> {
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
             mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
@@ -346,6 +466,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     new IndexOptions().unique(true));
             mongoOperations.getCollection(skippedInputsCollectionName).createIndex(
                     Indexes.compoundIndex(Indexes.ascending(SKIPPED_SAGA_ID), Indexes.ascending(SKIPPED_QUARANTINE_ID), Indexes.ascending(SKIPPED_SEQ), Indexes.ascending(SKIPPED_KEY)));
+            mongoOperations.getCollection(skippedInputChunksCollectionName).createIndex(
+                    Indexes.compoundIndex(Indexes.ascending(SKIPPED_SAGA_ID), Indexes.ascending(SKIPPED_QUARANTINE_ID), Indexes.ascending(SKIPPED_KEY), Indexes.ascending(CHUNK_INDEX)),
+                    new IndexOptions().unique(true));
         });
     }
 
@@ -356,6 +479,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      */
     static RetryStrategy.Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(DEFAULT_MAX_ATTEMPTS);
+    }
+
+    @Override
+    public void requireAtomicTransitions() {
+        if (deployment == MongoDeployment.OTHER) {
+            throw new IllegalStateException(STANDALONE_SERVER_MESSAGE);
+        }
     }
 
     @Override
@@ -380,22 +510,23 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // maxTimeMS. MongoDB documents that such a read returns every write a majority acknowledged before the read
     // started, see
     // https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/
+    // A standalone server has no failover and refuses read concern linearizable, so there the majority read stands
     private @Nullable Document findInstance(String sagaId, Supplier<Query> query) {
         if (joinsCallersTransaction()) {
             return findInCallersTransaction(sagaId, query.get());
         }
-        Document found = retried(() -> readInstance(query.get(), ReadConcern.MAJORITY));
-        return found != null ? found : retried(() -> readInstance(query.get(), ReadConcern.LINEARIZABLE));
+        Document found = retried(() -> readInstance(null, query.get(), ReadConcern.MAJORITY));
+        return found != null || deployment == MongoDeployment.OTHER ? found : retried(() -> readInstance(null, query.get(), ReadConcern.LINEARIZABLE));
     }
 
     // From the primary, on the database MongoDatabaseUtils hands out, which is bound to no session here. A template with
     // SessionSynchronization.ALWAYS would start a transaction for the read in a Spring transaction of another resource,
     // and the read would see that transaction's snapshot. A linearizable read waits at most the write timeout, as MongoDB
-    // advises, since it can't complete without a majority
-    private @Nullable Document readInstance(Query query, ReadConcern readConcern) {
+    // advises, since it can't complete without a majority. In session, when one is given
+    private @Nullable Document readInstance(@Nullable ClientSession session, Query query, ReadConcern readConcern) {
         try {
-            FindIterable<Document> found = instances(MongoDatabaseUtils.getDatabase(databaseFactory)).withReadConcern(readConcern).withReadPreference(ReadPreference.primary())
-                    .find(query.getQueryObject()).projection(query.getFieldsObject());
+            MongoCollection<Document> instances = instances(MongoDatabaseUtils.getDatabase(databaseFactory)).withReadConcern(readConcern).withReadPreference(ReadPreference.primary());
+            FindIterable<Document> found = (session == null ? instances.find(query.getQueryObject()) : instances.find(session, query.getQueryObject())).projection(query.getFieldsObject());
             return (readConcern == ReadConcern.LINEARIZABLE ? found.maxTime(WRITE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) : found).first();
         } catch (RuntimeException e) {
             throw translated(e);
@@ -523,7 +654,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private static Bson withoutState(StoredSaga saga) {
-        Document document = toDocument(saga);
+        return withoutState(toDocument(saga));
+    }
+
+    private static Bson withoutState(Document document) {
         List<Bson> updates = new ArrayList<>();
         for (String field : SagaCodec.fieldsExceptState()) {
             // Unset rather than left alone, so a field the new instance has no value for goes away instead of keeping
@@ -532,6 +666,33 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             updates.add(document.containsKey(field) ? Updates.set(field, document.get(field)) : Updates.unset(field));
         }
         return Updates.combine(updates);
+    }
+
+    /**
+     * Reads the instance as it is stored, and measures it with the fields {@code compareAndSaveWithoutState} sets
+     * replaced, the way {@link #fits(StoredSaga)} measures a whole instance. Nothing of the stored document is decoded,
+     * so the received events of a flow saga stay the JSON strings they are stored as, and one that no longer reads back
+     * as a CloudEvent doesn't fail the answer.
+     */
+    @Override
+    public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+        return joiningCallersTransaction(() -> {
+            Objects.requireNonNull(saga, "saga cannot be null");
+            Document stored = findInstance(saga.sagaId(), () -> Query.query(where(ID).is(saga.sagaId())));
+            if (stored == null || ((Number) stored.get(VERSION)).longValue() != expectedVersion) {
+                return true;
+            }
+            Document written = toDocument(saga);
+            Document candidate = new Document(stored);
+            for (String field : SagaCodec.fieldsExceptState()) {
+                if (written.containsKey(field)) {
+                    candidate.put(field, written.get(field));
+                } else {
+                    candidate.remove(field);
+                }
+            }
+            return fitsDocument(candidate);
+        });
     }
 
     private static Bson versionIs(String sagaId, long expectedVersion) {
@@ -613,36 +774,470 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                     .with(Sort.by(Sort.Direction.ASC, SKIPPED_SEQ, SKIPPED_KEY))
                     .limit(limit);
             Supplier<List<Document>> read = () -> mongoOperations.find(majorityRead(query), Document.class, skippedInputsCollectionName);
-            return retried(read).stream().map(SpringMongoSagaStateStore::toSkippedInput).toList();
+            CodecRegistry codecs = skippedInputCodecs();
+            ChunkReader chunks = (keyFilter, count) -> retried(() -> mongoOperations.find(majorityRead(Query.query(where(SKIPPED_SAGA_ID).is(keyFilter.get(SKIPPED_SAGA_ID))
+                            .and(SKIPPED_QUARANTINE_ID).is(keyFilter.get(SKIPPED_QUARANTINE_ID)).and(SKIPPED_KEY).is(keyFilter.get(SKIPPED_KEY)).and(CHUNK_INDEX).lt(count))
+                    .with(Sort.by(Sort.Direction.ASC, CHUNK_INDEX))), Document.class, skippedInputChunksCollectionName));
+            return retried(read).stream().map(record -> toSkippedInput(whole(record, chunks, codecs))).toList();
         });
     }
 
-    private static SkippedInput toSkippedInput(Document document) {
-        return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY));
+    // Reads the chunks under keyFilter whose index is below count, in the order of their index
+    @FunctionalInterface
+    private interface ChunkReader {
+        List<Document> read(Document keyFilter, int count);
     }
 
+    // The record as it was before it was split across chunks, or the record itself when it wasn't. The chunks are written
+    // before their record and deleted after it, in the same transaction, so a record finds all of its chunks unless
+    // something outside the store removed them, such as a restore of the records without their chunks. A read made
+    // outside a transaction can also miss chunks that a release deleted with their record after the record was read
+    private static Document whole(Document record, ChunkReader readChunks, CodecRegistry codecs) {
+        Object chunks = record.get(SKIPPED_CHUNKS);
+        if (chunks == null) {
+            return record;
+        }
+        int count = ((Number) chunks).intValue();
+        int size = ((Number) Objects.requireNonNull(record.get(SKIPPED_SIZE), SKIPPED_SIZE)).intValue();
+        String sagaId = record.getString(SKIPPED_SAGA_ID);
+        String key = record.getString(SKIPPED_KEY);
+        List<Document> found = readChunks.read(skippedInputFilter(sagaId, record.getString(SKIPPED_QUARANTINE_ID), key), count);
+        byte[] joined = new byte[size];
+        int length = 0;
+        for (int index = 0; index < found.size(); index++) {
+            Document chunk = found.get(index);
+            Object stored = chunk.get(CHUNK_BYTES);
+            byte[] bytes = stored instanceof Binary binary ? binary.getData() : (byte[]) stored;
+            if (((Number) chunk.get(CHUNK_INDEX)).intValue() != index || bytes == null || length + bytes.length > size) {
+                break;
+            }
+            System.arraycopy(bytes, 0, joined, length, bytes.length);
+            length += bytes.length;
+        }
+        if (found.size() != count || length != size) {
+            throw new IllegalStateException("Saga instance '" + sagaId + "' has a record of the input '" + key + "' whose event is split across " + count + " chunks of " + size
+                                            + " bytes in all, and the chunks found under it are " + found.size() + " with " + length + " bytes. "
+                                            + "The record is read only whole, so read it again, and if this persists, restore its chunks next to the records.");
+        }
+        Document whole = new Document(record);
+        whole.remove(SKIPPED_CHUNKS);
+        whole.remove(SKIPPED_SIZE);
+        whole.putAll(new RawBsonDocument(joined).decode(codecs.get(Document.class)));
+        return whole;
+    }
+
+    // On a replica set or a mongos both reads run in one transaction of the store's, at read concern snapshot, so they
+    // see the instance and its records as one write left them, on one shard or on two. Two reads at read concern majority
+    // can each go to another primary across a failover. A standalone server refuses the transactions every write of a
+    // record takes, so its records don't change and two plain reads do. A transaction of the caller's is refused, see
+    // CALLERS_TRANSACTION_MESSAGE
+    @Override
+    public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+        return findWithFirstRecord(sagaId, true).map(read -> new StoredSagaWithFirstSkippedInput(toStoredSaga(read.instance()), read.first() == null ? null
+                : toSkippedInput(whole(read.first().record(), (keyFilter, count) -> read.first().chunks(), skippedInputCodecs()))));
+    }
+
+    // Read as findWithFirstSkippedInput reads, without the chunks. Only the seq and key of the record are decoded, and the
+    // instance is returned without its state, since a flow saga's state is decoded on the way out of the store
+    @Override
+    public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+        return findWithFirstRecord(sagaId, false).map(read -> {
+            Document withoutState = new Document(read.instance());
+            withoutState.remove(STATE);
+            StoredRecord first = read.first();
+            return new StoredSagaWithFirstSkippedInputKey(toStoredSaga(withoutState), first == null ? null
+                    : new StoredSagaWithFirstSkippedInputKey.RecordKey(((Number) first.record().get(SKIPPED_SEQ)).longValue(), first.record().getString(SKIPPED_KEY)));
+        });
+    }
+
+    private Optional<InstanceWithFirstRecord> findWithFirstRecord(String sagaId, boolean withChunks) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        // A Spring transaction of another resource is refused too, since a template with SessionSynchronization.ALWAYS
+        // starts a MongoDB transaction in it at the release's first write, and the template doesn't say how it
+        // synchronizes. This is the first call of a release, so the refusal comes before it reads or writes anything
+        if (MongoDatabaseUtils.isTransactionActive(databaseFactory) || TransactionSynchronizationManager.isSynchronizationActive()) {
+            throw new SagaReadRefusedException(CALLERS_TRANSACTION_MESSAGE);
+        }
+        Query byId = Query.query(where(ID).is(sagaId));
+        if (deployment == MongoDeployment.OTHER) {
+            Document found = retried(() -> readInstance(null, byId, ReadConcern.MAJORITY));
+            if (found == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new InstanceWithFirstRecord(found, retried(() -> firstSkippedInput(
+                    MongoDatabaseUtils.getDatabase(databaseFactory).withReadConcern(ReadConcern.MAJORITY).withReadPreference(ReadPreference.primary()), sagaId, found, withChunks))));
+        }
+        Optional<InstanceWithFirstRecord> found = inSnapshot(sagaId, byId, null, withChunks);
+        if (found.isPresent()) {
+            return found;
+        }
+        // An absence in the snapshot is read again at read concern linearizable, as find does. An instance found then is
+        // read in a new snapshot that starts after that read, since a new primary right after an election can still hand
+        // out a snapshot from before it. The session isn't causally consistent, since the driver would send the operation
+        // time of a failed attempt as afterClusterTime on the next, which linearizable refuses. It still keeps the
+        // operation time of every reply, and the new snapshot starts after the latest
+        try (ClientSession linearizable = databaseFactory.getSession(ClientSessionOptions.builder().causallyConsistent(false).build())) {
+            if (retried(() -> readInstance(linearizable, byId, ReadConcern.LINEARIZABLE)) == null) {
+                return Optional.empty();
+            }
+            return inSnapshot(sagaId, byId, linearizable, withChunks);
+        }
+    }
+
+    // With after, the snapshot starts after every read made in that session
+    private Optional<InstanceWithFirstRecord> inSnapshot(String sagaId, Query byId, @Nullable ClientSession after, boolean withChunks) {
+        // Decoded after the transaction, so a stored instance that no longer reads back throws once instead of being retried
+        @Nullable Object[] read = retried(() -> {
+            try {
+                return Objects.requireNonNull(transactions.execute(status -> {
+                    if (after != null) {
+                        CommitRetryingTransactionManager.startAfter(status, after);
+                    }
+                    MongoDatabase database = MongoDatabaseUtils.getDatabase(databaseFactory);
+                    Document found = instances(database).find(byId.getQueryObject()).first();
+                    return new Object[]{found, found == null ? null : firstSkippedInput(database, sagaId, found, withChunks)};
+                }));
+            } catch (RuntimeException e) {
+                throw translated(e);
+            }
+        });
+        Document found = (Document) read[0];
+        return found == null ? Optional.empty() : Optional.of(new InstanceWithFirstRecord(found, (StoredRecord) read[1]));
+    }
+
+    // The instance and its first record as they are stored, decoded once the read is over
+    private record InstanceWithFirstRecord(Document instance, @Nullable StoredRecord first) {
+    }
+
+    // A record as it is stored, with its chunks when it is split across them, read together and decoded later
+    private record StoredRecord(Document record, List<Document> chunks) {
+    }
+
+    // The chunks are read with their record, in the same transaction on a replica set or a mongos, unless withChunks is
+    // false for a read of the record's seq and key alone. A standalone server refuses the transaction every write of a
+    // record takes, so there records and chunks don't change
+    private @Nullable StoredRecord firstSkippedInput(MongoDatabase database, String sagaId, Document instance, boolean withChunks) {
+        String quarantineId = instance.getString(FAILURE_QUARANTINE_ID);
+        if (quarantineId == null) {
+            return null;
+        }
+        try {
+            Document first = skippedInputs(database).find(Filters.and(Filters.eq(SKIPPED_SAGA_ID, sagaId), Filters.eq(SKIPPED_QUARANTINE_ID, quarantineId)))
+                    .sort(Sorts.ascending(SKIPPED_SEQ, SKIPPED_KEY)).limit(1).first();
+            if (first == null) {
+                return null;
+            }
+            Object chunks = first.get(SKIPPED_CHUNKS);
+            List<Document> read = chunks == null || !withChunks ? List.of()
+                    : skippedInputChunks(database).find(Filters.and(skippedInputFilter(sagaId, quarantineId, first.getString(SKIPPED_KEY)), Filters.lt(CHUNK_INDEX, ((Number) chunks).intValue())))
+                    .sort(Sorts.ascending(CHUNK_INDEX)).into(new ArrayList<>());
+            return new StoredRecord(first, read);
+        } catch (RuntimeException e) {
+            throw translated(e);
+        }
+    }
+
+    // The downgrade in the upgrade guide and the runbook writes this down as the way to rebuild an event from a dump of the
+    // records, and SkippedInputExportTest checks that the two give the same event, so a change here is made there too
+    private static SkippedInput toSkippedInput(Document document) {
+        CloudEventBuilder event = CloudEventBuilder.from(CLOUD_EVENT_JSON_FORMAT.deserialize(document.getString(SKIPPED_EVENT).getBytes(StandardCharsets.UTF_8)));
+        Document extensions = document.get(SKIPPED_EXTENSIONS, Document.class);
+        if (extensions != null) {
+            extensions.forEach((name, value) -> withHeldExtension(event, name, value));
+        }
+        Object data = document.get(SKIPPED_DATA);
+        byte[] bytes = data == null ? null : data instanceof Binary binary ? binary.getData() : (byte[]) data;
+        Document dataDocument = document.get(SKIPPED_DATA_DOCUMENT, Document.class);
+        String dataClass = document.getString(SKIPPED_DATA_CLASS);
+        if (dataClass != null) {
+            event.withData(SkippedInputData.fromBytes(dataClass, Objects.requireNonNull(bytes, SKIPPED_DATA)));
+        } else if (dataDocument != null) {
+            byte[] delivered = bytes == null ? dataDocument.toJson().getBytes(StandardCharsets.UTF_8) : bytes;
+            event.withData(PojoCloudEventData.wrap(dataDocument, value -> delivered));
+        } else if (bytes != null) {
+            event.withData(bytes);
+        }
+        return new SkippedInput(((Number) document.get(SKIPPED_SEQ)).longValue(), document.getString(SKIPPED_KEY), event.build());
+    }
+
+    // Adds the event to the record the way a converter read it on delivery. A map is held as a document, with its bytes
+    // beside it unless they are the document's own JSON, and other data as its bytes in BSON binary, which keeps binary
+    // data at its own size. With dataAsBytes the data is held as its bytes whatever its class, with the class beside
+    // them. The extensions are the event's from extensionsOf. Fields are added as they are built, so the record has the
+    // value that failed when building it throws
+    private static void addHeldEvent(Document held, CloudEvent event, Map<String, Object> eventExtensions, boolean dataAsBytes) {
+        held.append(SKIPPED_EVENT, new String(CLOUD_EVENT_JSON_FORMAT.serialize(attributesOf(event)), StandardCharsets.UTF_8));
+        Document extensions = new Document();
+        eventExtensions.forEach((name, value) -> extensions.append(name, heldExtension(value)));
+        if (!extensions.isEmpty()) {
+            held.append(SKIPPED_EXTENSIONS, extensions);
+        }
+        CloudEventData data = event.getData();
+        if (data == null) {
+            return;
+        }
+        if (dataAsBytes) {
+            held.append(SKIPPED_DATA, data.toBytes());
+            held.append(SKIPPED_DATA_CLASS, SkippedInputData.classOf(data));
+            return;
+        }
+        if (data instanceof PojoCloudEventData<?> pojo && pojo.getValue() instanceof Map<?, ?> map) {
+            // A key that isn't a String fails when the document is encoded
+            @SuppressWarnings("unchecked")
+            Document document = new Document((Map<String, Object>) map);
+            held.append(SKIPPED_DATA_DOCUMENT, document);
+            byte[] bytes = data.toBytes();
+            if (!Arrays.equals(bytes, document.toJson().getBytes(StandardCharsets.UTF_8))) {
+                held.append(SKIPPED_DATA, bytes);
+            }
+            return;
+        }
+        held.append(SKIPPED_DATA, data.toBytes());
+    }
+
+    // The attributes alone, since CloudEventBuilder.from copies the extensions too and throws for a class it doesn't know
+    private static CloudEvent attributesOf(CloudEvent event) {
+        CloudEventBuilder attributes = CloudEventBuilder.fromSpecVersion(event.getSpecVersion()).withId(event.getId()).withSource(event.getSource()).withType(event.getType());
+        if (event.getDataContentType() != null) {
+            attributes.withDataContentType(event.getDataContentType());
+        }
+        if (event.getDataSchema() != null) {
+            attributes.withDataSchema(event.getDataSchema());
+        }
+        if (event.getSubject() != null) {
+            attributes.withSubject(event.getSubject());
+        }
+        if (event.getTime() != null) {
+            attributes.withTime(event.getTime());
+        }
+        return attributes.build();
+    }
+
+    // BSON reads a URI, an OffsetDateTime, a Byte, a Short, a Float, a BigInteger and a BigDecimal back as another class,
+    // so they are stored as a string tagged with the class to restore. A String with an unpaired surrogate, which BSON's
+    // UTF-8 can't hold, is stored as its UTF-16 code units. A Number of a class BSON doesn't hold comes as the
+    // SkippedInputNumber a release hands back. A subclass of BigInteger or BigDecimal is stored as the plain BigInteger or
+    // BigDecimal a release hands back, and any other is stored tagged with its class as the Long, BigDecimal or Double a
+    // release hands back, a BigDecimal as its decimal string. Any other value is stored as it is
+    private static Object heldExtension(Object value) {
+        return switch (value) {
+            case String string when !isWellFormed(string) -> taggedExtension(EXTENSION_UTF16, utf16(string));
+            case SkippedInputNumber number when number.releasedAsItsSuperclass() -> heldExtension(number.released());
+            case SkippedInputNumber number -> {
+                Object stored = number.released() instanceof BigDecimal decimal ? decimal.toString() : number.released();
+                yield new Document(EXTENSION_TYPE, EXTENSION_NUMBER).append(EXTENSION_CLASS, number.delivered().getName()).append(EXTENSION_VALUE, stored);
+            }
+            case URI uri -> taggedExtension(EXTENSION_URI, uri.toString());
+            case OffsetDateTime time -> taggedExtension(EXTENSION_TIMESTAMP, time.toString());
+            case Byte number -> taggedExtension(EXTENSION_BYTE, number.toString());
+            case Short number -> taggedExtension(EXTENSION_SHORT, number.toString());
+            // Float.valueOf reads Float.toString back as the same Float, NaN and both infinities included
+            case Float number -> taggedExtension(EXTENSION_FLOAT, number.toString());
+            case BigInteger number -> taggedExtension(EXTENSION_BIG_INTEGER, number.toString());
+            case BigDecimal number -> taggedExtension(EXTENSION_BIG_DECIMAL, number.toString());
+            default -> value;
+        };
+    }
+
+    private static Document taggedExtension(String type, Object value) {
+        return new Document(EXTENSION_TYPE, type).append(EXTENSION_VALUE, value);
+    }
+
+    // The Number classes BSON or a tag holds as that class. Matched by exact class, so a subclass of BigInteger or
+    // BigDecimal, which comes back as its superclass, goes through SkippedInputNumber and its warning
+    private static final Set<Class<?>> HELD_NUMBERS = Set.of(Integer.class, Long.class, Double.class, Decimal128.class,
+            Byte.class, Short.class, Float.class, BigInteger.class, BigDecimal.class);
+
+    private static boolean heldAsItsClass(Number number) {
+        return HELD_NUMBERS.contains(number.getClass());
+    }
+
+    // The extensions of event, each read once, so a value that changes after the read is held, checked and logged as one
+    // value. A byte[] is a copy of the array read, and a Number of a class the store doesn't hold is the
+    // SkippedInputNumber a release hands back for it. Every other class a release reads back is immutable
+    private static Map<String, Object> extensionsOf(CloudEvent event) {
+        Map<String, Object> extensions = new LinkedHashMap<>();
+        for (String name : event.getExtensionNames()) {
+            Object value = Objects.requireNonNull(event.getExtension(name));
+            extensions.put(name, switch (value) {
+                case byte[] bytes -> bytes.clone();
+                case Number number when !heldAsItsClass(number) -> SkippedInputNumber.of(name, number);
+                default -> value;
+            });
+        }
+        return extensions;
+    }
+
+    // The extension a release hands back for an extension of extensionsOf
+    private static Object released(Object extension) {
+        return extension instanceof SkippedInputNumber number ? number.released() : extension;
+    }
+
+    // Whether every surrogate in string is part of a pair, which is what UTF-8 can encode
+    private static boolean isWellFormed(String string) {
+        for (int i = 0; i < string.length(); i++) {
+            char c = string.charAt(i);
+            if (Character.isHighSurrogate(c) && i + 1 < string.length() && Character.isLowSurrogate(string.charAt(i + 1))) {
+                i++;
+            } else if (Character.isSurrogate(c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // The UTF-16 code units of string, big-endian, which hold an unpaired surrogate where a charset decoder would replace it
+    private static byte[] utf16(String string) {
+        ByteBuffer bytes = ByteBuffer.allocate(string.length() * Character.BYTES);
+        bytes.asCharBuffer().put(string);
+        return bytes.array();
+    }
+
+    private static String fromUtf16(byte[] bytes) {
+        return ByteBuffer.wrap(bytes).asCharBuffer().toString();
+    }
+
+    private static void withHeldExtension(CloudEventBuilder event, String name, Object value) {
+        switch (value) {
+            case String string -> event.withExtension(name, string);
+            case Integer number -> event.withExtension(name, number);
+            case Long number -> event.withExtension(name, number);
+            case Double number -> event.withExtension(name, number);
+            case Decimal128 number -> event.withExtension(name, number);
+            case Boolean bool -> event.withExtension(name, bool);
+            case Binary binary -> event.withExtension(name, binary.getData());
+            case byte[] bytes -> event.withExtension(name, bytes);
+            case Document tagged -> {
+                Object stored = tagged.get(EXTENSION_VALUE);
+                switch (tagged.getString(EXTENSION_TYPE)) {
+                    case EXTENSION_URI -> event.withExtension(name, URI.create((String) stored));
+                    case EXTENSION_TIMESTAMP -> event.withExtension(name, OffsetDateTime.parse((String) stored));
+                    case EXTENSION_BYTE -> event.withExtension(name, Byte.valueOf((String) stored));
+                    case EXTENSION_SHORT -> event.withExtension(name, Short.valueOf((String) stored));
+                    case EXTENSION_FLOAT -> event.withExtension(name, Float.valueOf((String) stored));
+                    case EXTENSION_BIG_INTEGER -> event.withExtension(name, new BigInteger((String) stored));
+                    case EXTENSION_BIG_DECIMAL -> event.withExtension(name, new BigDecimal((String) stored));
+                    case EXTENSION_UTF16 -> event.withExtension(name, fromUtf16(stored instanceof Binary binary ? binary.getData() : (byte[]) stored));
+                    case EXTENSION_NUMBER -> event.withExtension(name, stored instanceof String decimal ? new BigDecimal(decimal) : (Number) stored);
+                    default -> throw new IllegalStateException("Extension '" + name + "' of a skipped input has the unknown type '" + tagged.getString(EXTENSION_TYPE) + "'");
+                }
+            }
+            default -> throw new IllegalStateException("Extension '" + name + "' of a skipped input has a value of the unknown type " + value.getClass().getName());
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The record holds the event's attributes as a CloudEvents JSON string, its extensions, and its data. Data delivered
+     * as a map, which is how the MongoDB event store delivers a JSON object, is held as a document, with its bytes beside
+     * it unless they are the document's own JSON. Other data is held as its bytes in BSON binary, and a release hands it
+     * to the converter as a {@link BytesCloudEventData}.
+     * <p>
+     * An extension comes back with its value and its class. A {@code String} with an unpaired surrogate, which BSON's
+     * UTF-8 can't hold, is held as its UTF-16 code units and comes back as the same {@code String}. A {@code Number} of
+     * any class other than {@code Byte}, {@code Short}, {@code Integer}, {@code Long}, {@code Float}, {@code Double},
+     * {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an {@code AtomicLong} or a subclass of
+     * {@code BigDecimal}, comes back as another class. A subclass of {@code BigInteger} or {@code BigDecimal} comes back as
+     * a plain {@code BigInteger} or {@code BigDecimal} with its value, and a {@code BigDecimal} keeps its scale. Any other
+     * comes back with its value as a {@code Long} when the value is an integer that fits in one, and otherwise as a
+     * {@code BigDecimal} with its value and scale. Its value is the decimal its {@code toString} writes, which is how
+     * Jackson writes such a number. When {@code toString} doesn't write a decimal, as for {@code NaN} or an infinity, it
+     * comes back as its {@code doubleValue}, a {@code Double}. The store reads the number once.
+     * {@code InMemorySagaStateStore} hands such a number back as the same class. Once the record is inserted, the store
+     * logs a warning that names the instance, the input, the extension, the delivered class and the class a release
+     * hands back, and never the value.
+     * <p>
+     * Before it writes anything, this encodes the record to BSON the way MongoDB stores it, decodes it, and reads the
+     * event back the way a release reads it. It writes the copy of the record it checked, decoded from the record's BSON,
+     * so a change to the delivered event after the check, such as to its bytes or a map in its data, doesn't reach the
+     * record. It reads each extension once and checks a copy of a {@code byte[]}, so an extension that changes during the
+     * check is recorded as it was first read. When the data doesn't come back as the same values of the same classes, or
+     * doesn't encode at all, the record holds the data's bytes in BSON binary instead, next to the name of the data's
+     * class, and once the record is inserted the store logs a warning that names the instance, the input and the
+     * difference. A release then hands the converter a {@code JsonCloudEventData} read from those bytes when the data
+     * was one, and a {@link BytesCloudEventData} for data of any other class. The bytes are read the way the CloudEvents
+     * JSON format with its default options reads them and not by the format the application registered, so an option
+     * such as {@code withForceJsonDataToBase64()} doesn't turn the data into bytes. When a {@code double} can't hold one
+     * of the decimal numbers, every decimal number in the data is read as a {@code BigDecimal}, so a number comes back
+     * with its value, though {@code 1.10} may come back as {@code 1.1}. A map with a {@code BigDecimal} or a key that
+     * isn't a {@code String} at any depth is held this way, and so is a {@code JsonCloudEventData}.
+     * <p>
+     * Inside a MongoDB transaction of the caller's, the store logs both warnings once the record is written in that
+     * transaction, before the caller commits it. When the caller then rolls back, the warning is for a record that was
+     * never kept, and the store logs one again only when a redelivery records the event. Outside such a transaction, it
+     * logs them once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the
+     * commit still fails after the retries the store's {@code RetryStrategy} allows, the store throws and logs neither
+     * warning. When that commit took effect, a redelivery finds the key recorded and logs none either.
+     * <p>
+     * A record that doesn't fit in one document, or in the write that sends it, is encoded to BSON and split across
+     * chunks of 8 MiB in the collection named after the instances with {@code _skipped_input_chunks} appended. The
+     * chunks are written before the record that points at them, in the same transaction, and a release joins them
+     * again.
+     * <p>
+     * Neither the warning nor the exception below quotes the event. A value in the data is named by its position, such
+     * as {@code entry 2 > element 0}, and its class, and never by a key or its value.
+     * <p>
+     * It throws an {@link IllegalStateException} that names the instance, the input and, when it's known, where in the
+     * event the difference is, when:
+     * <ul>
+     *     <li>an attribute or an extension comes back as another value or as a value of another class than the ones
+     *     above, such as a {@code UUID} that a {@code CloudEventExtension} sets as an extension.</li>
+     *     <li>the data held as its bytes comes back as another class than the one a release hands the converter, or JSON
+     *     data comes back with another value, such as a binary value as text.</li>
+     *     <li>reading an extension throws, or encoding, decoding or reading back the record throws even with the data
+     *     held as its bytes.</li>
+     *     <li>the saga id, the quarantine id and the key leave no room for a chunk of 8 MiB beside them in one
+     *     document.</li>
+     * </ul>
+     * A subscription that retries such an event stops on it.
+     */
     @Override
     public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
         return joiningCallersTransaction(() -> {
             Objects.requireNonNull(saga, "saga cannot be null");
             Objects.requireNonNull(input, "input cannot be null");
-            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
+            // An expected version of 0 inserts the instance whole, which is how an instance whose first input failed is
+            // quarantined. Written as an upsert that only sets on insert, so an instance that exists already is a lost
+            // compare-and-set and not a duplicate key error, which would abort the transaction
+            Function<MongoDatabase, Boolean> writeInstance = expectedVersion == 0
+                    ? database -> instances(database).updateOne(Filters.eq(ID, saga.sagaId()), setOnInsert(toDocument(saga)), new UpdateOptions().upsert(true)).getUpsertedId() != null
+                    : database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), withoutState(saga)).getMatchedCount() > 0;
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, input.key());
-            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
-                    database -> skippedInputs(database).updateOne(filter, Updates.setOnInsert(SKIPPED_SEQ, input.seq()), new UpdateOptions().upsert(true)));
+            HeldRecord held = checkedRecord(saga.sagaId(), filter, input, skippedInputCodecs());
+            // Set on insert, so a record of the key keeps its first seq and event
+            Document record = new Document("$setOnInsert", held.fields());
+            // Set by the attempt that commits, since a transaction run again sets it again
+            boolean[] inserted = {false};
+            boolean saved = transition(writeInstance, database -> {
+                // The chunks before the record that points at them, and only for a key without a record, since a record
+                // keeps its first event. A chunk left by a write that failed after it in a transaction of the caller's
+                // that the caller committed anyway has no record pointing at it, and is overwritten here
+                if (!held.chunks().isEmpty() && skippedInputs(database).find(filter).first() == null) {
+                    for (int index = 0; index < held.chunks().size(); index++) {
+                        skippedInputChunks(database).updateOne(chunkFilter(filter, index), Updates.set(CHUNK_BYTES, held.chunks().get(index)), new UpdateOptions().upsert(true));
+                    }
+                }
+                inserted[0] = skippedInputs(database).updateOne(filter, record, new UpdateOptions().upsert(true)).getUpsertedId() != null;
+                return inserted[0];
+            });
+            // Only for a record this write inserted, so a refused event, a lost compare-and-set and a key recorded before
+            // warn nothing. Inside a transaction of the caller's this runs before the caller commits, so after a rollback
+            // the warning is for a record that was never kept
+            if (saved && inserted[0]) {
+                held.warnings().forEach(Runnable::run);
+            }
+            return saved;
         });
     }
 
-    @Override
-    public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-        return joiningCallersTransaction(() -> {
-            Objects.requireNonNull(saga, "saga cannot be null");
-            Objects.requireNonNull(head, "head cannot be null");
-            Bson update = withoutStateUnlessInsert(saga, expectedVersion);
-            Document filter = skippedInputFilter(saga.sagaId(), quarantineId, head.key());
-            return transition(database -> instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
-                    database -> skippedInputs(database).updateOne(filter, Updates.set(SKIPPED_SEQ, head.seq()), new UpdateOptions().upsert(true)));
-        });
+    // The fields a record's upsert sets on insert, the chunks its fields are split across when they don't fit in one
+    // document, in the order of their index, and the warnings to log once the upsert inserts the record
+    private record HeldRecord(Document fields, List<byte[]> chunks, List<Runnable> warnings) {
+    }
+
+    private static Document chunkFilter(Document keyFilter, int index) {
+        return new Document(keyFilter).append(CHUNK_INDEX, index);
     }
 
     @Override
@@ -652,33 +1247,344 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             Objects.requireNonNull(replayed, "replayed cannot be null");
             Document document = toDocument(saga);
             Document filter = skippedInputFilter(saga.sagaId(), quarantineId, replayed.key()).append(SKIPPED_SEQ, replayed.seq());
-            return transition(database -> instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
-                    database -> skippedInputs(database).deleteOne(filter));
+            // A record already gone was applied by another release, so applying it again here would apply it twice. A
+            // release that deletes it meanwhile writes the instance too, so the replaceOne then conflicts and the
+            // transaction runs again. A replayed input that completes the instance ends its quarantine, so every record
+            // under it is deleted
+            boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
+            return transition(database -> skippedInputs(database).find(filter).first() != null
+                                          && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
+                    database -> completes
+                            ? deleteRecords(database, quarantineFilter(saga.sagaId(), quarantineId))
+                            : deleteRecords(database, filter, skippedInputFilter(saga.sagaId(), quarantineId, replayed.key())));
         });
+    }
+
+    private long deleteRecords(MongoDatabase database, Document filter) {
+        return deleteRecords(database, filter, filter);
+    }
+
+    // The records before the chunks they point at, so no record is left without its chunks. Chunks that no record points
+    // at any more, such as those of a record a transaction of the caller's committed without after a failed write, go
+    // with the records of their key or their quarantine id. Returns how many records it deleted
+    private long deleteRecords(MongoDatabase database, Document recordFilter, Document chunkFilter) {
+        long deleted = skippedInputs(database).deleteMany(recordFilter).getDeletedCount();
+        skippedInputChunks(database).deleteMany(chunkFilter);
+        return deleted;
     }
 
     @Override
     public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
         return joiningCallersTransaction(() -> {
             Objects.requireNonNull(saga, "saga cannot be null");
-            Document document = toDocument(saga);
+            if (expectedVersion == 0) {
+                throw new IllegalArgumentException("compareAndSaveQuarantineEnded cannot insert saga " + saga.sagaId() + ", since it holds no state.");
+            }
+            Bson update = withoutState(saga);
             Document filter = quarantineFilter(saga.sagaId(), quarantineId);
-            // A release ends the quarantine of an instance it does not complete once its read of the records found none. That
-            // read can miss a record right after a failover, so the transaction reads the records again. It reads everything
-            // the primary has, which includes every write a majority acknowledged. A record written after that read changes
-            // the instance too, so the replaceOne then conflicts and the transaction runs again
-            boolean completes = SagaStatus.COMPLETED.name().equals(saga.index().storedStatus());
-            return transition(database -> (completes || skippedInputs(database).find(filter).first() == null)
-                                          && instances(database).replaceOne(versionIs(saga.sagaId(), expectedVersion), document).getMatchedCount() > 0,
-                    database -> skippedInputs(database).deleteMany(filter));
+            // The quarantine ends only with no record left, checked in the transaction against everything the primary
+            // has, whatever the release read before. A record written after that check changes the instance too, so the
+            // update then conflicts and the transaction runs again. The stored state stays where it is
+            return transition(database -> skippedInputs(database).find(filter).first() == null
+                                          && instances(database).updateOne(versionIs(saga.sagaId(), expectedVersion), update).getMatchedCount() > 0,
+                    database -> deleteRecords(database, filter));
         });
     }
 
-    private static Bson withoutStateUnlessInsert(StoredSaga saga, long expectedVersion) {
-        if (expectedVersion == 0) {
-            throw new IllegalArgumentException("A write without state cannot insert saga " + saga.sagaId() + ", since it holds no state. Insert it with compareAndSave.");
+    /**
+     * Whether a release can write {@code candidate}. MongoDB stores a document of at most {@link #MAX_DOCUMENT_SIZE}
+     * bytes of BSON, and the driver sends a write only when its statement, the compare-and-set filter together with the
+     * replacement or the update, takes at most {@link #MAX_STATEMENT_SIZE} bytes. A release replaces the instance whole
+     * or updates every field but the state, so this checks the document and both statements. The filter holds the saga
+     * id, so an instance of exactly 16 MiB fits only when its id takes less than about 16 KiB. The check encodes the
+     * writes the way the driver does and reads nothing from the database.
+     */
+    @Override
+    public boolean fits(StoredSaga candidate) {
+        Objects.requireNonNull(candidate, "candidate cannot be null");
+        return fitsDocument(toDocument(candidate));
+    }
+
+    private boolean fitsDocument(Document candidate) {
+        CodecRegistry codecs = instances(databaseFactory.getMongoDatabase()).getCodecRegistry();
+        RawBsonDocument document = new RawBsonDocument(candidate, codecs.get(Document.class));
+        // The write compares the stored version, a long like the candidate's, so the filter encodes to the same size
+        BsonDocument filter = versionIs(candidate.getString(ID), ((Number) candidate.get(VERSION)).longValue()).toBsonDocument(BsonDocument.class, codecs);
+        BsonDocument update = withoutState(candidate).toBsonDocument(BsonDocument.class, codecs);
+        return document.getByteBuffer().remaining() <= MAX_DOCUMENT_SIZE
+               && encodedSize(statement(filter, document), codecs) <= MAX_STATEMENT_SIZE
+               && encodedSize(statement(filter, update), codecs) <= MAX_STATEMENT_SIZE;
+    }
+
+    // Looked up before the transaction, so a failure to get the database is translated the way a failure inside it is
+    private CodecRegistry skippedInputCodecs() {
+        try {
+            return skippedInputs(databaseFactory.getMongoDatabase()).getCodecRegistry();
+        } catch (RuntimeException e) {
+            throw translated(e);
         }
-        return withoutState(saga);
+    }
+
+    // The record of an input, checked before the transaction by encoding it the way the upsert stores it, decoding it, and
+    // reading it back with toSkippedInput, the method a release reads it with. The record is the document decoded from
+    // that BSON, so the upsert, every retry of it and the chunks write what was checked, and a change to the delivered
+    // bytes, map or extension after this returns changes nothing the store writes. When the data doesn't come back as it was
+    // delivered, or doesn't encode, the record holds the data's bytes and its class instead, and a release rebuilds the
+    // data from them. A record too large for one document is split across chunks. Refused only for an event whose
+    // attributes or extensions don't come back, whose data held as its bytes doesn't come back as the class a release
+    // promises, or whose saga id, quarantine id and key leave no room for a chunk. Each extension is read once, and a
+    // byte[] copied, so a Number or an array that changes during the check is held and checked as one value. The warnings
+    // are left to the caller, to log once the upsert inserts the record.
+    // Checked here, since the driver throws exceptions that name neither the instance nor the input, and a retry would
+    // send the same record again
+    private static HeldRecord checkedRecord(String sagaId, Document filter, SkippedInput input, CodecRegistry codecs) {
+        Map<String, Object> extensions;
+        try {
+            extensions = extensionsOf(input.event());
+        } catch (RuntimeException e) {
+            throw cannotRecord(sagaId, input.key(), "Its extensions can't be read, since reading one throws " + e.getClass().getName() + ".");
+        }
+        List<Runnable> warnings = new ArrayList<>();
+        Document held = new Document(SKIPPED_SEQ, input.seq());
+        String asDelivered;
+        try {
+            addHeldEvent(held, input.event(), extensions, false);
+            held = detached(held, codecs);
+            asDelivered = difference(input.event(), extensions, roundTripped(filter, held, codecs).event(), true);
+        } catch (RuntimeException e) {
+            asDelivered = "Its data can't be written to BSON and read back" + failingValue(held, codecs) + ", since it throws " + e.getClass().getName();
+        }
+        if (asDelivered != null) {
+            Document asBytes = new Document(SKIPPED_SEQ, input.seq());
+            CloudEvent restored;
+            String difference;
+            try {
+                addHeldEvent(asBytes, input.event(), extensions, true);
+                asBytes = detached(asBytes, codecs);
+                restored = roundTripped(filter, asBytes, codecs).event();
+                difference = difference(input.event(), extensions, restored, false);
+            } catch (RuntimeException e) {
+                throw cannotRecord(sagaId, input.key(), "Its record can't be written to BSON and read back" + failingValue(asBytes, codecs) + ", since it throws " + e.getClass().getName() + ".");
+            }
+            if (difference != null) {
+                throw cannotRecord(sagaId, input.key(), difference + ", so a release would hand the converter another event than the one it was delivered.");
+            }
+            String releasedData = described(restored.getData());
+            String reason = asDelivered;
+            // Worded so it holds before a caller's transaction commits, as the number's warning is
+            warnings.add(() -> log.warn("Saga instance '{}' can hold the data of the input '{}' it skips only as its bytes, so a release hands it to the converter as {}. {}.",
+                    sagaId, input.key(), releasedData, reason));
+            held = asBytes;
+        }
+        extensions.values().forEach(extension -> {
+            if (extension instanceof SkippedInputNumber number) {
+                warnings.add(() -> number.warn(log, sagaId, input.key()));
+            }
+        });
+        if (upsertFits(filter, new Document("$setOnInsert", held), held, codecs)) {
+            return new HeldRecord(held, List.of(), warnings);
+        }
+        RawBsonDocument encoded = new RawBsonDocument(held, codecs.get(Document.class));
+        byte[] bytes = new byte[encoded.getByteBuffer().remaining()];
+        encoded.getByteBuffer().asNIO().get(bytes);
+        List<byte[]> chunks = new ArrayList<>();
+        for (int from = 0; from < bytes.length; from += CHUNK_SIZE) {
+            chunks.add(Arrays.copyOfRange(bytes, from, Math.min(bytes.length, from + CHUNK_SIZE)));
+        }
+        Document pointer = new Document(SKIPPED_SEQ, input.seq()).append(SKIPPED_CHUNKS, chunks.size()).append(SKIPPED_SIZE, bytes.length);
+        Document firstChunk = new Document(CHUNK_BYTES, chunks.getFirst());
+        if (!upsertFits(filter, new Document("$setOnInsert", pointer), pointer, codecs)
+            || !upsertFits(chunkFilter(filter, 0), new Document("$set", firstChunk), firstChunk, codecs)) {
+            throw cannotRecord(sagaId, input.key(), "Its record takes " + bytes.length + " bytes of BSON, where MongoDB stores at most " + MAX_DOCUMENT_SIZE
+                    + " in one document, so it is split across chunks of " + CHUNK_SIZE + " bytes. The saga id, the quarantine id and the key take "
+                    + encodedSize(filter.toBsonDocument(BsonDocument.class, codecs), codecs) + " bytes, which the record and every chunk hold beside it, "
+                    + "and leave no room for a chunk in one document or in the write that sends it, where the driver sends at most " + MAX_STATEMENT_SIZE + ".");
+        }
+        return new HeldRecord(pointer, chunks, warnings);
+    }
+
+    // A copy of held decoded from its BSON, so it shares no byte array, map or list with the delivered event
+    private static Document detached(Document held, CodecRegistry codecs) {
+        Codec<Document> codec = codecs.get(Document.class);
+        return new RawBsonDocument(held, codec).decode(codec);
+    }
+
+    // The input a release reads from the record an upsert of held under filter stores, with an ObjectId as the _id
+    private static SkippedInput roundTripped(Document filter, Document held, CodecRegistry codecs) {
+        Codec<Document> codec = codecs.get(Document.class);
+        Document stored = new Document(ID, new ObjectId());
+        stored.putAll(filter);
+        stored.putAll(held);
+        return toSkippedInput(new RawBsonDocument(stored, codec).decode(codec));
+    }
+
+    // Whether MongoDB stores the document an upsert of update under filter inserts, which holds the fields of the filter,
+    // the fields inserted and an ObjectId as the _id, and whether the driver sends the statement of that upsert
+    private static boolean upsertFits(Document filter, Document update, Document inserted, CodecRegistry codecs) {
+        Document stored = new Document(ID, new ObjectId());
+        stored.putAll(filter);
+        stored.putAll(inserted);
+        return new RawBsonDocument(stored, codecs.get(Document.class)).getByteBuffer().remaining() <= MAX_DOCUMENT_SIZE
+               && encodedSize(statement(filter.toBsonDocument(BsonDocument.class, codecs), update.toBsonDocument(BsonDocument.class, codecs)), codecs) <= MAX_STATEMENT_SIZE;
+    }
+
+    // Where in the record BSON fails, as the first extension or data value that fails to encode on its own and its class,
+    // checking the values inside a map or a list before the map or the list. Empty when no value fails on its own
+    private static String failingValue(Document held, CodecRegistry codecs) {
+        if (held.get(SKIPPED_EXTENSIONS) instanceof Document extensions) {
+            for (Map.Entry<String, Object> extension : extensions.entrySet()) {
+                Change failing = failingPath("", extension.getValue(), codecs);
+                if (failing != null) {
+                    return " at its extension '" + extension.getKey() + "'" + failing.how();
+                }
+            }
+        }
+        Change failing = failingPath("", held.get(SKIPPED_DATA_DOCUMENT), codecs);
+        return failing == null ? "" : (failing.path().isEmpty() ? " at its data" : " at '" + failing.path() + "' of its data") + failing.how();
+    }
+
+    private static @Nullable Change failingPath(String path, @Nullable Object value, CodecRegistry codecs) {
+        if (value instanceof Map<?, ?> map) {
+            int position = 0;
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                Change failing = failingPath(SkippedInputData.pathTo(path, "entry", position++), entry.getValue(), codecs);
+                if (failing != null) {
+                    return failing;
+                }
+            }
+        } else if (value instanceof List<?> list) {
+            for (int i = 0; i < list.size(); i++) {
+                Change failing = failingPath(SkippedInputData.pathTo(path, "element", i), list.get(i), codecs);
+                if (failing != null) {
+                    return failing;
+                }
+            }
+        }
+        try {
+            new RawBsonDocument(new Document("value", value), codecs.get(Document.class));
+            return null;
+        } catch (RuntimeException e) {
+            return new Change(path, ", " + described(value));
+        }
+    }
+
+    // How the restored event differs from the delivered one in an attribute, an extension or, withData, its data, at any
+    // depth, or null when every value is equal and of the same class. An extension is checked against the one a release
+    // promises for it in extensions, the delivered event's from extensionsOf, which for a Number of a class the record
+    // can't hold is the SkippedInputNumber's. A map or a list may come back as another
+    // implementation of Map or List. Without withData the data was held as its bytes, and it's checked against the data
+    // SkippedInputData promises a release hands back for them, its class and the value of JSON data
+    private static @Nullable String difference(CloudEvent delivered, Map<String, Object> extensions, CloudEvent restored, boolean withData) {
+        if (delivered.getSpecVersion() != restored.getSpecVersion()) {
+            return "Its spec version " + delivered.getSpecVersion() + " comes back as " + restored.getSpecVersion();
+        }
+        Set<String> attributes = new LinkedHashSet<>(delivered.getAttributeNames());
+        attributes.addAll(restored.getAttributeNames());
+        for (String attribute : attributes) {
+            Change change = change("", delivered.getAttribute(attribute), restored.getAttribute(attribute));
+            if (change != null) {
+                return "Its attribute '" + attribute + "'" + change.how();
+            }
+        }
+        Set<String> extensionNames = new LinkedHashSet<>(extensions.keySet());
+        extensionNames.addAll(restored.getExtensionNames());
+        for (String extension : extensionNames) {
+            Object deliveredExtension = extensions.get(extension);
+            Change change = change("", deliveredExtension == null ? null : released(deliveredExtension), restored.getExtension(extension));
+            if (change != null) {
+                return "Its extension '" + extension + "'" + change.how();
+            }
+        }
+        CloudEventData deliveredData = delivered.getData();
+        CloudEventData restoredData = restored.getData();
+        if (!withData && deliveredData != null && restoredData != null) {
+            // Held as its bytes, so checked against the data a release promises for them
+            return SkippedInputData.difference(deliveredData, restoredData);
+        }
+        if (deliveredData == null || restoredData == null || deliveredData.getClass() != restoredData.getClass()) {
+            Change change = change("", deliveredData, restoredData);
+            return change == null ? null : "Its data" + change.how();
+        }
+        if (deliveredData instanceof PojoCloudEventData<?> deliveredPojo && restoredData instanceof PojoCloudEventData<?> restoredPojo) {
+            Change change = change("", deliveredPojo.getValue(), restoredPojo.getValue());
+            if (change != null) {
+                return (change.path().isEmpty() ? "Its data" : "The value at '" + change.path() + "' of its data") + change.how();
+            }
+        }
+        return Arrays.equals(deliveredData.toBytes(), restoredData.toBytes()) ? null : "Its data comes back as other bytes";
+    }
+
+    // A value at its path inside a map or a list, and how it changed or which class failed. The path and how name
+    // positions, counts and classes, never a key or a value, since the event can hold personal data that an erasure
+    // from the event store doesn't reach in a log
+    private record Change(String path, String how) {
+    }
+
+    private static @Nullable Change change(String path, @Nullable Object delivered, @Nullable Object restored) {
+        if (delivered instanceof Map<?, ?> deliveredMap && restored instanceof Map<?, ?> restoredMap) {
+            Object missing = deliveredMap.keySet().stream().filter(key -> !restoredMap.containsKey(key)).findFirst().orElse(null);
+            if (missing != null || deliveredMap.size() != restoredMap.size()) {
+                return new Change(path, " comes back with " + restoredMap.size() + " keys where it was delivered with " + deliveredMap.size()
+                        + (missing == null ? "" : ", and a key that is " + described(missing) + " doesn't come back"));
+            }
+            int position = 0;
+            for (Map.Entry<?, ?> entry : deliveredMap.entrySet()) {
+                Change change = change(SkippedInputData.pathTo(path, "entry", position++), entry.getValue(), restoredMap.get(entry.getKey()));
+                if (change != null) {
+                    return change;
+                }
+            }
+            return null;
+        }
+        if (delivered instanceof List<?> deliveredList && restored instanceof List<?> restoredList) {
+            if (deliveredList.size() != restoredList.size()) {
+                return new Change(path, " comes back with " + restoredList.size() + " elements where it was delivered with " + deliveredList.size());
+            }
+            for (int i = 0; i < deliveredList.size(); i++) {
+                Change change = change(SkippedInputData.pathTo(path, "element", i), deliveredList.get(i), restoredList.get(i));
+                if (change != null) {
+                    return change;
+                }
+            }
+            return null;
+        }
+        if (delivered == null || restored == null || delivered.getClass() != restored.getClass()) {
+            return delivered == restored ? null : new Change(path, ", " + described(delivered) + ", comes back as " + described(restored));
+        }
+        return Objects.deepEquals(delivered, restored) ? null : new Change(path, ", " + described(delivered) + ", comes back as another value");
+    }
+
+    private static String described(@Nullable Object value) {
+        return value == null ? "null" : "a " + value.getClass().getName();
+    }
+
+    private static IllegalStateException cannotRecord(String sagaId, String key, String reason) {
+        return new IllegalStateException("Saga instance '" + sagaId + "' cannot record the input '" + key + "' it skips. " + reason
+                + " Nothing is written for the input.");
+    }
+
+    // An update or replacement as the driver writes it into the update command, see SplittablePayload
+    private static BsonDocument statement(BsonDocument filter, BsonDocument updateOrReplacement) {
+        return new BsonDocument("q", filter).append("u", updateOrReplacement);
+    }
+
+    private static int encodedSize(BsonDocument document, CodecRegistry codecs) {
+        return new RawBsonDocument(document, codecs.get(BsonDocument.class)).getByteBuffer().remaining();
+    }
+
+    // The largest document MongoDB stores, its maxBsonObjectSize
+    private static final int MAX_DOCUMENT_SIZE = 16 * 1024 * 1024;
+    // The largest statement the driver sends in an update command, maxBsonObjectSize plus its 16 KiB of headroom
+    private static final int MAX_STATEMENT_SIZE = MAX_DOCUMENT_SIZE + 16 * 1024;
+
+    private static Bson setOnInsert(Document document) {
+        List<Bson> updates = new ArrayList<>();
+        document.forEach((field, value) -> {
+            if (!ID.equals(field)) {
+                updates.add(Updates.setOnInsert(field, value));
+            }
+        });
+        return Updates.combine(updates);
     }
 
     private static Document skippedInputFilter(String sagaId, String quarantineId, String key) {
@@ -743,6 +1649,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private MongoCollection<Document> skippedInputs(MongoDatabase database) {
         return database.getCollection(skippedInputsCollectionName);
+    }
+
+    private MongoCollection<Document> skippedInputChunks(MongoDatabase database) {
+        return database.getCollection(skippedInputChunksCollectionName);
     }
 
     // A write outside a transaction at w: majority and j: true, see the class javadoc. Inside a transaction the caller
@@ -839,6 +1749,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         fields.forEach(field -> query.fields().include(field));
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * For an instance with a quarantine id, the store logs a warning that names the instance, the quarantine id and the
+     * number of records it deletes with it. Inside a MongoDB transaction of the caller's, it logs it before the caller
+     * commits, so a rollback can leave a warning for a delete that was never kept. Outside such a transaction, it logs
+     * it once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the commit still
+     * fails after the retries the store's {@code RetryStrategy} allows, the store throws and logs no warning.
+     */
     @Override
     public void delete(String sagaId) {
         joiningCallersTransaction(() -> {
@@ -857,14 +1776,22 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 return null;
             }
             FindOneAndDeleteOptions quarantineIdOnly = new FindOneAndDeleteOptions().projection(Projections.include(FAILURE_QUARANTINE_ID));
+            // Set by the attempt that commits, since a transaction run again overwrites what an attempt that aborted set
+            AtomicReference<String> deletedQuarantineId = new AtomicReference<>();
+            AtomicLong deletedRecords = new AtomicLong();
             inTransaction(database -> {
                 Document removed = instances(database).findOneAndDelete(Filters.eq(ID, sagaId), quarantineIdOnly);
                 String quarantineId = removed == null ? null : removed.getString(FAILURE_QUARANTINE_ID);
-                if (quarantineId != null) {
-                    skippedInputs(database).deleteMany(quarantineFilter(sagaId, quarantineId));
-                }
+                deletedQuarantineId.set(quarantineId);
+                deletedRecords.set(quarantineId == null ? 0 : deleteRecords(database, quarantineFilter(sagaId, quarantineId)));
                 return true;
             });
+            // Inside a transaction of the caller's this logs a delete the caller may still roll back, so the message
+            // holds before the commit
+            if (deletedQuarantineId.get() != null) {
+                log.warn("Deleting saga instance '{}', which is quarantined under '{}', deletes the {} inputs it recorded as skipped with it. "
+                         + "Once that delete commits, no release can replay them.", sagaId, deletedQuarantineId.get(), deletedRecords.get());
+            }
             return null;
         });
     }
@@ -955,6 +1882,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
         private static boolean hasUnknownCommitResult(Throwable cause) {
             return cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL);
+        }
+
+        // A Spring session is causally consistent, so the first command of the transaction asks for a snapshot at or
+        // after the operation time of earlier, which holds every write the reads of earlier saw
+        private static void startAfter(TransactionStatus status, ClientSession earlier) {
+            ClientSession session = Objects.requireNonNull(((MongoTransactionObject) ((DefaultTransactionStatus) status).getTransaction()).getSession(), "the transaction's session");
+            session.advanceClusterTime(earlier.getClusterTime());
+            session.advanceOperationTime(Objects.requireNonNull(earlier.getOperationTime(), "the server sent no operationTime for the read the snapshot starts after"));
         }
 
         @Override

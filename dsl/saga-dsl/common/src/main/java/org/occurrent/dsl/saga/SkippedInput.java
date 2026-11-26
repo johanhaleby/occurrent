@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.saga;
 
+import io.cloudevents.CloudEvent;
+
 import java.util.Comparator;
 
 import static java.util.Objects.requireNonNull;
@@ -23,24 +25,28 @@ import static java.util.Objects.requireNonNull;
 /**
  * One input a quarantined saga instance skipped and recorded, see
  * {@link SagaStateStoreSkippedInputs#compareAndSaveSkipped(org.occurrent.dsl.saga.codec.StoredSaga, long, String, SkippedInput)}.
- * A release replays the records of the instance's current quarantine in {@link #ORDER}.
+ * A record holds the input's event, so a release replays the records of the instance's current quarantine in
+ * {@link #ORDER} without reading the event from anywhere else. The record is the only copy of the event that the saga
+ * keeps, so deleting a quarantined instance deletes it.
  * <p>
  * A key is the input's redelivery key, {@code streamId@streamVersion}, when the event has a stream id and a stream
  * version, the same string {@link SagaFailure#input()} holds. Otherwise it is
  * {@code cloudevent:<length of id>:<id>:<source>@cloudevent}, built from the CloudEvent id and source. The
  * {@code @cloudevent} suffix is never a stream version, so the two kinds cannot be mistaken for each other.
  *
- * @param seq the instance's {@link SagaEnvelope#quarantineSkipCount()} that the skip of the input raised before it
- *            recorded the input, so no two records a skip wrote share it. The input the instance was quarantined
- *            on is recorded at {@code -1} when a release starts, so it comes first
- * @param key the input's key
+ * @param seq   the instance's {@link SagaEnvelope#quarantineSkipCount()} that the skip of the input raised before it
+ *              recorded the input, so no two records a skip wrote share it. The input the instance was quarantined
+ *              on is the first record of its quarantine, since the quarantining write records it
+ * @param key   the input's key
+ * @param event the input's event
  */
-public record SkippedInput(long seq, String key) {
+public record SkippedInput(long seq, String key, CloudEvent event) {
 
     /** The order a release replays records in, by {@code seq} ascending and then by {@code key}. */
     public static final Comparator<SkippedInput> ORDER = Comparator.comparingLong(SkippedInput::seq).thenComparing(SkippedInput::key);
 
     public SkippedInput {
         requireNonNull(key, "key cannot be null");
+        requireNonNull(event, "event cannot be null");
     }
 }

@@ -17,6 +17,10 @@
 package org.occurrent.dsl.saga.mongodb.spring;
 
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import org.bson.Document;
@@ -30,6 +34,9 @@ import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
@@ -47,6 +54,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -324,10 +332,6 @@ class SpringMongoSagaStateStoreReleaseTest {
         return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, next(store, sagaId), versionOf(store, sagaId), quarantineId, input);
     }
 
-    private static boolean startRelease(SpringMongoSagaStateStore<Payment> store, String sagaId, String quarantineId, SkippedInput head) {
-        return SagaEnvelopes.of(store, null).compareAndSaveReleaseStarted(store, next(store, sagaId), versionOf(store, sagaId), quarantineId, head);
-    }
-
     private static boolean replayed(SpringMongoSagaStateStore<Payment> store, String sagaId, String quarantineId, SkippedInput replayed) {
         return SagaEnvelopes.of(store, null).compareAndSaveReplayed(store, next(store, sagaId), versionOf(store, sagaId), quarantineId, replayed);
     }
@@ -336,37 +340,37 @@ class SpringMongoSagaStateStoreReleaseTest {
         return SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, next(store, sagaId), versionOf(store, sagaId), quarantineId);
     }
 
-    private static boolean quarantineEndedByCompletion(SpringMongoSagaStateStore<Payment> store, String sagaId, String quarantineId) {
+    private static boolean replayedByCompletion(SpringMongoSagaStateStore<Payment> store, String sagaId, String quarantineId, SkippedInput replayed) {
         SagaEnvelope<Payment> current = next(store, sagaId);
         SagaEnvelope<Payment> completed = new SagaEnvelope<>(sagaId, current.state(), SagaStatus.COMPLETED, current.version(), List.of(), current.streamWatermarks(), null, current.createdAt(), NOW, NOW, null, true, null, Map.of(), null);
-        return SagaEnvelopes.of(store, null).compareAndSaveQuarantineEnded(store, completed, versionOf(store, sagaId), quarantineId);
+        return SagaEnvelopes.of(store, null).compareAndSaveReplayed(store, completed, versionOf(store, sagaId), quarantineId, replayed);
     }
 
     @Test
     void records_are_read_in_seq_order_whatever_order_they_were_written_in() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-7");
-        skip(store, "order-7", "q-1", new SkippedInput(7, "b@2"));
-        skip(store, "order-7", "q-1", new SkippedInput(-1, "a@1"));
-        skip(store, "order-7", "q-1", new SkippedInput(3, "c@3"));
+        skip(store, "order-7", "q-1", new SkippedInput(7, "b@2", heldEvent("b@2")));
+        skip(store, "order-7", "q-1", new SkippedInput(-1, "a@1", heldEvent("a@1")));
+        skip(store, "order-7", "q-1", new SkippedInput(3, "c@3", heldEvent("c@3")));
 
-        assertThat(store.findSkippedInputs("order-7", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(3, "c@3"), new SkippedInput(7, "b@2"));
+        assertThat(store.findSkippedInputs("order-7", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1", heldEvent("a@1")), new SkippedInput(3, "c@3", heldEvent("c@3")), new SkippedInput(7, "b@2", heldEvent("b@2")));
     }
 
     @Test
     void records_of_the_same_seq_are_read_in_key_order_whatever_order_they_were_written_in_and_in_the_same_order_on_every_read() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-9");
-        skip(store, "order-9", "q-1", new SkippedInput(-1, "b@2"));
-        skip(store, "order-9", "q-1", new SkippedInput(3, "d@4"));
-        skip(store, "order-9", "q-1", new SkippedInput(-1, "a@1"));
-        skip(store, "order-9", "q-1", new SkippedInput(3, "c@3"));
+        skip(store, "order-9", "q-1", new SkippedInput(-1, "b@2", heldEvent("b@2")));
+        skip(store, "order-9", "q-1", new SkippedInput(3, "d@4", heldEvent("d@4")));
+        skip(store, "order-9", "q-1", new SkippedInput(-1, "a@1", heldEvent("a@1")));
+        skip(store, "order-9", "q-1", new SkippedInput(3, "c@3", heldEvent("c@3")));
 
         List<SkippedInput> first = store.findSkippedInputs("order-9", "q-1", 10);
         List<SkippedInput> second = store.findSkippedInputs("order-9", "q-1", 10);
 
         assertAll(
-                () -> assertThat(first).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(-1, "b@2"), new SkippedInput(3, "c@3"), new SkippedInput(3, "d@4")),
+                () -> assertThat(first).containsExactly(new SkippedInput(-1, "a@1", heldEvent("a@1")), new SkippedInput(-1, "b@2", heldEvent("b@2")), new SkippedInput(3, "c@3", heldEvent("c@3")), new SkippedInput(3, "d@4", heldEvent("d@4"))),
                 () -> assertThat(second).isEqualTo(first)
         );
     }
@@ -375,28 +379,114 @@ class SpringMongoSagaStateStoreReleaseTest {
     void a_second_skip_of_a_key_keeps_the_first_record_and_its_seq() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-8");
-        skip(store, "order-8", "q-1", new SkippedInput(2, "a@1"));
+        skip(store, "order-8", "q-1", new SkippedInput(2, "a@1", heldEvent("a@1")));
 
-        boolean skipped = skip(store, "order-8", "q-1", new SkippedInput(5, "a@1"));
+        boolean skipped = skip(store, "order-8", "q-1", new SkippedInput(5, "a@1", heldEvent("a@1")));
 
         assertAll(
                 () -> assertThat(skipped).isTrue(),
-                () -> assertThat(store.findSkippedInputs("order-8", "q-1", 10)).containsExactly(new SkippedInput(2, "a@1"))
+                () -> assertThat(store.findSkippedInputs("order-8", "q-1", 10)).containsExactly(new SkippedInput(2, "a@1", heldEvent("a@1")))
         );
+    }
+
+    @Test
+    void a_skip_at_version_0_inserts_the_instance_with_its_state_and_records_the_input() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        SagaEnvelope<Payment> inserted = releasing("order-inserted");
+
+        boolean skipped = SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, inserted, 0, "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+
+        SagaEnvelope<Payment> found = SagaEnvelopes.of(store, null).find("order-inserted").orElseThrow();
+        assertAll(
+                () -> assertThat(skipped).isTrue(),
+                () -> assertThat(found.version()).isEqualTo(inserted.version()),
+                () -> assertThat(found.state()).isEqualTo(inserted.state()),
+                () -> assertThat(found.status()).isEqualTo(inserted.status()),
+                () -> assertThat(store.findSkippedInputs("order-inserted", "q-1", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")))
+        );
+    }
+
+    @Test
+    void an_instance_whose_first_input_fails_is_inserted_already_quarantined_with_the_record_of_that_input() {
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations);
+        SagaEnvelope<Payment> quarantined = envelope("order-first", SagaStatus.QUARANTINED, 1, failure(null, QUARANTINE_ID), 1L);
+
+        boolean skipped = SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, quarantined, 0, QUARANTINE_ID, new SkippedInput(0, "order-1@7", heldEvent("order-1@7")));
+
+        SagaEnvelope<Payment> found = SagaEnvelopes.of(store, null).find("order-first").orElseThrow();
+        assertAll(
+                () -> assertThat(skipped).isTrue(),
+                () -> assertThat(stored(mongoOperations, "order-first").getString("status")).isEqualTo("QUARANTINED_RECORDING"),
+                () -> assertThat(found.status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(found.quarantineId()).isEqualTo(QUARANTINE_ID),
+                () -> assertThat(store.findSkippedInputs("order-first", QUARANTINE_ID, 10)).containsExactly(new SkippedInput(0, "order-1@7", heldEvent("order-1@7")))
+        );
+    }
+
+    @Test
+    void a_second_quarantining_insert_of_the_same_saga_id_loses_without_an_error_and_leaves_the_first_instance_and_its_record() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        SagaEnvelope<Payment> first = envelope("order-twice", SagaStatus.QUARANTINED, 1, failure(null, "q-first"), 1L);
+        SagaEnvelope<Payment> second = envelope("order-twice", SagaStatus.QUARANTINED, 1, failure(null, "q-second"), 1L);
+        assertThat(SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, first, 0, "q-first", new SkippedInput(0, "first@1", heldEvent("first@1")))).as("control: the first insert wins").isTrue();
+
+        boolean lost = SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, second, 0, "q-second", new SkippedInput(0, "second@1", heldEvent("second@1")));
+
+        assertAll(
+                () -> assertThat(lost).isFalse(),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-twice").orElseThrow().quarantineId()).isEqualTo("q-first"),
+                () -> assertThat(store.findSkippedInputs("order-twice", "q-first", 10)).containsExactly(new SkippedInput(0, "first@1", heldEvent("first@1"))),
+                () -> assertThat(store.findSkippedInputs("order-twice", "q-second", 10)).as("the losing insert records nothing").isEmpty()
+        );
+    }
+
+    @Test
+    void of_two_concurrent_quarantining_inserts_of_the_same_saga_id_exactly_one_wins_and_the_other_returns_false_without_an_error() throws Exception {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 30; round++) {
+                String sagaId = "order-race-insert-" + round;
+                CountDownLatch bothReady = new CountDownLatch(2);
+                CountDownLatch go = new CountDownLatch(1);
+                List<Future<Boolean>> inserts = List.of("q-a", "q-b").stream().map(quarantineId -> executor.submit(() -> {
+                    SagaEnvelope<Payment> quarantined = envelope(sagaId, SagaStatus.QUARANTINED, 1, failure(null, quarantineId), 1L);
+                    bothReady.countDown();
+                    go.await();
+                    return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, quarantined, 0, quarantineId, new SkippedInput(0, quarantineId + "@1", heldEvent(quarantineId + "@1")));
+                })).toList();
+                assertThat(bothReady.await(10, TimeUnit.SECONDS)).isTrue();
+                go.countDown();
+
+                boolean a = inserts.get(0).get(30, TimeUnit.SECONDS);
+                boolean b = inserts.get(1).get(30, TimeUnit.SECONDS);
+
+                String winner = requireNonNull(SagaEnvelopes.of(store, null).find(sagaId).orElseThrow().quarantineId());
+                String loser = winner.equals("q-a") ? "q-b" : "q-a";
+                assertAll(
+                        () -> assertThat(a ^ b).as("exactly one insert wins, a %s b %s", a, b).isTrue(),
+                        () -> assertThat(store.findSkippedInputs(sagaId, winner, 10)).containsExactly(new SkippedInput(0, winner + "@1", heldEvent(winner + "@1"))),
+                        () -> assertThat(store.findSkippedInputs(sagaId, loser, 10)).as("the losing insert records nothing").isEmpty()
+                );
+            }
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
     void records_are_read_for_one_saga_and_quarantine_id_up_to_the_limit() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-9", "order-10");
-        skip(store, "order-9", "q-1", new SkippedInput(0, "a@1"));
-        skip(store, "order-9", "q-1", new SkippedInput(1, "b@2"));
-        skip(store, "order-9", "q-2", new SkippedInput(0, "c@3"));
-        skip(store, "order-10", "q-1", new SkippedInput(0, "d@4"));
+        skip(store, "order-9", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-9", "q-1", new SkippedInput(1, "b@2", heldEvent("b@2")));
+        skip(store, "order-9", "q-2", new SkippedInput(0, "c@3", heldEvent("c@3")));
+        skip(store, "order-10", "q-1", new SkippedInput(0, "d@4", heldEvent("d@4")));
 
         assertAll(
-                () -> assertThat(store.findSkippedInputs("order-9", "q-1", 10)).containsExactly(new SkippedInput(0, "a@1"), new SkippedInput(1, "b@2")),
-                () -> assertThat(store.findSkippedInputs("order-9", "q-1", 1)).containsExactly(new SkippedInput(0, "a@1"))
+                () -> assertThat(store.findSkippedInputs("order-9", "q-1", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")), new SkippedInput(1, "b@2", heldEvent("b@2"))),
+                () -> assertThat(store.findSkippedInputs("order-9", "q-1", 1)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")))
         );
     }
 
@@ -404,45 +494,14 @@ class SpringMongoSagaStateStoreReleaseTest {
     void records_cannot_be_read_with_a_limit_below_1_since_mongo_reads_0_as_no_limit() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
 
-        assertThatThrownBy(() -> store.findSkippedInputs("order-11", "q-1", 0)).isInstanceOf(IllegalArgumentException.class);
+        assertAll(
+                () -> assertThatThrownBy(() -> store.findSkippedInputs("order-11", "q-1", 0)).as("a limit of 0").isInstanceOf(IllegalArgumentException.class),
+                () -> assertThatThrownBy(() -> store.findSkippedInputs("order-11", "q-1", -1)).as("a limit of -1").isInstanceOf(IllegalArgumentException.class)
+        );
     }
 
     @Test
-    void a_record_is_inserted_when_the_key_has_none_and_the_release_starts() {
-        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        instances(store, "order-12");
-        skip(store, "order-12", "q-1", new SkippedInput(0, "b@2"));
-
-        startRelease(store, "order-12", "q-1", new SkippedInput(-1, "a@1"));
-
-        assertThat(store.findSkippedInputs("order-12", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(0, "b@2"));
-    }
-
-    @Test
-    void the_record_of_a_key_moves_to_the_seq_the_release_starts_with_and_stays_one_record() {
-        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        instances(store, "order-moved");
-        skip(store, "order-moved", "q-1", new SkippedInput(4, "a@1"));
-        skip(store, "order-moved", "q-1", new SkippedInput(5, "b@2"));
-
-        startRelease(store, "order-moved", "q-1", new SkippedInput(-1, "a@1"));
-
-        assertThat(store.findSkippedInputs("order-moved", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"), new SkippedInput(5, "b@2"));
-    }
-
-    @Test
-    void a_record_of_a_key_at_a_later_seq_moves_to_the_head_when_the_release_starts() {
-        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
-        instances(store, "order-head-wins");
-        skip(store, "order-head-wins", "q-1", new SkippedInput(7, "a@1"));
-
-        startRelease(store, "order-head-wins", "q-1", new SkippedInput(-1, "a@1"));
-
-        assertThat(store.findSkippedInputs("order-head-wins", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"));
-    }
-
-    @Test
-    void exactly_one_of_a_skip_and_a_release_start_from_the_same_version_wins_and_one_record_of_the_key_is_left() throws Exception {
+    void exactly_one_of_two_skips_of_a_key_from_the_same_version_wins_and_one_record_of_the_key_is_left() throws Exception {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
@@ -452,23 +511,23 @@ class SpringMongoSagaStateStoreReleaseTest {
                 SagaEnvelope<Payment> written = next(store, sagaId);
                 CountDownLatch bothReady = new CountDownLatch(2);
                 CountDownLatch go = new CountDownLatch(1);
-                Future<Boolean> head = executor.submit(() -> {
+                Future<Boolean> early = executor.submit(() -> {
                     bothReady.countDown();
                     go.await();
-                    return SagaEnvelopes.of(store, null).compareAndSaveReleaseStarted(store, written, 1, "q-1", new SkippedInput(-1, "a@1"));
+                    return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, written, 1, "q-1", new SkippedInput(3, "a@1", heldEvent("a@1")));
                 });
-                Future<Boolean> skipped = executor.submit(() -> {
+                Future<Boolean> late = executor.submit(() -> {
                     bothReady.countDown();
                     go.await();
-                    return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, written, 1, "q-1", new SkippedInput(7, "a@1"));
+                    return SagaEnvelopes.of(store, null).compareAndSaveSkipped(store, written, 1, "q-1", new SkippedInput(7, "a@1", heldEvent("a@1")));
                 });
                 assertThat(bothReady.await(10, TimeUnit.SECONDS)).isTrue();
                 go.countDown();
-                boolean headWon = head.get(30, TimeUnit.SECONDS);
-                boolean skipWon = skipped.get(30, TimeUnit.SECONDS);
+                boolean earlyWon = early.get(30, TimeUnit.SECONDS);
+                boolean lateWon = late.get(30, TimeUnit.SECONDS);
 
-                assertThat(headWon ^ skipWon).as("exactly one of them wins the version, head %s skip %s", headWon, skipWon).isTrue();
-                assertThat(store.findSkippedInputs(sagaId, "q-1", 10)).containsExactly(headWon ? new SkippedInput(-1, "a@1") : new SkippedInput(7, "a@1"));
+                assertThat(earlyWon ^ lateWon).as("exactly one of them wins the version, early %s late %s", earlyWon, lateWon).isTrue();
+                assertThat(store.findSkippedInputs(sagaId, "q-1", 10)).containsExactly(earlyWon ? new SkippedInput(3, "a@1", heldEvent("a@1")) : new SkippedInput(7, "a@1", heldEvent("a@1")));
             }
         } finally {
             executor.shutdownNow();
@@ -479,39 +538,39 @@ class SpringMongoSagaStateStoreReleaseTest {
     void a_record_is_deleted_by_a_replay_exactly_when_its_key_and_its_seq_both_match() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-16");
-        skip(store, "order-16", "q-1", new SkippedInput(0, "a@1"));
-        skip(store, "order-16", "q-1", new SkippedInput(1, "b@2"));
+        skip(store, "order-16", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-16", "q-1", new SkippedInput(1, "b@2", heldEvent("b@2")));
 
-        replayed(store, "order-16", "q-1", new SkippedInput(0, "a@1"));
+        replayed(store, "order-16", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
-        assertThat(store.findSkippedInputs("order-16", "q-1", 10)).containsExactly(new SkippedInput(1, "b@2"));
+        assertThat(store.findSkippedInputs("order-16", "q-1", 10)).containsExactly(new SkippedInput(1, "b@2", heldEvent("b@2")));
     }
 
     @Test
     void a_record_of_the_same_key_with_another_seq_is_kept_when_replayed() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-17");
-        skip(store, "order-17", "q-1", new SkippedInput(-1, "a@1"));
+        skip(store, "order-17", "q-1", new SkippedInput(-1, "a@1", heldEvent("a@1")));
 
-        replayed(store, "order-17", "q-1", new SkippedInput(3, "a@1"));
+        replayed(store, "order-17", "q-1", new SkippedInput(3, "a@1", heldEvent("a@1")));
 
-        assertThat(store.findSkippedInputs("order-17", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1"));
+        assertThat(store.findSkippedInputs("order-17", "q-1", 10)).containsExactly(new SkippedInput(-1, "a@1", heldEvent("a@1")));
     }
 
     @Test
     void a_record_of_the_same_key_and_seq_under_another_quarantine_id_or_instance_is_kept_when_replayed() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-18", "order-19");
-        skip(store, "order-18", "q-1", new SkippedInput(0, "a@1"));
-        skip(store, "order-18", "q-2", new SkippedInput(0, "a@1"));
-        skip(store, "order-19", "q-1", new SkippedInput(0, "a@1"));
+        skip(store, "order-18", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-18", "q-2", new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-19", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
-        replayed(store, "order-18", "q-1", new SkippedInput(0, "a@1"));
+        replayed(store, "order-18", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
         assertAll(
                 () -> assertThat(store.findSkippedInputs("order-18", "q-1", 10)).isEmpty(),
-                () -> assertThat(store.findSkippedInputs("order-18", "q-2", 10)).containsExactly(new SkippedInput(0, "a@1")),
-                () -> assertThat(store.findSkippedInputs("order-19", "q-1", 10)).containsExactly(new SkippedInput(0, "a@1"))
+                () -> assertThat(store.findSkippedInputs("order-18", "q-2", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1"))),
+                () -> assertThat(store.findSkippedInputs("order-19", "q-1", 10)).containsExactly(new SkippedInput(0, "a@1", heldEvent("a@1")))
         );
     }
 
@@ -519,35 +578,101 @@ class SpringMongoSagaStateStoreReleaseTest {
     void delete_removes_the_instance_and_its_records_under_its_quarantine_id_only_and_no_other_instance_records() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-13", "order-14");
-        skip(store, "order-13", "q-1", new SkippedInput(0, "a@1"));
-        skip(store, "order-13", "q-2", new SkippedInput(0, "b@1"));
-        skip(store, "order-14", "q-1", new SkippedInput(0, "c@1"));
+        skip(store, "order-13", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-13", "q-2", new SkippedInput(0, "b@1", heldEvent("b@1")));
+        skip(store, "order-14", "q-1", new SkippedInput(0, "c@1", heldEvent("c@1")));
 
         store.delete("order-13");
 
         assertAll(
                 () -> assertThat(SagaEnvelopes.of(store, null).find("order-13")).isEmpty(),
                 () -> assertThat(store.findSkippedInputs("order-13", "q-1", 10)).isEmpty(),
-                () -> assertThat(store.findSkippedInputs("order-13", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1")),
-                () -> assertThat(store.findSkippedInputs("order-14", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1"))
+                () -> assertThat(store.findSkippedInputs("order-13", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1", heldEvent("b@1"))),
+                () -> assertThat(store.findSkippedInputs("order-14", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1", heldEvent("c@1")))
         );
     }
 
     @Test
-    void the_write_that_completes_an_instance_in_quarantine_removes_the_records_of_one_quarantine_id_only() {
+    void deleting_a_quarantined_instance_logs_one_warning_naming_it_the_number_of_records_deleted_and_its_quarantine_id() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        instances(store, "order-warn-1");
+        skip(store, "order-warn-1", QUARANTINE_ID, new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-warn-1", QUARANTINE_ID, new SkippedInput(1, "b@2", heldEvent("b@2")));
+        skip(store, "order-warn-1", "q-other", new SkippedInput(0, "c@3", heldEvent("c@3")));
+
+        List<String> warnings = warningsLoggedBy(() -> store.delete("order-warn-1"));
+
+        assertThat(warnings).singleElement().satisfies(warning -> assertThat(warning)
+                .isEqualTo("Deleting saga instance 'order-warn-1', which is quarantined under '" + QUARANTINE_ID + "', deletes the 2 inputs it recorded as skipped with it. Once that delete commits, no release can replay them."));
+    }
+
+    @Test
+    void the_warning_for_deleting_a_quarantined_instance_is_logged_before_the_callers_transaction_ends_and_the_instance_and_its_records_are_all_kept_after_that_transaction_rolled_back() {
+        MongoTemplate template = (MongoTemplate) mongoOperations();
+        SpringMongoSagaStateStore<Payment> store = store(template);
+        instances(store, "order-warn-3");
+        skip(store, "order-warn-3", QUARANTINE_ID, new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-warn-3", QUARANTINE_ID, new SkippedInput(1, "b@2", heldEvent("b@2")));
+        skip(store, "order-warn-3", "q-other", new SkippedInput(0, "c@3", heldEvent("c@3")));
+        AtomicReference<List<String>> warnings = new AtomicReference<>();
+
+        new TransactionTemplate(new MongoTransactionManager(template.getMongoDatabaseFactory())).executeWithoutResult(status -> {
+            warnings.set(warningsLoggedBy(() -> store.delete("order-warn-3")));
+            status.setRollbackOnly();
+        });
+
+        assertAll(
+                () -> assertThat(warnings.get()).as("the warnings logged before the callers transaction ended").singleElement().satisfies(warning -> assertThat(warning)
+                        .isEqualTo("Deleting saga instance 'order-warn-3', which is quarantined under '" + QUARANTINE_ID + "', deletes the 2 inputs it recorded as skipped with it. Once that delete commits, no release can replay them.")),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-warn-3")).as("the instance after the rollback").isPresent(),
+                () -> assertThat(store.findSkippedInputs("order-warn-3", QUARANTINE_ID, 10)).as("the records of its quarantine after the rollback").hasSize(2),
+                () -> assertThat(store.findSkippedInputs("order-warn-3", "q-other", 10)).as("the records of the other quarantine after the rollback").hasSize(1)
+        );
+    }
+
+    @Test
+    void deleting_an_active_instance_logs_no_warning() {
+        SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
+        assertThat(SagaEnvelopes.of(store, null).compareAndSave("order-warn-2", envelope("order-warn-2", SagaStatus.ACTIVE, 1, null, null), 0)).isTrue();
+
+        List<String> warnings = warningsLoggedBy(() -> store.delete("order-warn-2"));
+
+        assertAll(
+                () -> assertThat(warnings).isEmpty(),
+                () -> assertThat(SagaEnvelopes.of(store, null).find("order-warn-2")).isEmpty()
+        );
+    }
+
+    private static List<String> warningsLoggedBy(Runnable action) {
+        Logger storeLog = (Logger) LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        storeLog.addAppender(appender);
+        try {
+            action.run();
+        } finally {
+            storeLog.detachAppender(appender);
+            appender.stop();
+        }
+        return appender.list.stream().filter(logged -> logged.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    @Test
+    void the_replay_that_completes_an_instance_in_quarantine_removes_the_records_of_one_quarantine_id_only() {
         SpringMongoSagaStateStore<Payment> store = store(mongoOperations());
         instances(store, "order-15", "order-16");
-        skip(store, "order-15", "q-1", new SkippedInput(0, "a@1"));
-        skip(store, "order-15", "q-2", new SkippedInput(0, "b@1"));
-        skip(store, "order-16", "q-1", new SkippedInput(0, "c@1"));
+        skip(store, "order-15", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
+        skip(store, "order-15", "q-1", new SkippedInput(1, "d@2", heldEvent("d@2")));
+        skip(store, "order-15", "q-2", new SkippedInput(0, "b@1", heldEvent("b@1")));
+        skip(store, "order-16", "q-1", new SkippedInput(0, "c@1", heldEvent("c@1")));
 
-        boolean ended = quarantineEndedByCompletion(store, "order-15", "q-1");
+        boolean ended = replayedByCompletion(store, "order-15", "q-1", new SkippedInput(0, "a@1", heldEvent("a@1")));
 
         assertAll(
                 () -> assertThat(ended).isTrue(),
                 () -> assertThat(store.findSkippedInputs("order-15", "q-1", 10)).isEmpty(),
-                () -> assertThat(store.findSkippedInputs("order-15", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1")),
-                () -> assertThat(store.findSkippedInputs("order-16", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1"))
+                () -> assertThat(store.findSkippedInputs("order-15", "q-2", 10)).containsExactly(new SkippedInput(0, "b@1", heldEvent("b@1"))),
+                () -> assertThat(store.findSkippedInputs("order-16", "q-1", 10)).containsExactly(new SkippedInput(0, "c@1", heldEvent("c@1")))
         );
     }
 
@@ -559,5 +684,9 @@ class SpringMongoSagaStateStoreReleaseTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("'" + COLLECTION + "_skipped_inputs'")
                 .hasMessageContaining("a store on '" + COLLECTION + "'");
+    }
+
+    private static io.cloudevents.CloudEvent heldEvent(String key) {
+        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(key).withSource(java.net.URI.create("urn:test")).withType("test").build();
     }
 }

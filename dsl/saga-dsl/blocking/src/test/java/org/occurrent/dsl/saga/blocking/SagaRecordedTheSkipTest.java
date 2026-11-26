@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -43,6 +45,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -100,10 +103,10 @@ class SagaRecordedTheSkipTest {
     private final List<Object> dispatched = new CopyOnWriteArrayList<>();
     private final AtomicInteger eventIds = new AtomicInteger();
     private final InMemorySagaStateStore<Order> inMemory = new InMemorySagaStateStore<>();
-    private final UndecodableStore store = new UndecodableStore();
+    private final UndecodableStore store = new UndecodableStore(false);
     private final SagaEnvelopes<Order> envelopes = SagaEnvelopes.of(inMemory, null);
     private final SagaExecution<OrderEvent, Order, Object> execution =
-            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, event -> true, now::get, eventStore);
+            new SagaExecution<>("orders", saga(), store, dispatched::add, converter, CONFIG, now::get);
 
     private Saga<OrderEvent, Order, Object> saga() {
         return Saga.<OrderEvent, Order, Object>builder(null)
@@ -209,8 +212,43 @@ class SagaRecordedTheSkipTest {
                 () -> assertThat(store.skips.get()).as("control: the write was tried maxCasAttempts times").isEqualTo(CONFIG.maxCasAttempts()),
                 () -> assertThat(thrown).as("the delivery fails, so the subscription does not move past the input").isNotNull(),
                 () -> assertThat(thePropagatedFailureIsTheLoadFailure(thrown)).as(String.valueOf(thrown)).isTrue(),
-                () -> assertThat(inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).as("nothing is recorded").isEmpty()
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).as("only the input the instance was quarantined on is recorded").extracting(SkippedInput::seq).containsExactly(0L)
         );
+    }
+
+    @Test
+    void on_a_store_that_cannot_record_skips_refuses_the_input_with_the_refusal_suppressed_on_the_load_failure_and_changes_nothing() {
+        quarantinedWithAnUndecodableState();
+        UndecodableStore standalone = new UndecodableStore(true);
+        standalone.undecodable = true;
+        SagaExecution<OrderEvent, Order, Object> onStandalone = new SagaExecution<>("orders", saga(), standalone, dispatched::add, converter, CONFIG, now::get);
+        StoredSaga before = inMemory.findWithoutState(ORDER).orElseThrow();
+        List<SkippedInput> recordedBefore = inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE);
+        CloudEvent live = append(new ItemAdded(nextEventId(), ORDER, "live"));
+
+        Throwable thrown = catchThrowable(() -> onStandalone.onCloudEvent(live));
+
+        StoredSaga after = inMemory.findWithoutState(ORDER).orElseThrow();
+        Throwable loadFailure = loadFailureIn(thrown);
+        assertAll(
+                () -> assertThat(thrown).as("the delivery is refused, so the subscription does not move past the input").isNotNull(),
+                () -> assertThat(loadFailure).as("the load failure propagates. " + thrown).isNotNull(),
+                () -> assertThat(Objects.requireNonNull(loadFailure).getSuppressed()).as("the refusal to record the skip is suppressed on it")
+                        .anySatisfy(suppressed -> assertThat(suppressed).isInstanceOf(IllegalStateException.class).hasMessageContaining("cannot skip the input")),
+                () -> assertThat(inMemory.findSkippedInputs(ORDER, instance().quarantineId(), Integer.MAX_VALUE)).as("nothing is recorded").isEqualTo(recordedBefore),
+                () -> assertThat(after.version()).as("the instance is unchanged").isEqualTo(before.version()),
+                () -> assertThat(standalone.skips.get()).as("no skip was written").isZero(),
+                () -> assertThat(dispatched).as("the input is not applied").doesNotContain(new Pack(ORDER, "live"))
+        );
+    }
+
+    private static @Nullable Throwable loadFailureIn(@Nullable Throwable thrown) {
+        for (Throwable t = thrown; t != null; t = t.getCause()) {
+            if (DECODE_FAILURE.equals(t.getMessage())) {
+                return t;
+            }
+        }
+        return null;
     }
 
     private final class UndecodableStore implements SagaStateStore<Order>, SagaStateStoreSkippedInputs {
@@ -218,9 +256,33 @@ class SagaRecordedTheSkipTest {
         volatile boolean losesEverySkip;
         final AtomicInteger skips = new AtomicInteger();
         private final AtomicReference<@Nullable Runnable> beforeTheNextSkip = new AtomicReference<>();
+        // As a standalone MongoDB reports itself, which holds the data of a replica set restored onto it
+        private final boolean standalone;
+
+        UndecodableStore(boolean standalone) {
+            this.standalone = standalone;
+        }
 
         void beforeTheNextSkip(Runnable action) {
             beforeTheNextSkip.set(action);
+        }
+
+        @Override
+        public boolean fits(StoredSaga candidate) {
+            return inMemory.fits(candidate);
+        }
+
+        @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return inMemory.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
+        public void requireAtomicTransitions() {
+            if (standalone) {
+                throw new IllegalStateException("a standalone server cannot write a skip and its record atomically");
+            }
+            inMemory.requireAtomicTransitions();
         }
 
         @Override
@@ -280,8 +342,13 @@ class SagaRecordedTheSkipTest {
         }
 
         @Override
-        public boolean compareAndSaveReleaseStarted(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput head) {
-            return inMemory.compareAndSaveReleaseStarted(saga, expectedVersion, quarantineId, head);
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return inMemory.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return inMemory.findWithFirstSkippedInputKey(sagaId);
         }
 
         @Override

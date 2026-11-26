@@ -32,6 +32,8 @@ import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionMode;
@@ -47,6 +49,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 /**
  * {@code occurrent.subscription.mode=manual} against a {@code @Saga(source = PUSH)}. A push feed is a bean the
@@ -172,6 +178,26 @@ class SagaAnnotationPushManualStartTest {
                 });
     }
 
+    @Test
+    void a_withheld_push_saga_whose_store_cannot_guarantee_atomic_transitions_is_refused_at_context_startup() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class,
+                        OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withBean(ManualStartPushSources.class, ManualStartPushSources::new)
+                .withUserConfiguration(ManualPushSagaOnRefusingStoreConfiguration.class)
+                .run(context -> assertThat(context).getFailure().hasStackTraceContaining(NO_ATOMIC_TRANSITIONS));
+    }
+
+    @Test
+    void a_withheld_push_saga_whose_store_cannot_guarantee_atomic_transitions_starts_when_quarantine_is_off() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class,
+                        OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withBean(ManualStartPushSources.class, ManualStartPushSources::new)
+                .withUserConfiguration(ManualPushSagaWithoutQuarantineOnRefusingStoreConfiguration.class)
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
     // --- Fixtures ---
 
     sealed interface OrderEvent {
@@ -252,6 +278,36 @@ class SagaAnnotationPushManualStartTest {
         @Bean
         ManualPushSaga manualPushSaga() {
             return new ManualPushSaga();
+        }
+    }
+
+    static final String NO_ATOMIC_TRANSITIONS = "the store cannot write an instance and its inputs in one transaction";
+
+    // A store that records skipped inputs but refuses to guarantee that the instance and its records change together
+    @Configuration(proxyBeanMethods = false)
+    static class ManualPushSagaOnRefusingStoreConfiguration extends ManualPushSagaConfiguration {
+        @SuppressWarnings("unchecked")
+        @Override
+        @Bean
+        SagaStateStore<OrderState> sagaStateStore() {
+            SagaStateStore<OrderState> store = mock(SagaStateStore.class,
+                    withSettings().extraInterfaces(SagaStateStoreSkippedInputs.class));
+            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
+            doThrow(new IllegalStateException(NO_ATOMIC_TRANSITIONS))
+                    .when((SagaStateStoreSkippedInputs) store).requireAtomicTransitions();
+            return store;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class ManualPushSagaWithoutQuarantineOnRefusingStoreConfiguration
+            extends ManualPushSagaOnRefusingStoreConfiguration {
+        @Override
+        @Bean
+        OccurrentProperties occurrentProperties() {
+            OccurrentProperties properties = super.occurrentProperties();
+            properties.getSaga().setQuarantineEnabled(false);
+            return properties;
         }
     }
 

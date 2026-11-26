@@ -50,10 +50,14 @@ is tried again after every instance that was already due, so a failing timer no 
 from firing.
 
 [ADR 178](0178-a-quarantined-saga-instance-records-what-it-skips-and-is-released-by-replaying-it.md) replaces how
-Decision point 7 releases an instance, for [#1259](https://github.com/johanhaleby/occurrent/issues/1259). A quarantined
-instance records the inputs it skips, and a release replays them from the event store instead of restarting the
-subscription. It also turns quarantine on by default again for every `SagaRunner`, and corrects three sentences here,
-two of them ones that [#1088](https://github.com/johanhaleby/occurrent/issues/1088) found.
+Decision point 7 releases an instance, for [#1259](https://github.com/johanhaleby/occurrent/issues/1259). As amended
+for [#918](https://github.com/johanhaleby/occurrent/issues/918) and
+[#952](https://github.com/johanhaleby/occurrent/issues/952), a quarantined instance records the inputs it skips
+together with their events, and a release replays those held events instead of restarting the subscription. That reverses
+the "no holding area" of Decision point 1 for a quarantined instance, and every saga quarantines, a push saga included.
+`HistoryRetainingSubscriptions`, the retention capability that Decision point 7 asks for, is removed in 0.35.0 with
+nothing in its place. ADR 178 also turns quarantine on by default again for every `SagaRunner`, and corrects three
+sentences here, two of them ones that [#1088](https://github.com/johanhaleby/occurrent/issues/1088) found.
 
 ## Context
 

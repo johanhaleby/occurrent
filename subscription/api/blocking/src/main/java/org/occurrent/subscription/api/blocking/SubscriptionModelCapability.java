@@ -21,7 +21,7 @@ import java.util.Optional;
 /**
  * Marker supertype for every blocking subscription model capability. {@link Subscribable}, {@link CancellableSubscriptions},
  * {@link Pushable}, {@link RepositionableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link IntrospectableSubscriptions},
- * {@link HistoryRetainingSubscriptions}, {@link HistoryLossReportingSubscriptions}, {@link StartRefusalReportingSubscriptions}, {@link CommitOrderedSubscriptions}, {@link RedeliveringSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
+ * {@link HistoryLossReportingSubscriptions}, {@link StartRefusalReportingSubscriptions}, {@link CommitOrderedSubscriptions}, {@link RedeliveringSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
  * declaring it directly.
  * <p>
  * It exists so a method that accepts "whatever partial or complete subscription model a caller happens to hold" has a
@@ -35,7 +35,6 @@ import java.util.Optional;
  * @see RepositionableSubscriptions#findIn(SubscriptionModelCapability)
  * @see ReplayAwareSubscriptions#findIn(SubscriptionModelCapability)
  * @see IntrospectableSubscriptions#findIn(SubscriptionModelCapability)
- * @see HistoryRetainingSubscriptions#findIn(SubscriptionModelCapability)
  * @see HistoryLossReportingSubscriptions#findIn(SubscriptionModelCapability)
  * @see StartRefusalReportingSubscriptions#findIn(SubscriptionModelCapability)
  * @see CommitOrderedSubscriptions#findIn(SubscriptionModelCapability)
@@ -49,7 +48,7 @@ public interface SubscriptionModelCapability {
      * call site.
      * <p>
      * This object answers when it implements {@code type}. Past that, a {@link SubscriptionModelWrapper} is unwrapped
-     * only for {@link IntrospectableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link HistoryRetainingSubscriptions},
+     * only for {@link IntrospectableSubscriptions}, {@link ReplayAwareSubscriptions},
      * {@link QuietPositionReportingSubscriptions}, {@link StartRefusalReportingSubscriptions} and {@link Pushable}, which
      * observe subscriptions or take events in at the bottom of the stack, and for {@link HistoryLossReportingSubscriptions},
      * which a catch-up model reaches under a durable model. Every other capability acts on a subscription, such as {@link Subscribable},
@@ -90,7 +89,7 @@ public interface SubscriptionModelCapability {
     // thread pool, a listener that parks deliveries) and so declares it only by implementing it
     private static boolean isUnwrappedFor(Class<?> type) {
         return type == IntrospectableSubscriptions.class || type == ReplayAwareSubscriptions.class
-                || type == HistoryRetainingSubscriptions.class || type == QuietPositionReportingSubscriptions.class
+                || type == QuietPositionReportingSubscriptions.class
                 || type == StartRefusalReportingSubscriptions.class || type == Pushable.class || type == HistoryLossReportingSubscriptions.class;
     }
 }
