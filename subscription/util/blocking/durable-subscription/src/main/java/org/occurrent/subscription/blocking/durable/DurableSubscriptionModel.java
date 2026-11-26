@@ -127,10 +127,14 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * example because a cancel on another node deleted the checkpoint after the read, nothing is written and the
  * subscription starts from the checkpoint read without a version, as in 0.34.0. A storage that answers empty, as one
  * without the method does, gets no version stored either. An evaluation reads the checkpoint without the lock a cancel
- * takes. Once a cancel or a later {@code subscribe(..)} of the id has stopped the checkpoint writes of its subscribe,
- * settling the first position of that subscribe stores nothing and the subscribe is refused with
+ * or a resume takes. Once a cancel or a later {@code subscribe(..)} of the id has stopped the checkpoint writes of its
+ * subscribe, settling the first position of that subscribe stores nothing and the subscribe is refused with
  * {@link IllegalStateException}. An evaluation after the first position settled stores nothing then, and starts from
- * the checkpoint it read, as in 0.34.0.
+ * the checkpoint it read, as in 0.34.0. Once a resume of a paused subscription that goes to a checkpoint, the put-back
+ * after a failed resume, or a restart after a lost history came after the read, settling and an evaluation with a
+ * version store nothing and are refused with {@link IllegalStateException}, so neither starts from a checkpoint read
+ * before the position that stored. A wrapped model that evaluates the start position again then starts from the
+ * checkpoint stored.
  * <p>
  * Without a version, or for a storage whose three-argument {@code resolveFirstCheckpointRace} answers empty, the first
  * position is written with
@@ -1009,11 +1013,25 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
     }
 
+    // Started from only once this node's version is stored with it, so a node that has lost its lease can't store a
+    // later checkpoint over it. storeWriteVersion leaves the checkpoint stored as it is, so an empty answer means
+    // nothing is stored any more or a storage that stores no version, which the read after it tells apart. Null when
+    // nothing is stored any more
+    private @Nullable Checkpoint withThisNodesWriteVersionStored(String subscriptionId, Checkpoint stored) {
+        OptionalLong writeVersion = writeVersionOfStoredCheckpoint(subscriptionId);
+        if (writeVersion.isEmpty()) {
+            return stored;
+        }
+        return storage.storeWriteVersion(subscriptionId, writeVersion.getAsLong()).orElseGet(() -> storage.read(subscriptionId));
+    }
+
     // Settling runs this while the subscribe is under way, so once a cancel or a later subscribe of the id stopped the
-    // writes of this subscribe, the subscribe fails
-    private Checkpoint withThisNodesWriteVersionStoredUnlessCancelled(String subscriptionId, Checkpoint stored,
-                                                                      CheckpointRegistration registration) {
-        return withThisNodesWriteVersionStored(subscriptionId, stored, registration,
+    // writes of this subscribe, or a resume, a put-back or a restart after a lost history came after the read, the
+    // subscribe fails
+    private Checkpoint withThisNodesWriteVersionStoredUnlessCancelledOrRepositioned(String subscriptionId, Checkpoint stored,
+                                                                                    CheckpointRegistration registration,
+                                                                                    long repositionsWhenRead) {
+        return withThisNodesWriteVersionStoredThrough(registration, subscriptionId, stored, repositionsWhenRead,
                 () -> new IllegalStateException("The checkpoint writes of this subscribe of " + subscriptionId + " were stopped, " +
                                                 "by a cancel or a later subscribe of the id, before this evaluation stored this " +
                                                 "node's write version with the checkpoint it read, so it gets none."));
@@ -1021,32 +1039,39 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // An evaluation of the start position after settling, a restart of the wrapped subscription for one, starts from the
     // checkpoint read without a write once the writes of this subscribe were stopped, as in 0.34.0. A refused later
-    // subscribe stops them and leaves the subscription running, so a refusal here would stop its delivery
-    private Checkpoint withThisNodesWriteVersionStoredUnlessStopped(String subscriptionId, Checkpoint stored,
-                                                                    CheckpointRegistration registration) {
+    // subscribe stops them and leaves the subscription running, so a refusal there would stop its delivery. A resume, a
+    // put-back or a restart after a lost history that came after the read still refuses it
+    private Checkpoint withThisNodesWriteVersionStoredUnlessStoppedOrRepositioned(String subscriptionId, Checkpoint stored,
+                                                                                  CheckpointRegistration registration,
+                                                                                  long repositionsWhenRead) {
         try {
-            return withThisNodesWriteVersionStored(subscriptionId, stored, registration, CheckpointWritesStopped::new);
+            return withThisNodesWriteVersionStoredThrough(registration, subscriptionId, stored, repositionsWhenRead, CheckpointWritesStopped::new);
         } catch (CheckpointWritesStopped e) {
             return stored;
         }
     }
 
-    // The version is stored through the registration, so nothing is written once its writes were stopped, and
-    // through storeWriteVersion, which leaves the checkpoint stored as it is and writes nothing when none is. So a
-    // checkpoint a cancel on another node deleted isn't stored again, and a later position another node stored isn't
-    // replaced with the one read. Without a version, or when nothing is stored any more, the checkpoint read is started
-    // from without a write, as in 0.34.0
-    private Checkpoint withThisNodesWriteVersionStored(String subscriptionId, Checkpoint stored, CheckpointRegistration registration,
-                                                       Supplier<IllegalStateException> stoppedRefusal) {
+    // The version is stored through the registration, so nothing is written once its writes were stopped or a resume, a
+    // put-back or a restart after a lost history came after the read, and through storeWriteVersion, which leaves the
+    // checkpoint stored as it is and writes nothing when none is. So a checkpoint a cancel on another node deleted isn't
+    // stored again, and a later position another node stored isn't replaced with the one read. Without a version, or
+    // when nothing is stored any more, the checkpoint read is started from without a write, as in 0.34.0
+    private Checkpoint withThisNodesWriteVersionStoredThrough(CheckpointRegistration registration, String subscriptionId, Checkpoint stored,
+                                                              long repositionsWhenRead, Supplier<IllegalStateException> stoppedRefusal) {
         OptionalLong writeVersion = writeVersionOfStoredCheckpoint(subscriptionId);
         if (writeVersion.isEmpty()) {
             return stored;
         }
-        return registration.writeUnlessCancelled(() -> storage.storeWriteVersion(subscriptionId, writeVersion.getAsLong()).orElse(stored),
-                stoppedRefusal);
+        return registration.writeUnlessCancelledOrRepositioned(repositionsWhenRead,
+                () -> storage.storeWriteVersion(subscriptionId, writeVersion.getAsLong()).orElse(stored),
+                stoppedRefusal,
+                () -> new IllegalStateException("Subscription " + subscriptionId + " was resumed, or restarted after its " +
+                                                "history was lost, after this evaluation read the checkpoint " + stored.asString() +
+                                                ", so this node's write version was not stored with it over the position that " +
+                                                "stored. Evaluating the start position again starts from the checkpoint stored then."));
     }
 
-    // Thrown and caught inside withThisNodesWriteVersionStoredUnlessStopped only, so it needs no message or stack trace
+    // Thrown and caught inside withThisNodesWriteVersionStoredUnlessStoppedOrRepositioned only, so it needs no message or stack trace
     private static final class CheckpointWritesStopped extends IllegalStateException {
         CheckpointWritesStopped() {
             super(null, null);
@@ -1134,8 +1159,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // a put-back or a restart after a lost history came after. An evaluation that records a first position outside the
     // settled outcome writes it through the registration, so it is refused once the registration has stopped writing,
     // and once a resume, a put-back or a restart after a lost history stored a position after the evaluation read. One
-    // that stores this node's version with the checkpoint it read writes through the registration too, and once the
-    // registration has stopped writing starts from the checkpoint read without storing the version
+    // that stores this node's version with the checkpoint it read writes through the registration too. It is refused
+    // once a resume, a put-back or a restart after a lost history came after the read, and once the registration has
+    // stopped writing it starts from the checkpoint read without storing the version
     private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt, CheckpointRegistration registration,
                                                 Consumer<FirstPosition> firstPositionToRecord) {
         final StartAt startAtToUse;
@@ -1149,13 +1175,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     return StartAt.checkpoint(recorded);
                 }
                 // Taken before the read. A resume, a put-back or a restart after a lost history moves the count once its
-                // write has returned or thrown, so one whose write the read below may miss refuses the first position
-                // recorded below
+                // write has returned or thrown, so one whose write the read below may miss refuses the version stored
+                // with the checkpoint read and the first position recorded below
                 long repositionsWhenRead = registration.repositions();
                 // Read inside the supplier so a retry picks up the latest checkpoint, not a stale one
                 Checkpoint checkpoint = storage.read(subscriptionId);
                 if (checkpoint != null) {
-                    checkpoint = withThisNodesWriteVersionStoredUnlessStopped(subscriptionId, checkpoint, registration);
+                    checkpoint = withThisNodesWriteVersionStoredUnlessStoppedOrRepositioned(subscriptionId, checkpoint, registration,
+                            repositionsWhenRead);
                 }
                 if (checkpoint == null && !config.startWhenFirstPositionCanBeOverwritten && !storage.evaluatesWriteConditionsFor(subscriptionId)) {
                     // Settling refused this subscribe unless a checkpoint was stored then, so it was, and something such
@@ -1168,7 +1195,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (checkpoint == null) {
                     Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
                     if (globalCheckpoint != null) {
-                        checkpoint = registration.saveFirstPositionUnlessCancelledOrRepositioned(repositionsWhenRead,
+                        checkpoint = registration.writeUnlessCancelledOrRepositioned(repositionsWhenRead,
                                 () -> saveFirstPositionOrAdoptWhatWon(subscriptionId, globalCheckpoint),
                                 () -> new IllegalStateException("The checkpoint writes of this subscribe of " + subscriptionId + " were stopped, " +
                                                                 "by a cancel or a later subscribe of the id, before this evaluation recorded a " +
@@ -1881,8 +1908,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             if (outcome != null) {
                 return outcome;
             }
-            // Taken before the read, as an evaluation takes it, so the registration ignores what was read once a
-            // resume came after the read
+            // Taken before the read, as an evaluation takes it, so the registration ignores what was read, and
+            // refuses storing this node's version with it, once a resume came after the read
             long repositionsWhenRead = registration.repositions();
             Checkpoint read = storage.read(subscriptionId);
             Checkpoint position = read == null ? subscriptionModel.globalCheckpoint() : null;
@@ -1919,7 +1946,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             if (read != null) {
                 // Before the outcome settles, so the refusal for a newer version stored is the outcome, and subscribe
                 // throws it whichever party wrote
-                stored = withThisNodesWriteVersionStoredUnlessCancelled(subscriptionId, read, registration);
+                stored = withThisNodesWriteVersionStoredUnlessCancelledOrRepositioned(subscriptionId, read, registration,
+                        repositionsWhenRead);
             }
             Settled outcome = new Settled(position == null ? null : saveFirstPosition(subscriptionId, position), stored, null);
             Checkpoint storedNow = outcome.recorded == null ? stored : outcome.recorded;

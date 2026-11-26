@@ -491,8 +491,10 @@ model's own `start()`, has its saves dropped too. A restart before a later event
 again the events whose saves were dropped, and none is skipped. After such a resume, when the wrapped model goes on from its own position, no quiet
 position is saved over a checkpoint another node stored during the pause until the resumed subscription stores the
 checkpoint of an event. An evaluation of the start position that found no checkpoint stored before such a resume, or
-a restart after a lost history, stored a position records no first position over it. It throws `IllegalStateException`, and evaluating again
-starts from the stored checkpoint.
+a restart after a lost history, stored a position records no first position over it. One that read a stored checkpoint
+before then doesn't store this node's version with that checkpoint, since on the MongoDB storages that write could
+replace a later operation time the resume stored with the earlier one read. Both throw `IllegalStateException`, and
+evaluating again starts from the stored checkpoint.
 
 A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
 durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live

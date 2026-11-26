@@ -439,32 +439,20 @@ final class CheckpointRegistration {
         }
     }
 
-    // What the write returned, or the refusal without writing once this registration writes nothing more
-    <T extends @Nullable Object> T writeUnlessCancelled(Supplier<T> write, Supplier<IllegalStateException> refusal) {
-        saveLock.lock();
-        try {
-            if (cancelled) {
-                throw refusal.get();
-            }
-            return write.get();
-        } finally {
-            saveLock.unlock();
-        }
-    }
-
     // Taken by an evaluation of the start position before it reads what is stored, as a read of the wrapped model takes
-    // it, so the first position it records is refused once a resume, a put-back or a restart came after that read
+    // it, so what it writes from that read is refused once a resume, a put-back or a restart came after the read
     long repositions() {
         return repositions;
     }
 
-    // What the save returned. Refused without saving once this registration writes nothing more, or once a resume, a
-    // put-back or a restart after a lost history came after the evaluation read that nothing was stored. Each of those
-    // stores where the subscription reads from next, and a first position resolved against it could replace it with
-    // an earlier one. Both writes of a first position run inside save, so no write of those comes between them
-    Checkpoint saveFirstPositionUnlessCancelledOrRepositioned(long repositionsWhenRead, Supplier<Checkpoint> save,
-                                                              Supplier<IllegalStateException> cancelledRefusal,
-                                                              Supplier<IllegalStateException> repositionedRefusal) {
+    // What the write returned. Refused without writing once this registration writes nothing more, or once a resume, a
+    // put-back or a restart after a lost history came after the evaluation read what it writes from. Each of those
+    // stores where the subscription reads from next, and a first position, or the checkpoint read stored again with
+    // this node's version, could replace it with an earlier position. Every storage call of the write runs inside
+    // write, so no write of those comes between them
+    <T extends @Nullable Object> T writeUnlessCancelledOrRepositioned(long repositionsWhenRead, Supplier<T> write,
+                                                                    Supplier<IllegalStateException> cancelledRefusal,
+                                                                    Supplier<IllegalStateException> repositionedRefusal) {
         saveLock.lock();
         try {
             if (cancelled) {
@@ -473,7 +461,7 @@ final class CheckpointRegistration {
             if (repositionedSince(repositionsWhenRead)) {
                 throw repositionedRefusal.get();
             }
-            return save.get();
+            return write.get();
         } finally {
             saveLock.unlock();
         }
