@@ -100,9 +100,12 @@ An instance holds one failure record, so a different input that fails replaces i
 event to `legacyFailed`, a list of stream versions kept per stream. It holds versions without an event type, because a
 record written before pending does not say which type failed, and a stream version identifies exactly one event. A
 version in that list is new however far behind it is, like a pending one. Applying it removes it from the list, and if
-it fails again with its type known it moves to pending. A record written since pending existed is already pending when
-it is replaced, so the list only ever holds the record an instance already had when it was upgraded. Nothing is dropped
-from it either.
+it fails again with its type known it moves to pending. A record written since pending existed is usually pending
+already when it is replaced. The exception is a failure record the store couldn't take in full, which the saga writes
+without its message and lists as pending only when the version is at or below the stream's `floor`, or when a later
+failure of the same event can write the listing. The saga moves a replaced event to the list only when pending doesn't
+list it. So the list holds the record an instance already had when it was upgraded, if any, and one version for every
+such smaller record replaced since while pending didn't list its version. Nothing is dropped from it either.
 
 **The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
 `mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from

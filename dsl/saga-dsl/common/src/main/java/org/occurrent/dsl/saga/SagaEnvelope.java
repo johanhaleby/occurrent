@@ -112,11 +112,15 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *                outstanding. A version in here is applied when it arrives again however far behind the highest
      *                one applied it is, because it is known not to have been applied. Applying it removes it, and
      *                nothing else does
-     * @param legacyFailed the versions of the stream whose failure was recorded before the executor listed failed versions
-     *                as pending, ascending, so the event type is not known. A stream version names exactly one event, so
-     *                the version is enough to recognise it. It is treated like a pending version and removed when the
-     *                version is applied. It is filled only when such a failure record is replaced by another input's, so
-     *                it holds at most the one record an instance carried over from before
+     * @param legacyFailed the versions of the stream whose failure record didn't list them as pending, ascending, kept
+     *                without their event type. That is a failure recorded before the executor listed failed versions as
+     *                pending, and a failure record written without its message because the store couldn't take the
+     *                full one, which lists the version as pending only when it is at or below {@code floor}. A stream
+     *                version names exactly one event, so the version is enough to recognise it. It is treated like a
+     *                pending version and removed when the version is applied. A version is added when its failure record
+     *                is replaced by another input's while the marks don't list the version as pending, so it holds the
+     *                record an instance kept from before 0.35.0, if any, and one version for every such smaller record
+     *                replaced since without its version listed as pending
      * @param pendingSince when each version in {@code pending} or {@code legacyFailed} first failed, by version. The quarantine budget of an input
      *                runs from here, so a failure of one input never moves the clock of another. A pending version
      *                missing from it falls back to the failure record's {@code firstFailedAt} when the record names it,

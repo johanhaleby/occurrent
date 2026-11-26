@@ -127,8 +127,9 @@ public final class SagaSubscription implements AutoCloseable {
      * long backlog can grow the instance past what its store can write. The release asks the store before every write
      * whether it can take it, see {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs#fits}, and for the write
      * that applies an input it asks before it dispatches the input's commands. When the store can't take the instance
-     * with the input applied, or with its failure recorded, the release applies and dispatches nothing for that input.
-     * The instance is quarantined again on that input with its marks trimmed, the release returns
+     * with the input applied, or with its failure recorded, the release doesn't apply that input. An attempt the store
+     * refuses that way dispatches none of the input's commands, but an earlier attempt can have dispatched them already
+     * with a write that then lost to another writer, and the ERROR says how many. The instance is quarantined again on that input with its marks trimmed, the release returns
      * {@link ReleaseResult#QUARANTINED_AGAIN}, and an ERROR names the instance and says which of two cases it is. When
      * the store can write the input applied to the trimmed instance, the ERROR says to release the instance again, and a
      * further release goes on from that input. Otherwise a further release stops on that input too, and the ERROR says
@@ -140,8 +141,7 @@ public final class SagaSubscription implements AutoCloseable {
      * it deletes them. The timer poller tries the instance again on every poll and logs that ERROR again. The same holds
      * when the store can't take the write that releases the instance, or the one that deletes the record of an input the
      * instance applied already. When the store can't take the write that starts the release, the release starts with
-     * the marks trimmed to the reorder window instead, since a live write asks the store nothing and can leave more marks
-     * than a release may write. When the store can't take that either, this throws an {@link IllegalStateException} that
+     * the marks trimmed to the reorder window instead. When the store can't take that either, this throws an {@link IllegalStateException} that
      * names the instance and the way out, and logs it as an ERROR.
      * {@code SpringMongoSagaStateStore} refuses an instance that takes more than 16 MiB of BSON, and a write that takes
      * more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store whose {@code fits}

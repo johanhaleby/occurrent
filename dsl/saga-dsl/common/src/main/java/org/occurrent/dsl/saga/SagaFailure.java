@@ -73,7 +73,8 @@ import static java.util.Objects.requireNonNull;
  *                       it may have been failing for longer, because several ways of failing record nothing, a write
  *                       that loses its compare-and-set on every attempt among them
  * @param failureType    the class name of the exception the saga or its dispatcher threw
- * @param failureMessage that exception's message, or {@code null} when it had none
+ * @param failureMessage that exception's message, or {@code null} when it had none or when the store couldn't take the
+ *                       record with it, in which case only this message is missing
  * @param releasedAt     when a release of the quarantined instance started, or {@code null} when none is running. An
  *                       instance that is {@link SagaStatus#QUARANTINED} with this set is releasing. It replays
  *                       {@code input} and then every input it recorded while quarantined, and turns

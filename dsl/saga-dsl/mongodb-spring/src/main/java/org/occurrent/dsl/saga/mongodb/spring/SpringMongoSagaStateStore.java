@@ -44,6 +44,7 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
+import org.bson.BsonMaximumSizeExceededException;
 import org.bson.Document;
 import org.bson.RawBsonDocument;
 import org.bson.codecs.Codec;
@@ -170,8 +171,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * {@link IllegalStateException} when the server refuses a transaction. A transaction that fails with the
  * {@code TransientTransactionError} label is run again from the start with the store's {@link RetryStrategy}, and a
  * commit that fails with the {@code UnknownTransactionCommitResult} label is committed again. Any other failure of such a
- * transaction is thrown at once, and so is a server's refusal of a transaction or of journaling on any call, whatever
- * the strategy retries, a {@code RetryStrategy} you implement yourself included.
+ * transaction is thrown at once, and so are a server's refusal of a transaction or of journaling on any call and a
+ * write MongoDB refuses as larger than 16 MiB, whatever the strategy retries, a {@code RetryStrategy} you implement
+ * yourself included.
  * <p>
  * The constructor asks the server for its deployment once, with {@code hello}, and the store keeps that answer. So a
  * standalone server converted to a replica set while the application runs is still a standalone server to the store,
@@ -259,6 +261,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // CommandOperationHelper.transformWriteException
     private static final int TRANSACTIONS_NOT_SUPPORTED_ERROR_CODE = 20;
     private static final String TRANSACTIONS_NOT_SUPPORTED_ERROR_MESSAGE = "Transaction numbers";
+    // The server's refusal of a replacement or an update whose resulting document would be over 16 MiB, BSONObjectTooLarge
+    // from MongoDB 8.3 on and the unnamed 17419 before it
+    private static final int BSON_OBJECT_TOO_LARGE_ERROR_CODE = 10334;
+    private static final int UPDATE_RESULT_TOO_LARGE_ERROR_CODE = 17419;
     private static final String QUARANTINE_NEEDS_TRANSACTIONS = "SpringMongoSagaStateStore needs a MongoDB replica set or sharded cluster for quarantine, since it writes a quarantined saga instance and the inputs it skips in one transaction. ";
     private static final String WAYS_TO_RUN_THE_SAGA = "Run MongoDB as a replica set, which can have a single member, or as a sharded cluster, or turn quarantine off for the saga with occurrent.saga.quarantine-enabled=false on Spring Boot "
                                                        + "or SagaRunnerConfig.disableQuarantine() on a SagaRunner.";
@@ -362,8 +368,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     /**
      * Creates a store for a core saga, whose state serializes with the application's {@code MongoConverter}.
      * A failing call to MongoDB is retried with exponential backoff from 100 ms up to 2 seconds, giving up after
-     * {@value #DEFAULT_MAX_ATTEMPTS} attempts. A call inside a MongoDB transaction isn't retried, as the class javadoc
-     * says.
+     * {@value #DEFAULT_MAX_ATTEMPTS} attempts. A call inside a MongoDB transaction isn't retried, and neither is a write
+     * MongoDB refuses as too large, as the class javadoc says.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
      * @param collectionName  the collection the instances are stored in, which must end in neither {@code _skipped_inputs} nor {@code _skipped_input_chunks}
@@ -574,9 +580,19 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (inMongoTransaction()) {
             return operation.get();
         }
-        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once. So does
-        // an operation that failed inside a MongoDB transaction, which the server has aborted
-        return retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && !inMongoTransaction(), operation);
+        // A server that refuses the durability the store needs refuses it on every attempt, so it fails at once. So does a
+        // write MongoDB refuses as too large, which is as large on every attempt, and an operation that failed inside a
+        // MongoDB transaction, which the server has aborted
+        return retryingOnly(retryStrategy, failure -> !(failure instanceof RefusedByServer) && !hasCause(failure, SpringMongoSagaStateStore::isTooLarge)
+                                                      && !inMongoTransaction(), operation);
+    }
+
+    // The driver refuses to send a document or a statement over its limit, and the server refuses an update whose
+    // result would be over it
+    private static boolean isTooLarge(Throwable cause) {
+        return cause instanceof BsonMaximumSizeExceededException
+               || cause instanceof MongoServerException serverException
+                  && (serverException.getCode() == BSON_OBJECT_TOO_LARGE_ERROR_CODE || serverException.getCode() == UPDATE_RESULT_TOO_LARGE_ERROR_CODE);
     }
 
     // A transaction is bound to the factory, the caller's, the store's own or one a template with
@@ -1292,10 +1308,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     /**
-     * Whether a release can write {@code candidate}. MongoDB stores a document of at most {@link #MAX_DOCUMENT_SIZE}
-     * bytes of BSON, and the driver sends a write only when its statement, the compare-and-set filter together with the
-     * replacement or the update, takes at most {@link #MAX_STATEMENT_SIZE} bytes. A release replaces the instance whole
-     * or updates every field but the state, so this checks the document and both statements. The filter holds the saga
+     * Whether the saga can write {@code candidate}, which a live input asks before it dispatches its commands and a
+     * release asks before every write of the whole instance. MongoDB stores a document of at most
+     * {@link #MAX_DOCUMENT_SIZE} bytes of BSON, and the driver sends a write only when its statement, the compare-and-set
+     * filter together with the replacement or the update, takes at most {@link #MAX_STATEMENT_SIZE} bytes. The saga
+     * replaces the instance whole or updates every field but the state, so this checks the document and both statements. The filter holds the saga
      * id, so an instance of exactly 16 MiB fits only when its id takes less than about 16 KiB. The check encodes the
      * writes the way the driver does and reads nothing from the database.
      */

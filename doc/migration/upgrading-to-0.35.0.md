@@ -80,6 +80,9 @@ other sections compile fine and behave differently, so read them first.
   0.34.0 runbook's, no longer finds it. `SpringMongoSagaStateStore` refuses a collection name that ends in
   `_skipped_inputs` or `_skipped_input_chunks`, creates two collections next to its own, and reads instances from the
   primary, with quarantine on or off. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
+- [A saga input whose instance the store cannot write fails before it dispatches](#a-saga-input-whose-instance-the-store-cannot-write-fails-before-it-dispatches).
+  Such an input dispatches nothing on that attempt and fails with an `IllegalStateException` instead of the store's
+  own exception. Compiles unchanged.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
   timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
   over `TimerEntry`.
@@ -804,7 +807,10 @@ A saga instance document gains a `streamMarks` field. It holds, per stream, a `f
 each type has its highest applied `mark`, the `applied` versions below it and a `horizon`, the highest version it has
 stopped remembering, and a `pending` list of event types with the `versions` of each that failed. A document without
 `pending` reads as nothing pending. A `legacyFailed` list of stream versions, kept per stream beside `floor`, holds the
-failures described above, and a document without it reads as an empty list. `pending` is a list rather than a map because
+failures described above, and a document without it reads as an empty list. It also holds the version of a 0.35.0
+failure record that the store couldn't take in full, once another input's failure replaces it while `pending`
+doesn't list its version. The saga writes such a record without its message and lists its version as pending only
+when it is at or below `floor`, or when a later failure of the same event could write the listing. `pending` is a list rather than a map because
 stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
 type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
 A release of a quarantined instance also keeps every version it applies, and the write that ends the release, which
@@ -1200,12 +1206,18 @@ one listed and from the first id again once a poll lists fewer than `limit`. It 
 which `SagaRunner.run` calls when quarantine is on, before the saga gets its first input. It throws an
 `IllegalStateException` when the store can't make those writes atomic in the database it's connected to, and does
 nothing otherwise. It implements `fits(candidate)`, which a release calls before every write it makes that writes the
-whole instance, and for the write that applies a record before it dispatches the record's commands. It returns `false`
+whole instance, and for the write that applies a record before it dispatches the record's commands. A live input calls it too, for
+the write that applies the input, on every compare-and-set attempt before that attempt dispatches the input's commands.
+When it returns `false` there, that attempt dispatches nothing and the input fails like any other failing input, see
+[a saga input whose instance the store cannot write fails before it dispatches](#a-saga-input-whose-instance-the-store-cannot-write-fails-before-it-dispatches). An
+earlier attempt can have dispatched its commands already and then lost its compare-and-set. A live input that fails also calls
+it before a failure record that inserts the instance. It returns `false`
 when the store can't write `candidate`, such as an instance whose write would go over a size limit of the store's, and
-`true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a release
-dispatch the commands of a record whose write then fails, on every attempt. It implements
+`true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a live input or
+a release dispatch the commands of an input whose write then fails, on every attempt. It implements
 `fitsWithoutState(saga, expectedVersion)`, which a release calls before every write that leaves the stored state where
-it is, the one that ends the quarantine included. It returns what `fits` returns for the instance as stored with the
+it is, the one that ends the quarantine included. A live input that fails calls it before its failure record, the
+write that lists it as pending and the write that quarantines the instance, unless that write inserts the instance. It returns what `fits` returns for the instance as stored with the
 fields `compareAndSaveWithoutState` sets taken from `saga`, and `true` when no instance is stored under the id or it is
 stored at another version than `expectedVersion`. It may read the database for that, and it doesn't decode the stored
 state, since a release calls it after a read of the instance failed to decode, and a throw there would leave the
@@ -1441,6 +1453,53 @@ db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})
 db.getCollection("saga-order-fulfilment_skipped_input_chunks").deleteMany({})
 ```
 
+## A saga input whose instance the store cannot write fails before it dispatches
+
+Up to 0.34.0 a saga dispatched an input's commands and then saved the instance. When the save failed, such as for an
+instance of more than 16 MiB on `SpringMongoSagaStateStore`, the commands had gone out for an input the instance never
+stored, and every redelivery dispatched them again. The report is
+[#1583](https://github.com/johanhaleby/occurrent/issues/1583).
+
+### Who is affected
+
+- Code that catches the exception a saga state store throws when it can't write an instance, such as the driver's
+  `BsonMaximumSizeExceededException` from `SpringMongoSagaStateStore`, in a `RetryStrategy`, an error handler or a
+  source that decides whether to offer the event again.
+- A `SagaStateStore` of your own that implements `SagaStateStoreSkippedInputs`, since the runner now asks its `fits`
+  for every live input, not only in a release.
+- A `SagaCodec` of your own that can throw on encode.
+
+### What changes
+
+- On every compare-and-set attempt of a live input, the runner asks the store's `fits` whether it can write the
+  instance with the input applied, before that attempt dispatches. When the answer is `false`, the attempt dispatches
+  nothing and the input fails with an `IllegalStateException` that names the instance and has no cause, with
+  quarantine on or off. The store is never asked to make the write, so it doesn't throw its own exception.
+- The message says how many commands the earlier attempts of this delivery of the event, or this poll of the timer,
+  dispatched before they lost their compare-and-set to another writer. An earlier delivery or poll can have dispatched
+  them too.
+- An event that fails this way fails like any other failing event, so with quarantine on the instance is quarantined
+  once the event's budget runs out. A timeout never quarantines the instance. Its timer stays due and later polls try
+  it again.
+- When the store can't take the failure record either, the runner writes it without its message, and when it can't
+  take that, it writes nothing and logs an `ERROR` that names the event, at most once per quarantine budget for that
+  event, see
+  [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md).
+- The runner encodes the instance before it dispatches, on every store, so a codec that throws on encode fails the
+  input before any command goes out.
+- A store that doesn't implement `SagaStateStoreSkippedInputs` isn't asked, and the runner dispatches before the
+  store's save fails, as 0.34.0 did.
+
+### What to do
+
+- Where code catches the store's exception for an instance it can't write, catch the `IllegalStateException` too.
+  When `fits` answers `false`, that's the exception the input fails with.
+- In a store of your own with a size limit, answer `false` from `fits` for an instance whose write would go over it,
+  as [the stored saga state for a release](#stored-saga-state-for-a-release) describes. A store that answers `true`
+  anyway keeps the 0.34.0 behaviour for that input.
+- For an instance that keeps failing this way, follow the section on writes that don't fit in
+  [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md).
+
 ## A saga timer that keeps failing waits behind the timers already due
 
 Up to 0.34.0 the timer poll took at most `timerBatchLimit` due instances in any order, and a timer whose reaction threw
@@ -1662,7 +1721,10 @@ its writes.
 `compareAndSave` and `compareAndSaveWithoutState` stay a single-document write each, and wait until a majority of the
 replica set has the write in its on-disk journal. When a majority doesn't acknowledge it within 10 seconds, the write
 throws, and outside a transaction of yours the store's `RetryStrategy` tries it again. On a client with a `timeoutMS` above 0, where the driver sends
-no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that timed out can still be on the primary. Reads
+no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that the driver refuses with a
+`BsonMaximumSizeExceededException`, or that the server refuses as a document of more than 16 MiB, throws on its first
+attempt, whatever the strategy retries, since it's as large on every attempt. 0.34.0 sent it again, up to 9 more times
+by default. A write that timed out can still be on the primary. Reads
 at read concern `majority` don't return it until a majority has it, so the saga doesn't act on it before then.
 
 `find` and `findWithoutState` read an instance they don't find at `majority` again at read concern `linearizable`,

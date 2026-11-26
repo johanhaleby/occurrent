@@ -26,6 +26,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey.RecordKey;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
@@ -56,12 +57,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
- * {@link SagaExecutionSupport} step, dispatches commands before saving (at-least-once), and retries a lost compare-and-set
- * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
+ * {@link SagaExecutionSupport} step, asks the store whether it can take the instance the step produces, dispatches
+ * commands before saving (at-least-once), and retries a lost compare-and-set save. Timeouts re-enter the same path,
+ * fenced so a timer no longer present on the (reloaded) envelope is skipped.
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
  * offers the event again. Where a quarantine budget is in force, its first failing event can write down when the
@@ -104,6 +107,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
     static final Duration UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE = Duration.ofMinutes(5);
     static final int UNROUTABLE_FORGOTTEN_AFTER_INTERVALS = 2;
+    // The two ERRORs paced per event by unwritableErrorDue, the failure record and the pending listing
+    private static final String UNWRITABLE_FAILURE = "failure";
+    private static final String UNWRITABLE_PENDING = "pending";
 
     private final String subscriptionId;
     private final Saga<E, S, C> saga;
@@ -131,6 +137,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // that parks every event it cannot deliver gives a broken converter one entry per event, and scanning all of them
     // on every refusal costs the square of that.
     private final AtomicReference<@Nullable Instant> unroutableSweptAt = new AtomicReference<>();
+    // When the ERROR that the store cannot write the failure of an input, or its pending listing, was last logged, keyed
+    // by which of the two, the saga id and the event's redelivery key, as the unroutable deliveries are keyed by theirs.
+    // The ERROR names one event and the key to handle it by, so another event of the instance failing the same way
+    // within the interval gets its own. The state behind it does not change on a redelivery, so a source offering the
+    // event every few milliseconds is told once per interval rather than at that cadence. An entry a whole interval old
+    // is due again anyway, so dropping it changes nothing, and the map is swept of those at most once per interval.
+    private final ConcurrentHashMap<List<String>, Instant> unwritableErrorLoggedAt = new ConcurrentHashMap<>();
+    private final AtomicReference<@Nullable Instant> unwritableErrorSweptAt = new AtomicReference<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
     // The streams already warned about, so a stream replaying thousands of old events says it once. Capped, because a
@@ -263,7 +277,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * <p>
      * An input that is pending already costs one read and no write, so a source that offers a failing event again every
      * few milliseconds reads the instance each time, as the quarantine path does. A lost compare-and-set is read again and retried up to {@link SagaRunnerConfig#maxCasAttempts()} times. A write
-     * that cannot be made leaves the version unrecorded, and the log says so at ERROR with the key to replay from. Such a
+     * that cannot be made leaves the version unrecorded, and the log says so at ERROR with the key to replay from. When
+     * the store cannot write the instance with the version listed, which a redelivery of the event doesn't change, that ERROR is logged at
+     * most once per {@link #unroutableErrorInterval()} for the event. Such a
      * version is applied on a replay only while the instance has not moved the reorder window ahead of it.
      */
     private void recordPending(String sagaId, EventMeta meta, Throwable failure) {
@@ -271,6 +287,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
                 SagaEnvelope<S> current = envelopes.findWithoutState(sagaId).orElse(null);
                 FailureRecord<S> record = SagaExecutionSupport.pendingRecord(saga, sagaId, current, meta, clock.get(), config.reorderWindow());
+                if (record != null && !fits(record)) {
+                    if (unwritableErrorDue(UNWRITABLE_PENDING, sagaId, meta)) {
+                        log.error("Saga '{}' instance '{}' failed on the event '{}' and could not list it as pending, because its state store {} cannot write the instance with it listed. "
+                                        + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window. This is logged at most once per {} for the event.",
+                                subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), config.reorderWindow(), unroutableErrorInterval());
+                    }
+                    return;
+                }
                 if (record == null || envelopes.compareAndSaveWithoutState(sagaId, record.envelope(), record.expectedVersion())) {
                     return;
                 }
@@ -294,6 +318,25 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private static String unroutableKey(EventMeta meta, CloudEvent cloudEvent) {
         String redeliveryKey = meta.redeliveryKey();
         return redeliveryKey != null ? redeliveryKey : cloudEvent.getId() + " from " + cloudEvent.getSource();
+    }
+
+    // The input process(..) runs, named the way the logs name it. A timeout has no CloudEvent
+    private static String inputName(EventMeta meta, @Nullable CloudEvent cloudEvent, @Nullable String timerName) {
+        return cloudEvent == null ? "the timer '" + timerName + "'" : "the event '" + unroutableKey(meta, cloudEvent) + "'";
+    }
+
+    // What an attempt the store refused says about the dispatch. The store is asked once per attempt, so an earlier
+    // attempt that dispatched its commands lost its compare-and-set before the store refused this attempt. The count
+    // covers this delivery of the event, or this poll of the timer, since an earlier one can have dispatched them too.
+    // It names only the attempts that dispatched a command, since one that lost recording a skip dispatched none
+    private static String dispatchedBefore(int attemptsThatDispatched, int commandsDispatched, boolean timer) {
+        String round = timer ? "this poll" : "this delivery";
+        if (commandsDispatched == 0) {
+            return "No attempt of " + round + " dispatched any of its commands.";
+        }
+        return "This attempt dispatched none of its commands, but " + commandsDispatched + (commandsDispatched == 1 ? " command was" : " commands were")
+               + " dispatched by " + (attemptsThatDispatched == 1 ? "an earlier attempt of " + round + ", which lost its" : attemptsThatDispatched + " earlier attempts of " + round + ", which lost their")
+               + " write to another writer.";
     }
 
     /**
@@ -370,6 +413,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * the configured budget when there is one keeps one number for an operator to reason about, and
      * {@link #UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE} otherwise gives every other saga the same five-minute
      * cadence rather than inventing a second tunable for it.
+     * <p>
+     * The ERROR that the store cannot write the failure record of an instance, or list its input as pending, repeats at
+     * the same interval for each event, for the same reason, see {@link #unwritableErrorDue}.
      */
     Duration unroutableErrorInterval() {
         return config.quarantineAfter().orElse(UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE);
@@ -382,6 +428,24 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     int rememberedUnroutableDeliveries() {
         return unroutableDeliveries.size();
+    }
+
+    // Whether the ERROR of the kind given for the event of meta on sagaId is due, which it is at most once per
+    // unroutableErrorInterval() for each event, atomically per event so two concurrent deliveries of it log it once.
+    // Only an event carrying a redelivery key gets this far
+    private boolean unwritableErrorDue(String kind, String sagaId, EventMeta meta) {
+        Instant now = clock.get();
+        Duration interval = unroutableErrorInterval();
+        Instant sweptAt = unwritableErrorSweptAt.get();
+        if ((sweptAt == null || Duration.between(sweptAt, now).compareTo(interval) >= 0) && unwritableErrorSweptAt.compareAndSet(sweptAt, now)) {
+            unwritableErrorLoggedAt.values().removeIf(loggedAt -> Duration.between(loggedAt, now).compareTo(interval) >= 0);
+        }
+        boolean[] due = new boolean[1];
+        unwritableErrorLoggedAt.compute(List.of(kind, sagaId, Objects.requireNonNull(meta.redeliveryKey(), "redeliveryKey")), (key, loggedAt) -> {
+            due[0] = loggedAt == null || Duration.between(loggedAt, now).compareTo(interval) >= 0;
+            return due[0] ? now : loggedAt;
+        });
+        return due[0];
     }
 
     /**
@@ -417,6 +481,27 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter, config.reorderWindow());
                 if (record == null) {
                     return false;
+                }
+                // An instance close to what its store writes, such as one whose event failed because the store cannot
+                // write it with the event applied, gets the bare record, which keeps the event's clock
+                if (!fits(record)) {
+                    FailureRecord<S> bare = SagaExecutionSupport.onFailureBare(current, meta, record);
+                    if (bare == null) {
+                        // The stored failure record names this event already and keeps its clock, and the store can't
+                        // take the pending entry the full record adds, so nothing is written or logged
+                        return false;
+                    }
+                    if (!fits(bare)) {
+                        if (unwritableErrorDue(UNWRITABLE_FAILURE, sagaId, meta)) {
+                            log.error("Saga '{}' instance '{}' failed on the event '{}' and could not record the failure, because its state store {} cannot write the instance with the failure recorded, even with no failure message. "
+                                      + "The exception goes back to whatever feeds this subscription, and the instance isn't quarantined on the event while its store can't take that write, so a subscription that delivers the event again before any later one holds up every later event of the saga. "
+                                      + "If the source skips the event and the instance moves {} versions of its type past it, a replay of it is skipped as behind the reorder window. "
+                                      + "Delete the instance with SagaStateStore.delete(\"{}\"), which throws its state away, or handle the event by hand. This is logged at most once per {} for the event.",
+                                    subscriptionId, sagaId, meta.redeliveryKey(), stateStore.getClass().getName(), config.reorderWindow(), sagaId, unroutableErrorInterval(), failure);
+                        }
+                        return false;
+                    }
+                    record = bare;
                 }
                 // Written without the state for the same reason it was read without it. The envelope carries whatever
                 // the read gave, so saving it whole would erase the state somebody needs once the converter is repaired.
@@ -488,6 +573,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             throw error;
         }
         throw (RuntimeException) recoveryFailure;
+    }
+
+    // Whether the store can take the failure write record, or true when the store cannot say, and then a write it
+    // cannot take throws. An insert writes the whole instance
+    private boolean fits(FailureRecord<S> record) {
+        SagaStateStoreSkippedInputs records = skippedInputs;
+        if (records == null) {
+            return true;
+        }
+        return record.expectedVersion() == 0 ? envelopes.fits(records, record.envelope())
+                : envelopes.fitsWithoutState(records, record.envelope(), record.expectedVersion());
     }
 
     // How long the event has actually been failing, taken from the record rather than from the budget, because a
@@ -646,7 +742,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             requireTheStoppedOnInput(current, read.first());
             if (!envelopes.fitsWithoutState(records, releasing, current.version())) {
-                // A live write asks the store nothing, so the instance can hold more marks than the store takes from a release
+                // The instance as stored can leave too little room for the write that starts the release
                 releasing = Objects.requireNonNull(SagaExecutionSupport.startReleaseTrimmed(current, now, config.reorderWindow()));
                 if (!envelopes.fitsWithoutState(records, releasing, current.version())) {
                     IllegalStateException refused = SagaExecutionSupport.cannotRelease(current, "its state store " + records.getClass().getName()
@@ -777,8 +873,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * <p>
      * The store is asked before every write whether it can take it, see {@link SagaStateStoreSkippedInputs#fits}, and
      * for the instance with a record applied that is before the record's commands are dispatched. When it cannot take
-     * that write, or the failure record of a record that failed, the record is not applied and its commands are not
-     * dispatched. The instance is quarantined again on it with its marks trimmed, see
+     * that write, the record is not applied and that attempt dispatches none of its commands. An earlier attempt can
+     * have dispatched them already with a write that then lost to another writer, and the ERROR says how many. When it cannot take the
+     * failure record of a record that failed, the record is not applied either. The instance is quarantined again on it with its marks trimmed, see
      * {@link SagaExecutionSupport#onReleaseTooLarge}, or with
      * {@link SagaExecutionSupport#onReleaseTooLargeBare} when the store cannot take that either, and this returns
      * {@code QUARANTINED_AGAIN}. The ERROR says whether a further release gets past the record, which it does when the
@@ -804,6 +901,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         int lostInARow = 0;
         int replayed = 0;
         boolean firstRead = true;
+        ReleaseDispatches dispatches = new ReleaseDispatches();
         while (true) {
             SagaEnvelopes.WithFirstSkippedInput<S> read;
             try {
@@ -812,7 +910,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 throw refused;
             } catch (Throwable readFailure) {
                 rethrowIfNotTheInstances(readFailure);
-                SagaSubscription.ReleaseResult afterReadFailure = recordReadFailure(records, sagaId, readFailure);
+                SagaSubscription.ReleaseResult afterReadFailure = recordReadFailure(records, sagaId, readFailure, dispatches);
                 if (afterReadFailure != null) {
                     return afterReadFailure;
                 }
@@ -864,6 +962,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     if (envelopes.fits(records, applied)) {
                         dispatcher.dispatchAll(outcome.commands());
                         saved = saveReplayed(records, sagaId, quarantineId, record, current, outcome);
+                        if (!saved) {
+                            dispatches.lost(RecordKey.of(record), outcome.commands().size());
+                        }
                     } else {
                         tooLarge = applied;
                         saved = false;
@@ -876,14 +977,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 }
             } catch (Throwable failure) {
                 rethrowIfNotTheInstances(failure);
-                return recordReleaseFailure(records, sagaId, quarantineId, RecordKey.of(record), meta, failure, now);
+                return recordReleaseFailure(records, sagaId, quarantineId, RecordKey.of(record), meta, failure, now, dispatches);
             }
             if (deleteTooLarge) {
                 // The instance applied the record's input already, so quarantining it again on that input is not an option
-                return writesNothing(records, sagaId, record.key(), "the instance with the record deleted");
+                return writesNothing(records, sagaId, record.key(), "the instance with the record deleted", dispatches.said(RecordKey.of(record)));
             }
             if (tooLarge != null) {
-                SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record.key(), meta, current, tooLarge, "the instance with the event applied", null, now);
+                SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record.key(), meta, current, tooLarge, "the instance with the event applied", null, now,
+                        dispatches.said(RecordKey.of(record)));
                 if (stopped != null) {
                     return stopped;
                 }
@@ -899,8 +1001,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
-    // Quarantine the instance again on record, because the store cannot take the write named by cannotWrite, without
-    // dispatching its commands. That write is the instance with the event applied, which applied holds, or the failure
+    // Quarantine the instance again on record, because the store cannot take the write named by cannotWrite, and
+    // dispatch nothing here. That write is the instance with the event applied, which applied holds, or the failure
     // record of the event when the event failed with failure. The write that quarantines it is checked too, first the
     // one with the record's pending entry and the reason, then the bare one. When neither fits, nothing
     // is written. The ERROR says whether a further release gets past the record, which it does when the store can take
@@ -909,7 +1011,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // and the write expects current's version, so it never quarantines the instance on a record another release deleted
     private SagaSubscription.@Nullable ReleaseResult quarantineAgainTooLarge(SagaStateStoreSkippedInputs records, String sagaId, String recordKey, EventMeta meta,
                                                                            SagaEnvelope<S> current, @Nullable SagaEnvelope<S> applied, String cannotWrite,
-                                                                           @Nullable Throwable failure, Instant now) {
+                                                                           @Nullable Throwable failure, Instant now, String dispatched) {
         IllegalStateException reason = new IllegalStateException("The release of saga instance '" + sagaId + "' stopped on the event '" + recordKey
                                                                  + "', because its state store " + records.getClass().getName() + " cannot write " + cannotWrite + ".");
         FailureRecord<S> requarantine = SagaExecutionSupport.onReleaseTooLarge(current, meta, reason, now, config.reorderWindow());
@@ -920,7 +1022,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         if (!envelopes.fitsWithoutState(records, requarantine.envelope(), requarantine.expectedVersion())) {
             requarantine = Objects.requireNonNull(SagaExecutionSupport.onReleaseTooLargeBare(current, meta, reason, now, config.reorderWindow()));
             if (!envelopes.fitsWithoutState(records, requarantine.envelope(), requarantine.expectedVersion())) {
-                return writesNothing(records, sagaId, recordKey, cannotWrite + ", nor the instance quarantined again on it");
+                return writesNothing(records, sagaId, recordKey, cannotWrite + ", nor the instance quarantined again on it", dispatched);
             }
         }
         boolean fitsWhenReleasedAgain = applied == null || envelopes.fits(records,
@@ -929,25 +1031,49 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return null;
         }
         if (applied == null) {
-            log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because the event failed while it was releasing and its state store cannot write the failure record. Release the instance again to try the event again. The event and the inputs after it stay recorded.",
-                    subscriptionId, sagaId, recordKey, failure);
+            log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because the event failed while it was releasing and its state store cannot write the failure record.{} Release the instance again to try the event again. The event and the inputs after it stay recorded.",
+                    subscriptionId, sagaId, recordKey, dispatched, failure);
         } else if (fitsWhenReleasedAgain) {
-            log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its state store cannot write the instance with the event applied. A release keeps every stream version it applies until it ends, and quarantining the instance again trimmed them. The store can write the event applied to the trimmed instance, so release the instance again to go on from that event. The event and the inputs after it stay recorded.",
-                    subscriptionId, sagaId, recordKey);
+            log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its state store cannot write the instance with the event applied.{} A release keeps every stream version it applies until it ends, and quarantining the instance again trimmed them. The store can write the event applied to the trimmed instance, so release the instance again to go on from that event. The event and the inputs after it stay recorded.",
+                    subscriptionId, sagaId, recordKey, dispatched);
         } else {
-            log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its state store cannot write the instance with the event applied, even with the stream versions the release applied trimmed. A further release stops on this event too. Delete the instance, or handle the event and the inputs after it by hand. They stay recorded.",
-                    subscriptionId, sagaId, recordKey);
+            log.error("Saga '{}' instance '{}' is QUARANTINED again on the event '{}' without applying it, because its state store cannot write the instance with the event applied, even with the stream versions the release applied trimmed.{} A further release stops on this event too. Delete the instance, or handle the event and the inputs after it by hand. They stay recorded.",
+                    subscriptionId, sagaId, recordKey, dispatched);
         }
         return SagaSubscription.ReleaseResult.QUARANTINED_AGAIN;
     }
 
-    // The store cannot take any write that moves the release on, so nothing is written, nothing is dispatched, and the
-    // instance stays releasing. The timer poller tries it again on every poll, and logs this again
-    private SagaSubscription.ReleaseResult writesNothing(SagaStateStoreSkippedInputs records, String sagaId, @Nullable String recordKey, String cannotWrite) {
-        log.error("Saga '{}' instance '{}' stays releasing{} and nothing is dispatched, because its state store {} cannot write {}. The timer poller tries it again on every poll. "
+    // The store cannot take any write that moves the release on, so nothing is written and the instance stays releasing.
+    // The timer poller tries it again on every poll, and logs this again. dispatched names the commands of the event this
+    // release dispatched with a write that lost, see ReleaseDispatches
+    private SagaSubscription.ReleaseResult writesNothing(SagaStateStoreSkippedInputs records, String sagaId, @Nullable String recordKey, String cannotWrite, String dispatched) {
+        log.error("Saga '{}' instance '{}' stays releasing{}, because its state store {} cannot write {}.{} The timer poller tries it again on every poll. "
                   + "Delete the instance with SagaStateStore.delete(\"{}\"), which throws its state away and deletes the inputs it recorded, so export or handle those by hand first.",
-                subscriptionId, sagaId, recordKey == null ? "" : " on the event '" + recordKey + "'", records.getClass().getName(), cannotWrite, sagaId);
+                subscriptionId, sagaId, recordKey == null ? "" : " on the event '" + recordKey + "'", records.getClass().getName(), cannotWrite, dispatched, sagaId);
         return SagaSubscription.ReleaseResult.STILL_RELEASING;
+    }
+
+    // The commands a release dispatched for a record with a write that then lost to another writer, so an ERROR about a
+    // later write of that record the store refuses says they went out. One continueRelease call keeps one, on one thread
+    private static final class ReleaseDispatches {
+        private @Nullable RecordKey record;
+        private int commands;
+
+        void lost(RecordKey record, int commands) {
+            if (!record.equals(this.record)) {
+                this.record = record;
+                this.commands = 0;
+            }
+            this.commands += commands;
+        }
+
+        // What the ERROR says about the commands of record, nothing when this release dispatched none of them
+        String said(RecordKey record) {
+            if (!record.equals(this.record) || commands == 0) {
+                return "";
+            }
+            return " This release dispatched " + commands + (commands == 1 ? " command" : " commands") + " of the event already, with a write that lost to another writer.";
+        }
     }
 
     // What a release ended as, read off the instance, or null when the instance is still releasing. A release another call
@@ -1022,7 +1148,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // state and with only the seq and key of its first record, so a state or an event that no longer decodes doesn't
     // keep the failure from being recorded
     private SagaSubscription.ReleaseResult recordReleaseFailure(SagaStateStoreSkippedInputs records, String sagaId, String quarantineId, RecordKey record,
-                                                                EventMeta meta, Throwable failure, Instant now) {
+                                                                EventMeta meta, Throwable failure, Instant now, ReleaseDispatches dispatches) {
         Duration quarantineAfter = config.quarantineAfter().orElse(ChronoUnit.FOREVER.getDuration());
         try {
             for (int attempt = 1; attempt <= config.maxCasAttempts(); attempt++) {
@@ -1051,7 +1177,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 }
                 if (!envelopes.fitsWithoutState(records, failureRecord.envelope(), failureRecord.expectedVersion())) {
                     SagaSubscription.ReleaseResult stopped = quarantineAgainTooLarge(records, sagaId, record.key(), meta, current, null,
-                            "the failure record of the event", failure, now);
+                            "the failure record of the event", failure, now, dispatches.said(record));
                     if (stopped != null) {
                         return stopped;
                     }
@@ -1087,7 +1213,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // left as it is, and a state that doesn't decode fails the next input the way it fails any input of an active
     // instance. When the read by seq and key fails too, the store read nothing to charge and the failure propagates as
     // it is, and the next poll tries again. Null when the write that ends the quarantine lost, and the caller reads again
-    private SagaSubscription.@Nullable ReleaseResult recordReadFailure(SagaStateStoreSkippedInputs records, String sagaId, Throwable readFailure) {
+    private SagaSubscription.@Nullable ReleaseResult recordReadFailure(SagaStateStoreSkippedInputs records, String sagaId, Throwable readFailure,
+                                                                       ReleaseDispatches dispatches) {
         SagaEnvelopes.WithFirstSkippedInputKey<S> read = null;
         try {
             read = envelopes.findWithFirstSkippedInputKey(records, sagaId).orElse(null);
@@ -1111,7 +1238,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     subscriptionId, sagaId, readFailure);
             return endQuarantine(records, sagaId, current, quarantineId, clock.get());
         }
-        return recordReleaseFailure(records, sagaId, quarantineId, first, metaOfRecord(records, sagaId, quarantineId, first, readFailure), readFailure, clock.get());
+        return recordReleaseFailure(records, sagaId, quarantineId, first, metaOfRecord(records, sagaId, quarantineId, first, readFailure), readFailure, clock.get(), dispatches);
     }
 
     // End the quarantine of current, which the read that returned it found with no record left, and leave the stored
@@ -1120,7 +1247,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private SagaSubscription.@Nullable ReleaseResult endQuarantine(SagaStateStoreSkippedInputs records, String sagaId, SagaEnvelope<S> current, String quarantineId, Instant now) {
         SagaEnvelope<S> released = SagaExecutionSupport.withReleased(current, now, config.reorderWindow());
         if (!envelopes.fitsWithoutState(records, released, current.version())) {
-            return writesNothing(records, sagaId, null, "the instance released");
+            return writesNothing(records, sagaId, null, "the instance released", "");
         }
         if (!envelopes.compareAndSaveQuarantineEnded(records, released, current.version(), quarantineId)) {
             return null;
@@ -1226,6 +1353,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // A lost compare-and-set is a retryable concurrency conflict: signal it with CasConflict so casRetry retries the
         // whole body, and map an exhausted retry to the public SagaConcurrencyException. Any other failure (a throwing
         // dispatcher or store) is not a CasConflict, so retryIf leaves it alone and it propagates on the first attempt.
+        // The commands the attempts that lost their compare-and-set dispatched, and how many of those attempts dispatched
+        // any, so a refusal names them
+        AtomicInteger dispatchedByEarlierAttempts = new AtomicInteger();
+        AtomicInteger earlierAttemptsThatDispatched = new AtomicInteger();
         casRetry
                 .mapError(error -> error instanceof CasConflict
                         ? new SagaConcurrencyException("Failed to save saga '" + sagaId + "' after " + config.maxCasAttempts() + " attempts due to concurrent modification")
@@ -1263,12 +1394,26 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         }
                         throw new CasConflict();
                     }
+                    // Encoded once, so the store is asked about the bytes the save then writes. Asked before the dispatch,
+                    // so an attempt whose instance the store cannot write dispatches nothing and the input fails like any
+                    // other. An earlier attempt can have dispatched its commands already and then lost its compare-and-set
+                    SagaEnvelope<S> envelope = outcome.envelope();
+                    StoredSaga write = envelope == null ? null : envelopes.encode(sagaId, envelope, outcome.expectedVersion());
+                    SagaStateStoreSkippedInputs records = skippedInputs;
+                    if (write != null && records != null && !envelopes.fits(records, write)) {
+                        throw new IllegalStateException("Saga '" + subscriptionId + "' instance '" + sagaId + "' cannot apply " + inputName(meta, cloudEvent, requireTimerName)
+                                                        + ", because its state store " + records.getClass().getName() + " cannot write the instance with it applied. "
+                                                        + dispatchedBefore(earlierAttemptsThatDispatched.get(), dispatchedByEarlierAttempts.get(), cloudEvent == null));
+                    }
                     // Dispatch before saving so a command is never lost. A lost compare-and-set retries this whole body,
                     // re-dispatching the entire command list (at-least-once, up to maxCasAttempts times), so receivers
                     // must be idempotent and tolerate that multiplicity.
                     dispatcher.dispatchAll(outcome.commands());
-                    SagaEnvelope<S> envelope = outcome.envelope();
-                    if (envelope != null && envelopes.compareAndSave(sagaId, envelope, outcome.expectedVersion())) {
+                    if (!outcome.commands().isEmpty()) {
+                        dispatchedByEarlierAttempts.addAndGet(outcome.commands().size());
+                        earlierAttemptsThatDispatched.incrementAndGet();
+                    }
+                    if (write != null && envelopes.compareAndSave(write, outcome.expectedVersion())) {
                         return null;
                     }
                     if (attempt.getAttemptNumber() == warnThreshold) {

@@ -146,6 +146,28 @@ import static java.util.Objects.requireNonNull;
  * Commands are dispatched before the save, and a lost compare-and-set retries the step, so a single input can
  * re-dispatch its whole command list several times (up to {@code maxCasAttempts}). Receivers must be idempotent and
  * tolerate that. See {@link SagaRunnerConfig} and {@link SagaConcurrencyException}.
+ * <p>
+ * Before it dispatches an input's commands, the runner asks the store whether it can write the instance with the input
+ * applied, see {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs#fits}. It asks on every compare-and-set
+ * attempt. When the store can't take the write, such as {@code SpringMongoSagaStateStore} for an instance of more than
+ * 16 MiB, that attempt dispatches nothing and the input fails with an {@link IllegalStateException}. An earlier attempt
+ * can have dispatched its commands already and then lost its compare-and-set to another writer, and the exception
+ * message says how many the attempts of this delivery of the event, or this poll of the timer, dispatched.
+ * <p>
+ * An event that fails this way fails like any other failing event, so with quarantine on the instance is quarantined
+ * once the event's budget runs out. A timeout that fails this way never quarantines the instance. Its timer stays due,
+ * the instance stays {@code ACTIVE}, and later polls try the timer again and log a WARN each time the store refuses it.
+ * <p>
+ * When the store can't write the failure record of an event either, it's written without its message, so the budget
+ * still runs. It doesn't list the event as pending either, unless the event is at or below the highest version of its
+ * stream that an instance stored before 0.35.0 had applied. A release takes such an event for one the instance applied
+ * unless it's listed, and skips it. When even that doesn't fit, nothing is written, the event fails on every delivery,
+ * the instance isn't quarantined on it while the store can't take that write, and an ERROR names the instance and the
+ * event, at most once per quarantine budget for each event. With quarantine off, a pending listing the store can't take
+ * isn't written, and an ERROR names the instance and the event, at most once every 5 minutes for each event. A store
+ * that doesn't implement
+ * {@code SagaStateStoreSkippedInputs} isn't asked, so the runner dispatches the commands of an input whose save the
+ * store then fails.
  *
  * @param <E> the domain event type
  * @param <C> the command type

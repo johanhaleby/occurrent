@@ -152,8 +152,10 @@ public final class SagaExecutionSupport {
      * The result of processing one input. When {@link #processed()} is false the input was not applied (it was a
      * redelivery, the instance is terminal or quarantined, or the event cannot start an instance). The executor then
      * dispatches nothing. When there is a {@link #skipToRecord()}, which is a quarantined instance recording the input
-     * it skips, it records that as {@link SagaExecutionSupport#skipToRecord} says. Otherwise it dispatches {@link #commands()} in order and then saves {@link #envelope()} with
-     * {@code compareAndSave(..., expectedVersion())}.
+     * it skips, it records that as {@link SagaExecutionSupport#skipToRecord} says. Otherwise it dispatches
+     * {@link #commands()} in order and then saves {@link #envelope()} with {@code compareAndSave(..., expectedVersion())},
+     * after asking a store that implements {@code SagaStateStoreSkippedInputs} whether it can write {@link #envelope()}.
+     * When that store can't, the attempt dispatches nothing and the executor records the failure instead.
      */
     public record Outcome<S extends @Nullable Object, C>(boolean processed,
                                                          @Nullable SagaEnvelope<S> envelope,
@@ -631,8 +633,10 @@ public final class SagaExecutionSupport {
      * <p>
      * The instance is quarantined again on the record as {@code onReleaseTooLarge} quarantines it, with the marks
      * trimmed to {@code reorderWindow}, but the marks get no pending entry for the record and the failure record holds
-     * no message. A further release does not need either, since it applies the record whatever its marks say, see
-     * {@link #replay}. Leaving both out is the only difference between the two writes.
+     * no message. A further release does not need either. The marks show the input of every record as not applied from
+     * the write that records it on, the write that quarantines the instance included, see {@link #onFailureBare}, and
+     * only applying the input changes that, so a further release applies the record, see {@link #replay}. Leaving
+     * both out is the only difference between the two writes.
      */
     public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseTooLargeBare(SagaEnvelope<S> current, EventMeta meta,
                                                                                                 Throwable reason, Instant now, int reorderWindow) {
@@ -644,6 +648,43 @@ public final class SagaExecutionSupport {
         SagaFailure record = new SagaFailure(stoppedOn.input(), stoppedOn.position(), stoppedOn.firstFailedAt(), stoppedOn.failureType(), null,
                 null, stoppedOn.quarantineId());
         return new FailureRecord<>(requarantined(current, now, record, current.streamMarks(), reorderWindow), current.version(), true);
+    }
+
+    /**
+     * The smallest write that records the failure of the input {@code meta} names, for when the store cannot write
+     * {@code full}, which {@link #onFailure} returned for {@code current}, or {@code null} when no smaller write records
+     * anything. Save it the way {@code full} is saved.
+     * <p>
+     * The failure record holds no message. The stream marks get no pending entry for the input when it is above the
+     * floor of its stream, or when they list it already, so the input's clock is then on the failure record alone, as
+     * it is for an input with no stream. A release ignores the failure record and applies such an input, because the
+     * marks don't show it as applied, see {@link #replay}. An input at or below the floor that the marks don't list keeps
+     * its pending entry, since without it a release would take the input for one the instance applied before the
+     * floor and delete its record unapplied. Then the message is the only difference between the two writes.
+     * <p>
+     * When {@code full} only lists an input the failure record names already as pending, nothing is left to write, and
+     * this returns {@code null}. A write that quarantines the instance still quarantines it.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onFailureBare(@Nullable SagaEnvelope<S> current, EventMeta meta, FailureRecord<S> full) {
+        SagaEnvelope<S> written = full.envelope();
+        SagaFailure failure = written.failure();
+        if (failure == null || current != null && failure.equals(current.failure())) {
+            return null;
+        }
+        SagaFailure bare = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(), null,
+                failure.releasedAt(), failure.quarantineId());
+        // As withFailure builds them, without the pending entry
+        Map<String, StreamMarks> streamMarks = current == null ? Map.of()
+                : withReplacedFailure(current.streamMarks(), current.streamWatermarks(), currentFailure(current), meta);
+        // Except for an input at or below the floor of its stream that the marks do not list already. A release ignores
+        // the failure record, so without the entry it would take the input for one the instance applied and delete its
+        // record unapplied, see classify
+        if (current != null && isAtOrBelowFloor(current, meta) && !isOutstanding(streamMarks.get(meta.streamId()), meta)) {
+            streamMarks = written.streamMarks();
+        }
+        return new FailureRecord<>(new SagaEnvelope<>(written.sagaId(), written.state(), written.status(), written.version(), written.timers(),
+                written.streamWatermarks(), written.positionWatermark(), written.createdAt(), written.updatedAt(), written.completedAt(),
+                written.currentStep(), written.started(), bare, streamMarks, written.quarantineSkipCount()), full.expectedVersion(), full.quarantined());
     }
 
     /**
@@ -980,9 +1021,9 @@ public final class SagaExecutionSupport {
 
     // A failure record names one input, so a different input failing replaces it. A record written before pending
     // existed is then the only memory that its input was never applied, and its event type is not known. It is kept as a
-    // version of the stream, which a stream version identifies exactly. Only such records can get here unlisted, because a
-    // failure recorded now is pending in the same write, so this holds at most the record an instance carried over from
-    // before.
+    // version of the stream, which a stream version identifies exactly. Only two kinds of record get here unlisted, a
+    // record written before pending existed and a record onFailureBare wrote, because a failure recorded any other way is
+    // pending in the same write.
     private static Map<String, StreamMarks> withReplacedFailure(Map<String, StreamMarks> streamMarks, Map<String, Long> streamWatermarks,
                                                                @Nullable SagaFailure replaced, EventMeta meta) {
         if (replaced == null || replaced.input().equals(meta.redeliveryKey())) {
@@ -1203,6 +1244,15 @@ public final class SagaExecutionSupport {
             return marks.floor();
         }
         return watermark != null ? watermark : Long.MIN_VALUE;
+    }
+
+    // Whether the stream version meta describes is at or below the floor of its stream on current, where only an
+    // outstanding mark makes classify take it for new once the failure record stops counting, as it does in a release
+    private static <S extends @Nullable Object> boolean isAtOrBelowFloor(SagaEnvelope<S> current, EventMeta meta) {
+        String streamId = meta.streamId();
+        Long streamVersion = meta.streamVersion();
+        return streamId != null && streamVersion != null
+               && streamVersion <= floorOf(current.streamMarks().get(streamId), current.streamWatermarks().get(streamId));
     }
 
     private static String typeKey(EventMeta meta) {

@@ -400,6 +400,68 @@ class SagaQuarantineSupportTest {
     }
 
     @Nested
+    class TheBareFailureRecord {
+
+        private List<Long> pendingOf(FailureRecord<OrderState> record) {
+            return record.envelope().streamMarks().values().stream().flatMap(marks -> marks.pending().values().stream()).flatMap(List::stream).toList();
+        }
+
+        @Test
+        void an_input_at_or_below_the_floor_that_the_marks_do_not_list_keeps_its_pending_entry_and_loses_only_its_message() {
+            // Stored before 0.35.0, so the stream is applied up to version 30 and there are no marks, and the failure record names version 5
+            // with the budget used up. A release ignores the failure record, so without the pending entry it takes version 5
+            // for an input the instance applied before the floor and deletes its record unapplied
+            SagaEnvelope<OrderState> current = new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 4, List.of(),
+                    Map.of("o1", 30L), 30L, NOW.minusSeconds(60), NOW, null, null, true, failedOn(5, NOW.minus(BUDGET)), Map.of(), null);
+            FailureRecord<OrderState> full = SagaExecutionSupport.onFailure(saga(), "o1", current, at(5), new IllegalStateException("boom"), NOW, BUDGET);
+
+            FailureRecord<OrderState> bare = SagaExecutionSupport.onFailureBare(current, at(5), full);
+
+            assertAll(
+                    () -> assertThat(full.quarantined()).as("control: the budget is used up").isTrue(),
+                    () -> assertThat(pendingOf(full)).as("control: the full record lists the input").containsExactly(5L),
+                    () -> assertThat(bare.quarantined()).isTrue(),
+                    () -> assertThat(pendingOf(bare)).as("the bare record lists the input too").containsExactly(5L),
+                    () -> assertThat(bare.envelope().failure().input()).isEqualTo("o1@5"),
+                    () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull()
+            );
+        }
+
+        @Test
+        void an_input_above_the_floor_gets_no_pending_entry_and_no_message() {
+            // Above the floor a release applies every input the marks don't show as applied, so the entry is not needed
+            SagaEnvelope<OrderState> current = active(3, Map.of("o1", 30L), 30L);
+            FailureRecord<OrderState> full = SagaExecutionSupport.onFailure(saga(), "o1", current, at(31), new IllegalStateException("boom"), NOW, BUDGET);
+
+            FailureRecord<OrderState> bare = SagaExecutionSupport.onFailureBare(current, at(31), full);
+
+            assertAll(
+                    () -> assertThat(pendingOf(full)).as("control: the full record lists the input").containsExactly(31L),
+                    () -> assertThat(pendingOf(bare)).as("the bare record does not").isEmpty(),
+                    () -> assertThat(bare.envelope().failure().input()).isEqualTo("o1@31"),
+                    () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull()
+            );
+        }
+
+        @Test
+        void the_record_that_inserts_an_instance_whose_first_input_failed_has_no_message_and_no_stream_marks() {
+            // There is no stored instance, so no marks to carry over, and the input is above the floor of a stream nothing has applied
+            FailureRecord<OrderState> full = SagaExecutionSupport.onFailure(saga(), "o1", null, at(1), new IllegalStateException("boom"), NOW, BUDGET);
+
+            FailureRecord<OrderState> bare = SagaExecutionSupport.onFailureBare(null, at(1), full);
+
+            assertAll(
+                    () -> assertThat(pendingOf(full)).as("control: the full record lists the input").containsExactly(1L),
+                    () -> assertThat(bare).isNotNull(),
+                    () -> assertThat(bare.envelope().failure().input()).isEqualTo("o1@1"),
+                    () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull(),
+                    () -> assertThat(bare.envelope().streamMarks()).as("no stream marks").isEmpty(),
+                    () -> assertThat(bare.expectedVersion()).isEqualTo(full.expectedVersion())
+            );
+        }
+    }
+
+    @Nested
     class AnInputThatFailedBeforeQuarantineWasTurnedOn {
 
         private final Instant t0 = NOW;
