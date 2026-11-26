@@ -43,6 +43,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -218,6 +219,30 @@ class CatchupLifecycleStartWithSlowStorageTest {
         assertThat(thrownByTheAction.get()).as("what the action threw in the end").isNull();
     }
 
+    @Test
+    void a_start_made_with_the_model_stopped_resumes_a_subscription_from_the_read_that_answered_late_without_reading_it_again() throws Exception {
+        // Given a paused subscription in a stopped model, a storage that holds back its read before the turn, and never answers a read of it made after the turn
+        givenPaused(X);
+        model.stop();
+        storage.hold(X);
+        storage.holdEveryReadMadeAfterTheTurnUntilReleaseAll(X);
+
+        // When the model is started, and its wait for the read expires, which is when the live delegate runs again
+        CompletableFuture<Void> start = CompletableFuture.runAsync(() -> model.start(true), daemonExecutor("start-of-the-model"));
+        assertThat(storage.awaitEntered(X)).as("whether the start read the storage for x").isTrue();
+        await().atMost(BOUND).untilAsserted(() -> assertThat(live.isRunning()).as("whether the live delegate runs, which it does once the turn of the start has begun").isTrue());
+        assertThat(model.isRunning(X)).as("whether x runs before its read answered").isFalse();
+
+        // And the read answers
+        storage.release(X);
+
+        // Then x resumes from that read and delivers, though a second read of it would never answer
+        await().atMost(BOUND).untilAsserted(() -> assertThat(model.isRunning(X)).as("whether x runs once its read answered late, a second read of it never answering").isTrue());
+        publish("live-1");
+        await().atMost(BOUND).untilAsserted(() -> assertThat(deliveredTo(X)).as("the events x delivered").contains("live-1"));
+        assertThat(start).as("the start once x was resumed").succeedsWithin(BOUND);
+    }
+
     private void givenPaused(String subscriptionId) {
         model.subscribe(subscriptionId, null, StartAt.now(), event -> delivered.computeIfAbsent(subscriptionId, id -> new CopyOnWriteArrayList<>()).add(event.getId()));
         model.pauseSubscription(subscriptionId);
@@ -280,10 +305,18 @@ class CatchupLifecycleStartWithSlowStorageTest {
     private static final class StorageThatHoldsReads extends InMemoryCheckpointStorage {
         private final Map<String, CountDownLatch> released = new ConcurrentHashMap<>();
         private final Map<String, CountDownLatch> entered = new ConcurrentHashMap<>();
+        private final Set<String> laterReadsNeverAnswer = ConcurrentHashMap.newKeySet();
+        private final CountDownLatch everythingReleased = new CountDownLatch(1);
 
         void hold(String subscriptionId) {
             entered.put(subscriptionId, new CountDownLatch(1));
             released.put(subscriptionId, new CountDownLatch(1));
+        }
+
+        // A read of the subscription not made before the turn waits until releaseAll(), instead of until release(..). The reads
+        // before the turn run on virtual threads of their own, so a read on any other thread is one made again after the turn
+        void holdEveryReadMadeAfterTheTurnUntilReleaseAll(String subscriptionId) {
+            laterReadsNeverAnswer.add(subscriptionId);
         }
 
         boolean awaitEntered(String subscriptionId) throws InterruptedException {
@@ -296,6 +329,7 @@ class CatchupLifecycleStartWithSlowStorageTest {
 
         void releaseAll() {
             released.values().forEach(CountDownLatch::countDown);
+            everythingReleased.countDown();
         }
 
         @Override
@@ -304,7 +338,11 @@ class CatchupLifecycleStartWithSlowStorageTest {
             if (release != null) {
                 entered.get(subscriptionId).countDown();
                 try {
-                    release.await(80, TimeUnit.SECONDS);
+                    if (!Thread.currentThread().isVirtual() && laterReadsNeverAnswer.contains(subscriptionId)) {
+                        everythingReleased.await(80, TimeUnit.SECONDS);
+                    } else {
+                        release.await(80, TimeUnit.SECONDS);
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }

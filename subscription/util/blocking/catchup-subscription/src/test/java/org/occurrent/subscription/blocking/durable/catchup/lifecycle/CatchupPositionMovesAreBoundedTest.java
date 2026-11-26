@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -133,8 +135,56 @@ class CatchupPositionMovesAreBoundedTest {
         assertThat(moves).as("the position moves after the cancels of unknown subscriptions").isEmpty();
     }
 
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    void a_cancelled_subscription_has_no_position_move_left_once_the_model_deletes_its_stored_position(Kind kind) {
+        // Given a subscription that replayed, so its position was written, and a storage that notes whether the model still kept a position move for it at each delete
+        DeleteWatchingStorage watching = new DeleteWatchingStorage();
+        model = modelOf(kind, true, watching);
+        Map<String, Long> moves = positionMovesOf(model);
+        watching.moves = moves;
+        model.subscribe("subscription", StartAtTime.beginningOfTime(), event -> delivered.computeIfAbsent("subscription", key -> new CopyOnWriteArrayList<>()).add(event.getId()));
+        await().atMost(BOUND).untilAsserted(() -> assertThat(delivered).as("the subscriptions that delivered the replayed event").containsKey("subscription"));
+        assertThat(moves).as("the position moves while the subscription exists").containsKey("subscription");
+
+        // When it is cancelled
+        model.cancelSubscription("subscription");
+
+        // Then the model had forgotten its position move by the time it deleted the stored position, the last delete of the cancel
+        assertThat(watching.movesKeptAtDelete).as("whether the model kept a position move for the subscription at each delete of its stored position, in order").isNotEmpty();
+        assertThat(watching.movesKeptAtDelete.getLast()).as("whether the model kept a position move for the cancelled subscription when it deleted the stored position").isFalse();
+        assertThat(moves).as("the position moves once the subscription was cancelled").isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(Kind.class)
+    void a_subscribe_that_fails_after_the_model_noted_a_position_move_leaves_no_position_move_behind(Kind kind) {
+        // Given a live model whose subscribe makes the model delete the stored position, which notes a position move while the subscription has a record, and then fails
+        model = modelOf(kind, true);
+        Map<String, Long> moves = positionMovesOf(model);
+        StreamCatchupSubscriptionModel catchup = streamCatchupOf(model);
+        AtomicBoolean notedWhileTheRecordExisted = new AtomicBoolean();
+        live.beforeSubscribe = id -> {
+            catchup.deletePositionFromStorage(id);
+            notedWhileTheRecordExisted.set(moves.containsKey(id));
+            throw new IllegalStateException("the live subscribe failed on purpose");
+        };
+
+        // When the subscribe fails
+        Throwable thrown = catchThrowable(() -> model.subscribe("subscription", null, StartAt.now(), event -> {
+        }));
+
+        // Then the model keeps no position move for the subscription, which has no record to put back
+        assertThat(thrown).as("what the subscribe threw").hasStackTraceContaining("the live subscribe failed on purpose");
+        assertThat(notedWhileTheRecordExisted).as("whether a position move was kept while the subscription had a record").isTrue();
+        assertThat(moves).as("the position moves once the subscribe failed").isEmpty();
+    }
+
     private SubscriptionModel modelOf(Kind kind, boolean withCheckpointStorage) {
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        return modelOf(kind, withCheckpointStorage, new InMemoryCheckpointStorage());
+    }
+
+    private SubscriptionModel modelOf(Kind kind, boolean withCheckpointStorage, InMemoryCheckpointStorage storage) {
         DurableSubscriptionModel durable = new DurableSubscriptionModel(live, storage);
         CatchupSubscriptionModelConfig config = withCheckpointStorage ? new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage)) : new CatchupSubscriptionModelConfig(100);
         return kind == Kind.THE_DISPATCHER ? new CatchupSubscriptionModel(durable, history, config) : new StreamCatchupSubscriptionModel(durable, history, config);
@@ -152,15 +202,35 @@ class CatchupPositionMovesAreBoundedTest {
         await().atMost(BOUND).untilAsserted(() -> assertThat(delivered).as("the subscriptions that delivered the replayed event").hasSize(SUBSCRIPTIONS));
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<String, Long> positionMovesOf(SubscriptionModel model) {
+    // Notes, at each delete, whether the model still kept a position move for the subscription
+    private static final class DeleteWatchingStorage extends InMemoryCheckpointStorage {
+        volatile Map<String, Long> moves = Map.of();
+        final List<Boolean> movesKeptAtDelete = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void delete(String subscriptionId) {
+            movesKeptAtDelete.add(moves.containsKey(subscriptionId));
+            super.delete(subscriptionId);
+        }
+    }
+
+    private static StreamCatchupSubscriptionModel streamCatchupOf(SubscriptionModel model) {
         try {
-            Object catchup = model;
             if (model instanceof CatchupSubscriptionModel) {
                 Field child = CatchupSubscriptionModel.class.getDeclaredField("streamCatchupSubscriptionModel");
                 child.setAccessible(true);
-                catchup = child.get(model);
+                return (StreamCatchupSubscriptionModel) child.get(model);
             }
+            return (StreamCatchupSubscriptionModel) model;
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Could not read the stream catch-up model of " + model.getClass().getSimpleName(), e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Long> positionMovesOf(SubscriptionModel model) {
+        try {
+            Object catchup = streamCatchupOf(model);
             Field field = Class.forName("org.occurrent.subscription.blocking.durable.catchup.AbstractCatchupSubscriptionModel").getDeclaredField("positionMoves");
             field.setAccessible(true);
             return (Map<String, Long>) field.get(catchup);

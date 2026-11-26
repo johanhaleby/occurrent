@@ -230,6 +230,13 @@ began. So the `start(true)` returns only once those resumes have returned or thr
 of them. From an action, the lifecycle thread hands each of them over as described next, starts them all at once, and
 waits at most 10 seconds in all for them to begin.
 
+A `start(true)` made on a thread that already holds the lock, from code another start runs such as a
+`StartAt.dynamic(..)` function or the wrapped model's `start(..)`, reads nothing before its turn. It resumes each of
+those subscriptions after its turn on that same thread, one after another, and each of them reads under the lock. A
+thread of their own would wait for the lock while the `start(true)` waited for them, and neither would return. So
+those reads run under the lock that the wrapped model's own `start(..)` or the `StartAt.dynamic(..)` function already
+holds, two of the cases listed below that still hold the model lock.
+
 A call for X that an action handed over, a subscribe, a resume, a positioned resume, a pause or a cancel, runs on a
 thread of its own without the model lock, as the same call made from another thread does. The lifecycle thread waits
 for it to begin, which is when it has taken its claim, or for a resume when its turn is over. It waits at most 10

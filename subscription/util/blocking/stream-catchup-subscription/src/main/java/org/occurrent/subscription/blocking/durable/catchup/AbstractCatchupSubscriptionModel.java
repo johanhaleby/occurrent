@@ -1056,7 +1056,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * storage that doesn't answer for one subscription holds up that subscription's resume alone. This start resumes
      * such ones once the rest is done, without the lock, also when resuming another one threw, each on a thread of its
      * own, as soon as its own read answers, and returns once all of them have. The live delegate's own
-     * {@code start(..)} runs under the lock with whatever it reads.
+     * {@code start(..)} runs under the lock with whatever it reads. A start made on a thread that already holds the
+     * lock, from code another start runs such as a {@code StartAt.dynamic} function or the live delegate's
+     * {@code start(..)}, reads none of those positions first. It resumes each of those subscriptions on that thread, one
+     * after another, reading under the lock.
      * <p>
      * It runs alone, as {@link #runInTurn} describes, and waits with no deadline for a {@link #stop()},
      * {@code shutdown()} or {@link #resumeSubscription(String)} under way, unless code a caller supplied holds it up as
@@ -1157,7 +1160,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * when the turn threw, as {@link #resumeReadingFirst} does, unless a stop or a shutdown came since the turn. Each of
      * those runs on a thread of its own, all of them at once, and one not read in time is resumed from its read as soon
      * as that read answers, and read again when that read failed. So a checkpoint storage that doesn't answer for one
-     * subscription holds up that subscription's resume alone, which this start then waits for without the lock.
+     * subscription holds up that subscription's resume alone, which this start then waits for without the lock. On a
+     * thread that already holds the lock, it reads nothing before the turn, and resumes every one it left until after
+     * the turn on that thread, one after another, since a thread of their own would wait for that lock.
      */
     final class StartResumes {
         private final Object model;
@@ -1243,7 +1248,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
         // Each on a thread of its own, all of them at once. On the lifecycle thread they run as runPerIdCallsInOrder
         // describes, so they keep their place among the calls handed over, and what each throws is logged. Elsewhere
-        // this waits for all of them, and the first failure is thrown
+        // this waits for all of them, and the first failure is thrown. On a thread that still holds the model lock, such
+        // as a start made from code another start runs, they run here one after another, since a thread of their own
+        // would wait for that lock while this thread waits for them
         void resumeAfterTheTurn(boolean onTheLifecycleThread) {
             LifecycleCall startCall = call;
             if (startCall == null || afterTheTurn.isEmpty()) {
@@ -1251,6 +1258,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             }
             Consumer<String> resume = id -> resumeReadingFirst(model, id, models, stopsAtTheTurn, shutdownsBegunBefore, false, lateReadOf(id),
                     read -> lastCallSince(startCall).liveDelegateStopped() ? null : alone.apply(id, read));
+            if (modelLock.isHeldByCurrentThread()) {
+                resumeEach(afterTheTurn, resume);
+                return;
+            }
             if (!onTheLifecycleThread) {
                 resumeEachAtOnce(afterTheTurn, resume);
                 return;
