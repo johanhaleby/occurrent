@@ -602,8 +602,8 @@ An application whose `DurableSubscriptionModel` has a `CheckpointWriteVersionSou
 `CompetingConsumerCheckpointWriteVersionSource` the Spring Boot starter uses for a competing consumer, and either
 records the first position of a subscription that starts at the model default with no checkpoint stored, or
 subscribes from a checkpoint already stored, such as the start position the Spring Boot starter stores for the
-subscription at registration, or resumes a paused subscription at the stored checkpoint with
-`resumeSubscription(id)`. Compiles unchanged.
+subscription at registration, or resumes a paused subscription with `resumeSubscription(id)` while a checkpoint is
+stored. Compiles unchanged.
 
 ### What changes
 
@@ -647,8 +647,9 @@ after the events in between and never delivered them. When the storage holds a n
 `CheckpointWriteConditionNotFulfilledException`, and under `CompetingConsumerSubscriptionModel` it returns and the
 subscription waits for the lease, as for a first position above.
 
-A plain `resumeSubscription(id)` that resumes at the stored checkpoint stores this node's version with it the same way
-before it resumes. When the storage holds a newer version, it throws `CheckpointWriteConditionNotFulfilledException`,
+A plain `resumeSubscription(id)` stores this node's version with the stored checkpoint the same way before it resumes.
+That includes a resume where the wrapped model goes on from its own position, because the stored checkpoint is still
+the one stored before a subscribe at a checkpoint of the caller's own. When the storage holds a newer version, it throws `CheckpointWriteConditionNotFulfilledException`,
 nothing is resumed and the subscription stays paused. When `CompetingConsumerSubscriptionModel` resumes the
 subscription because this node got the lease, it gives the lease back and the node stays a candidate for it.
 

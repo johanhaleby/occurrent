@@ -146,7 +146,7 @@ class DurableSubscriptionModelPlainResumeWriteVersionTest {
     }
 
     @Test
-    void a_plain_resume_when_the_stored_checkpoint_is_still_the_one_stored_before_the_subscriptions_own_start_stores_no_version_and_leaves_the_resume_to_the_wrapped_model() {
+    void a_plain_resume_when_the_stored_checkpoint_is_still_the_one_stored_before_the_subscriptions_own_start_stores_this_nodes_version_with_it_and_leaves_the_resume_to_the_wrapped_model() {
         storage.delegate.save(SUBSCRIPTION_ID, STORED_BEFORE_THE_OWN_START);
         DurableSubscriptionModel durable = pausedAfterSubscribingAtStart();
         int resolversBefore = storage.threeArgumentResolverCalls.get();
@@ -155,11 +155,47 @@ class DurableSubscriptionModelPlainResumeWriteVersionTest {
         durable.resumeSubscription(SUBSCRIPTION_ID);
 
         assertAll(
-                () -> assertThat(storage.threeArgumentResolverCalls).as("calls of the three-argument resolver by the resume").hasValue(resolversBefore),
+                () -> assertThat(storage.threeArgumentResolverCalls).as("calls of the three-argument resolver by the resume").hasValue(resolversBefore + 1),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
                 () -> assertThat(storage.conditionsSaved).as("saves by the resume").hasSize(savesBefore),
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(STORED_BEFORE_THE_OWN_START.asString()),
                 () -> assertThat(wrapped.plainResumes).as("plain resumes of the wrapped model").hasValue(1),
                 () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").isEmpty()
+        );
+    }
+
+    @Test
+    void a_save_by_the_node_that_stored_the_checkpoint_before_the_subscriptions_own_start_with_an_older_version_is_refused_after_a_plain_resume_that_leaves_the_resume_to_the_wrapped_model() {
+        storage.delegate.save(SUBSCRIPTION_ID, STORED_BEFORE_THE_OWN_START, CheckpointWriteCondition.notOlderThan(1));
+        DurableSubscriptionModel durable = pausedAfterSubscribingAtStart();
+
+        durable.resumeSubscription(SUBSCRIPTION_ID);
+
+        Throwable thrown = catchThrowable(() -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale-node-position"), CheckpointWriteCondition.notOlderThan(1)));
+        assertAll(
+                () -> assertThat(thrown).as("save with the older version").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(STORED_BEFORE_THE_OWN_START.asString()),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
+                () -> assertThat(wrapped.plainResumes).as("plain resumes of the wrapped model").hasValue(1),
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").isEmpty()
+        );
+    }
+
+    @Test
+    void a_second_plain_resume_after_a_pause_still_leaves_the_resume_to_the_wrapped_model_when_the_first_stored_this_nodes_version_with_the_checkpoint_stored_before_the_subscriptions_own_start() {
+        storage.delegate.save(SUBSCRIPTION_ID, STORED_BEFORE_THE_OWN_START, CheckpointWriteCondition.notOlderThan(1));
+        DurableSubscriptionModel durable = pausedAfterSubscribingAtStart();
+        durable.resumeSubscription(SUBSCRIPTION_ID);
+        durable.pauseSubscription(SUBSCRIPTION_ID);
+
+        durable.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertAll(
+                () -> assertThat(wrapped.plainResumes).as("plain resumes of the wrapped model").hasValue(2),
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").isEmpty(),
+                () -> assertThat(wrapped.isPaused(SUBSCRIPTION_ID)).as("subscription paused").isFalse(),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(STORED_BEFORE_THE_OWN_START.asString()),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
         );
     }
 
