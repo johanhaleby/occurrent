@@ -295,13 +295,11 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
         publishLock.lock();
         try {
             closed = true;
-            if (channel.isOpen()) {
-                try {
-                    channel.close();
-                } catch (AlreadyClosedException ignored) {
-                    // The connection or channel can close after isOpen() and before close(). It is already in the
-                    // state this method is trying to put it in, so there is nothing left to tear down.
-                }
+            try {
+                channel.close();
+            } catch (AlreadyClosedException ignored) {
+                // Closing is still needed on a closed channel, since a recovering channel is only unregistered by
+                // its close. A channel or connection that is already closed is where this method is heading anyway.
             }
         } finally {
             publishLock.unlock();

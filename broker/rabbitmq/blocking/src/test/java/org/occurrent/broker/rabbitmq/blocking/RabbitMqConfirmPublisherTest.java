@@ -118,7 +118,7 @@ class RabbitMqConfirmPublisherTest {
     }
 
     @Test
-    void close_skips_a_channel_that_is_already_closed() throws Exception {
+    void close_still_closes_a_channel_that_reports_closed_and_returns_normally_when_that_throws_AlreadyClosedException() throws Exception {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
@@ -128,7 +128,7 @@ class RabbitMqConfirmPublisherTest {
 
         assertThatCode(publisher::close).doesNotThrowAnyException();
 
-        verify(channel, never()).close();
+        verify(channel).close();
     }
 
     @Test
@@ -145,7 +145,7 @@ class RabbitMqConfirmPublisherTest {
     }
 
     @Test
-    void close_ignores_an_AlreadyClosedException_when_the_channel_closes_after_the_open_check() throws Exception {
+    void close_ignores_an_AlreadyClosedException_thrown_by_the_channel_close() throws Exception {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
