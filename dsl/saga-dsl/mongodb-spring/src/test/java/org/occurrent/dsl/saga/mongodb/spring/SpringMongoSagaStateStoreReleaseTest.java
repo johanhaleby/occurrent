@@ -597,7 +597,7 @@ class SpringMongoSagaStateStoreReleaseTest {
         List<String> warnings = warningsLoggedBy(() -> store.delete("order-warn-1"));
 
         assertThat(warnings).singleElement().satisfies(warning -> assertThat(warning)
-                .isEqualTo("Saga instance 'order-warn-1' is deleted while it is quarantined, and with it the 2 inputs it recorded as skipped under quarantine '" + QUARANTINE_ID + "'. No release can replay them any more."));
+                .isEqualTo("Deleting saga instance 'order-warn-1', which is quarantined under '" + QUARANTINE_ID + "', deletes the 2 inputs it recorded as skipped with it. Once that delete commits, no release can replay them."));
     }
 
     @Test

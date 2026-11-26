@@ -1017,8 +1017,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // so they are stored as a string tagged with the class to restore. A String with an unpaired surrogate, which BSON's
     // UTF-8 can't hold, is stored as its UTF-16 code units. A Number of a class BSON doesn't hold comes as the
     // SkippedInputNumber a release hands back. A subclass of BigInteger or BigDecimal is stored as the plain BigInteger or
-    // BigDecimal a release hands back, and any other is stored tagged with its class as the Long, BigDecimal or Double a release hands back, a BigDecimal as its
-    // decimal string. Any other value is stored as it is
+    // BigDecimal a release hands back, and any other is stored tagged with its class as the Long, BigDecimal or Double a
+    // release hands back, a BigDecimal as its decimal string. Any other value is stored as it is
     private static Object heldExtension(Object value) {
         return switch (value) {
             case String string when !isWellFormed(string) -> taggedExtension(EXTENSION_UTF16, utf16(string));
@@ -1140,13 +1140,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an {@code AtomicLong} or a subclass of
      * {@code BigDecimal}, comes back as another class. A subclass of {@code BigInteger} or {@code BigDecimal} comes back as
      * a plain {@code BigInteger} or {@code BigDecimal} with its value, and a {@code BigDecimal} keeps its scale. Any other
-     * comes back with its value as a {@code Long} when the value is an
-     * integer that fits in one, and otherwise as a {@code BigDecimal} with its value and scale. Its value is the decimal
-     * its {@code toString} writes, which is how Jackson writes such a number. When {@code toString} doesn't write a
-     * decimal, as for {@code NaN} or an infinity, it comes back as its {@code doubleValue}, a {@code Double}. The store
-     * reads the number once. {@code InMemorySagaStateStore} hands such a number back as the same class. Once the record is
-     * inserted, the store logs a warning that names the instance, the input, the extension, the delivered class and the
-     * class a release hands back, and never the value.
+     * comes back with its value as a {@code Long} when the value is an integer that fits in one, and otherwise as a
+     * {@code BigDecimal} with its value and scale. Its value is the decimal its {@code toString} writes, which is how
+     * Jackson writes such a number. When {@code toString} doesn't write a decimal, as for {@code NaN} or an infinity, it
+     * comes back as its {@code doubleValue}, a {@code Double}. The store reads the number once.
+     * {@code InMemorySagaStateStore} hands such a number back as the same class. Once the record is inserted, the store
+     * logs a warning that names the instance, the input, the extension, the delivered class and the class a release
+     * hands back, and never the value.
      * <p>
      * Before it writes anything, this encodes the record to BSON the way MongoDB stores it, decodes it, and reads the
      * event back the way a release reads it. It writes the copy of the record it checked, decoded from the record's BSON,
@@ -1155,18 +1155,20 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * check is recorded as it was first read. When the data doesn't come back as the same values of the same classes, or
      * doesn't encode at all, the record holds the data's bytes in BSON binary instead, next to the name of the data's
      * class, and once the record is inserted the store logs a warning that names the instance, the input and the
-     * difference. A release then hands
-     * the converter a {@code JsonCloudEventData} read from those bytes when the data was one, and a
-     * {@link BytesCloudEventData} for data of any other class. The bytes are read the way the CloudEvents JSON format
-     * with its default options reads them and not by the format the application registered, so an option such as
-     * {@code withForceJsonDataToBase64()} doesn't turn the data into bytes. When a {@code double} can't hold one of
-     * the decimal numbers, every decimal number in the data is read as a {@code BigDecimal}, so a number comes back
-     * with its value, though {@code 1.10} may come back as {@code 1.1}. A map with a {@code BigDecimal} or a key
-     * that isn't a {@code String} at any depth is held this way, and so is a {@code JsonCloudEventData}.
+     * difference. A release then hands the converter a {@code JsonCloudEventData} read from those bytes when the data
+     * was one, and a {@link BytesCloudEventData} for data of any other class. The bytes are read the way the CloudEvents
+     * JSON format with its default options reads them and not by the format the application registered, so an option
+     * such as {@code withForceJsonDataToBase64()} doesn't turn the data into bytes. When a {@code double} can't hold one
+     * of the decimal numbers, every decimal number in the data is read as a {@code BigDecimal}, so a number comes back
+     * with its value, though {@code 1.10} may come back as {@code 1.1}. A map with a {@code BigDecimal} or a key that
+     * isn't a {@code String} at any depth is held this way, and so is a {@code JsonCloudEventData}.
      * <p>
      * Inside a MongoDB transaction of the caller's, the store logs both warnings once the record is written in that
-     * transaction, before the caller commits it. When the caller rolls back, the warning is for a record that was never kept, and
-     * a redelivery of the event logs it again.
+     * transaction, before the caller commits it. When the caller then rolls back, the warning is for a record that was
+     * never kept, and the store logs one again only when a redelivery records the event. Outside such a transaction, it
+     * logs them once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the
+     * commit still fails after the retries the store's {@code RetryStrategy} allows, the store throws and logs neither
+     * warning. When that commit took effect, a redelivery finds the key recorded and logs none either.
      * <p>
      * A record that doesn't fit in one document, or in the write that sends it, is encoded to BSON and split across
      * chunks of 8 MiB in the collection named after the instances with {@code _skipped_input_chunks} appended. The
@@ -1220,7 +1222,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 return inserted[0];
             });
             // Only for a record this write inserted, so a refused event, a lost compare-and-set and a key recorded before
-            // warn nothing. Inside a transaction of the caller's that is before the caller commits, so a rollback still warns
+            // warn nothing. Inside a transaction of the caller's this runs before the caller commits, so after a rollback
+            // the warning is for a record that was never kept
             if (saved && inserted[0]) {
                 held.warnings().forEach(Runnable::run);
             }
@@ -1368,7 +1371,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             }
             String releasedData = described(restored.getData());
             String reason = asDelivered;
-            warnings.add(() -> log.warn("Saga instance '{}' holds the data of the input '{}' it skips as its bytes, so a release hands it to the converter as {}. {}.",
+            // Worded so it holds before a caller's transaction commits, as the number's warning is
+            warnings.add(() -> log.warn("Saga instance '{}' can hold the data of the input '{}' it skips only as its bytes, so a release hands it to the converter as {}. {}.",
                     sagaId, input.key(), releasedData, reason));
             held = asBytes;
         }
@@ -1745,6 +1749,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         fields.forEach(field -> query.fields().include(field));
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * For an instance with a quarantine id, the store logs a warning that names the instance, the quarantine id and the
+     * number of records it deletes with it. Inside a MongoDB transaction of the caller's, it logs it before the caller
+     * commits, so a rollback can leave a warning for a delete that was never kept. Outside such a transaction, it logs
+     * it once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the commit still
+     * fails after the retries the store's {@code RetryStrategy} allows, the store throws and logs no warning.
+     */
     @Override
     public void delete(String sagaId) {
         joiningCallersTransaction(() -> {
@@ -1773,10 +1786,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 deletedRecords.set(quarantineId == null ? 0 : deleteRecords(database, quarantineFilter(sagaId, quarantineId)));
                 return true;
             });
-            // Inside a transaction of the caller's this logs a delete the caller may still roll back
+            // Inside a transaction of the caller's this logs a delete the caller may still roll back, so the message
+            // holds before the commit
             if (deletedQuarantineId.get() != null) {
-                log.warn("Saga instance '{}' is deleted while it is quarantined, and with it the {} inputs it recorded as skipped under quarantine '{}'. "
-                         + "No release can replay them any more.", sagaId, deletedRecords.get(), deletedQuarantineId.get());
+                log.warn("Deleting saga instance '{}', which is quarantined under '{}', deletes the {} inputs it recorded as skipped with it. "
+                         + "Once that delete commits, no release can replay them.", sagaId, deletedQuarantineId.get(), deletedRecords.get());
             }
             return null;
         });

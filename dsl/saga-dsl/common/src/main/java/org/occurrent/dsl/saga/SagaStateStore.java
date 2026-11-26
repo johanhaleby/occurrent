@@ -143,9 +143,9 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * A store that implements {@link SagaStateStoreSkippedInputs} also deletes the records under the quarantine id the
      * deleted instance had, in the same atomic write as the instance. A record of a quarantined instance can be the only
      * copy of an input the subscription has already acknowledged, so deleting such an instance discards the inputs it
-     * skipped, and no release can replay them. The MongoDB store logs a warning when it does. A TTL index or any job that
-     * removes instances from the database without this method deletes none of their records, so no release can replay
-     * those inputs, and the records stay in the database with no instance. For the MongoDB store they are in the
+     * skipped, and no release can replay them. A TTL index or any job that removes instances from the database without
+     * this method deletes none of their records, so no release can replay those inputs, and the records stay in the
+     * database with no instance. For the MongoDB store they are in the
      * collections named after the instances with {@code _skipped_inputs} and {@code _skipped_input_chunks} appended. So
      * leave quarantined instances out of such a job, or clean those two collections in it.
      */

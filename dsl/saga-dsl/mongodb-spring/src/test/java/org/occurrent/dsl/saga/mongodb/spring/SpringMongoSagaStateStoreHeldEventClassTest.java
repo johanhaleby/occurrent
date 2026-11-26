@@ -62,7 +62,9 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -232,7 +234,7 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
                 () -> assertThat(read.toBytes()).as("the delivered bytes").isEqualTo(delivered),
                 () -> assertThat(new ObjectMapper().readValue(read.toBytes(), Map.class).get("holder-key-3f9a")).as("the String the bytes decode to").isEqualTo("a\uD800b"),
                 () -> assertThat(held.warnings()).singleElement().satisfies(warning -> assertThat(warning)
-                        .contains("holds the data of the input '" + KEY + "' it skips as its bytes")
+                        .contains("can hold the data of the input '" + KEY + "' it skips only as its bytes")
                         .contains("The value at 'entry 1' of its data, a java.lang.String, comes back as ")
                         .doesNotContain("holder-key-3f9a").doesNotContain("\uD800"))
         );
@@ -339,7 +341,7 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
         List<String> warnings = appender.list.stream().filter(logged -> logged.getLevel() == Level.WARN)
                 .map(ILoggingEvent::getFormattedMessage).toList();
         assertThat(warnings).singleElement().satisfies(warning -> assertThat(warning)
-                .contains("holds the data of the input '" + KEY + "' it skips as its bytes")
+                .contains("can hold the data of the input '" + KEY + "' it skips only as its bytes")
                 .contains("The value at 'entry 1 > entry 0' of its data, a java.math.BigDecimal, comes back as a ")
                 .doesNotContain("balance-key-4c8d").doesNotContain("holder-key-7b2e").doesNotContain("9876543210"));
     }
@@ -683,6 +685,34 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
     }
 
     @Test
+    void the_warning_for_a_number_is_logged_before_the_callers_transaction_ends_and_again_when_the_input_is_delivered_again_after_that_transaction_rolled_back() {
+        CloudEvent event = baseEvent().withExtension("number", (Number) new AtomicLong(1_234_567)).build();
+        StoredSaga instance = anInstance();
+        SkippedInput input = new SkippedInput(1, KEY, event);
+        AtomicReference<List<String>> warningsInTransaction = new AtomicReference<>();
+        AtomicReference<Boolean> savedInTransaction = new AtomicReference<>();
+
+        new TransactionTemplate(new MongoTransactionManager(template.getMongoDatabaseFactory())).executeWithoutResult(status -> {
+            warningsInTransaction.set(warningsLoggedBy(() -> savedInTransaction.set(stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, input))));
+            status.setRollbackOnly();
+        });
+        long recordsAfterRollback = template.getCollection(SKIPPED_INPUTS).countDocuments();
+        AtomicReference<Boolean> savedAgain = new AtomicReference<>();
+        // A rollback discards the record, not the log line, so the redelivery logs the warning a second time
+        List<String> warningsOfRedelivery = warningsLoggedBy(() -> savedAgain.set(stateStore.compareAndSaveSkipped(instance, 1, QUARANTINE_ID, input)));
+
+        assertAll(
+                () -> assertThat(savedInTransaction.get()).as("saved in the callers transaction").isTrue(),
+                () -> assertThat(warningsInTransaction.get()).as("the warnings logged before the callers transaction ended").containsExactly(warning("number", AtomicLong.class, Long.class)),
+                () -> assertThat(recordsAfterRollback).as("the records after the rollback").isZero(),
+                () -> assertThat(savedAgain.get()).as("saved again after the rollback").isTrue(),
+                () -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("the records after the redelivery").isEqualTo(1),
+                () -> assertThat(stateStore.findSkippedInputs(ORDER, QUARANTINE_ID, 10)).as("the recorded inputs").extracting(SkippedInput::key).containsExactly(KEY),
+                () -> assertThat(warningsOfRedelivery).as("the warnings of the redelivery").containsExactly(warning("number", AtomicLong.class, Long.class))
+        );
+    }
+
+    @Test
     void no_warning_for_data_held_as_its_bytes_is_logged_when_the_compare_and_set_loses_because_the_expected_version_is_wrong() {
         CloudEvent event = eventWithDataHeldAsBytes();
         StoredSaga instance = anInstance();
@@ -708,7 +738,7 @@ class SpringMongoSagaStateStoreHeldEventClassTest {
 
         assertAll(
                 () -> assertThat(template.getCollection(SKIPPED_INPUTS).countDocuments()).as("the records").isEqualTo(1),
-                () -> assertThat(warnings).as("the warnings").singleElement().asString().contains("holds the data of the input '" + KEY + "' it skips as its bytes")
+                () -> assertThat(warnings).as("the warnings").singleElement().asString().contains("can hold the data of the input '" + KEY + "' it skips only as its bytes")
         );
     }
 

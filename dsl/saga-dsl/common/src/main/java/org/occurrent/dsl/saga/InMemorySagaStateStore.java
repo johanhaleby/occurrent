@@ -67,13 +67,13 @@ import static java.util.Objects.requireNonNull;
  * An extension that is a {@code Number} of any class other than {@code Byte}, {@code Short}, {@code Integer},
  * {@code Long}, {@code Float}, {@code Double}, {@code BigInteger}, {@code BigDecimal} and {@code Decimal128}, such as an
  * {@code AtomicLong} or a subclass of {@code BigDecimal}, is held, and handed back by a release, as another class, the
- * same one {@code SpringMongoSagaStateStore} hands back. A subclass of {@code BigInteger} or
- * {@code BigDecimal} is held as a plain {@code BigInteger} or {@code BigDecimal} with its value, and a
- * {@code BigDecimal} keeps its scale. Any other is held as a {@code Long} when its value is an integer that fits in one,
- * and otherwise as a {@code BigDecimal} with its value and scale. Its value is the decimal its {@code toString} writes.
- * When {@code toString} doesn't write a decimal, as for {@code NaN} or an infinity, it's held as its
- * {@code doubleValue}, a {@code Double}. Once it has recorded the input, the store logs a warning that names the instance, the input, the extension, the
- * delivered class and the class a release hands back, and never the value.
+ * same one {@code SpringMongoSagaStateStore} hands back. A subclass of {@code BigInteger} or {@code BigDecimal} is held
+ * as a plain {@code BigInteger} or {@code BigDecimal} with its value, and a {@code BigDecimal} keeps its scale. Any
+ * other is held as a {@code Long} when its value is an integer that fits in one, and otherwise as a {@code BigDecimal}
+ * with its value and scale. Its value is the decimal its {@code toString} writes. When {@code toString} doesn't write a
+ * decimal, as for {@code NaN} or an infinity, it's held as its {@code doubleValue}, a {@code Double}. Once it has
+ * recorded the input, the store logs a warning that names the instance, the input, the extension, the delivered class
+ * and the class a release hands back, and never the value.
  * <p>
  * Data it can't copy is held as its bytes, and every read rebuilds it the way {@code SpringMongoSagaStateStore} rebuilds
  * data it holds as bytes. A {@code JsonCloudEventData} comes back as a {@code JsonCloudEventData} read from those bytes

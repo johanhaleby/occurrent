@@ -453,8 +453,11 @@ such as for `NaN` or an infinity. The value is the decimal the number's `toStrin
 number's `doubleValue`. Once the record is written, the store logs a `WARN` that names the instance, the input, the
 extension, the delivered class and the class a release hands back. It logs nothing for an event it refuses, a write
 that loses its compare-and-set, or an event whose key it has recorded already. Inside a MongoDB transaction of yours,
-it logs once the record is written in that transaction, before you commit it. When you roll back, the `WARN` is for a
-record that was never kept, and a redelivery logs it again. The MongoDB event store never delivers such an extension,
+it logs once the record is written in that transaction, before you commit it. When you then roll back, the `WARN` is for a
+record that was never kept, and the store logs one again only when a redelivery records the event. Outside such a
+transaction, it logs once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the
+commit still fails after the retries the store's `RetryStrategy` allows, the store throws and logs no `WARN`. When that
+commit took effect, a redelivery finds the key recorded and logs none either. The MongoDB event store never delivers such an extension,
 so it comes from an in-memory event store or one of your own. `InMemorySagaStateStore` hands such an extension back by
 the same rule and logs the same `WARN`, and it hands a `Decimal128` extension back as the same `Decimal128`.
 
@@ -465,8 +468,9 @@ check doesn't reach the record. It reads each extension once and checks a copy o
 application changes during the check is recorded as it was first read. When the data read back isn't
 the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
 name of the data's class in `dataClass`, and once the record is written the store logs a `WARN` that names the
-instance, the input and the difference. Inside a MongoDB transaction of yours, it logs that `WARN` before you commit
-too. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
+instance, the input and the difference. It logs that `WARN` at the same point as the `WARN` for a number, inside a
+MongoDB transaction of yours and outside one, and logs neither when it throws on a commit whose result MongoDB can't
+tell. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
 doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
 `BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
 those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
@@ -540,7 +544,9 @@ transaction on MongoDB, so a correlation id that keeps receiving events costs a 
 Deleting a quarantined instance deletes the only copy the saga keeps of what it skipped. The records hold the events the instance
 skipped, and both deletes below remove them with the instance, so nothing can apply those events afterwards. Release
 the instance in step 5 instead when any of them matter. The Java delete logs a `WARN` with the number of records it
-deleted, and the shell commands log nothing. A TTL index or a retention job that removes instances from the
+deletes, and the shell commands log nothing. Inside a MongoDB transaction of yours, the Java delete logs it before you
+commit, so a rollback can leave a `WARN` for a delete that was never kept. When the store throws on a commit of its own
+whose result MongoDB can't tell, it logs none. A TTL index or a retention job that removes instances from the
 collection deletes none of their records. The records and their chunks stay with no instance, where no release can
 replay them and nothing deletes them, so keep quarantined instances out of such a job.
 

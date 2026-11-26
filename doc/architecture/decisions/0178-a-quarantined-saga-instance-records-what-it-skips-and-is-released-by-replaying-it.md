@@ -147,9 +147,12 @@ decimal, such as `NaN` or an infinity, comes back as its `doubleValue`, a `Doubl
 store logs a `WARN` that names the instance, the input, the extension, the delivered class and the class a release
 hands back, and not the value. It logs nothing for an event it refuses, a write that loses its compare-and-set, or an
 event whose key it has recorded already. Inside a MongoDB transaction of the caller's, it logs once the record is
-written in that transaction, before the caller commits it. When the caller rolls back, the `WARN` is for a record that
-was never kept, and a redelivery logs it again. Logging after the commit instead would need a hook that a transaction on a
-session from `MongoTemplate.withSession` doesn't have, and the `WARN` only goes to the log. A release can't hand back the delivered class,
+written in that transaction, before the caller commits it. When the caller then rolls back, the `WARN` is for a record
+that was never kept, and the store logs one again only when a redelivery records the event. Logging after the commit instead would need a hook that a transaction on a
+session from `MongoTemplate.withSession` doesn't have, and the `WARN` only goes to the log. Outside such a transaction,
+the store logs once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the
+commit still fails after the retries the store's `RetryStrategy` allows, the store throws and logs no `WARN`. When that
+commit took effect, a redelivery finds the key recorded and logs none either. A release can't hand back the delivered class,
 since `Number` has no way to build one from a value, and refusing the event would stop the subscription for every
 instance of the saga. The MongoDB event store never delivers such an extension, since it hands back every extension as
 an `Integer`, a `Long`, a `Boolean` or a `String`, so such an event comes from an in-memory event store or one of your
@@ -194,8 +197,9 @@ The check compares the data it reads back from the bytes with the data a release
 `JsonCloudEventData`, its JSON value at every depth. A number equals a number of the same value whatever its node
 class, and any other value equals only an equal value of the same node class. Once the record is written, the store
 logs a warning that names the instance, the input and the difference, since the converter then gets bytes where it was
-delivered a map or an object. Inside a MongoDB transaction of the caller's, it logs that warning before the caller
-commits, as it does the `WARN` for a number.
+delivered a map or an object. It logs that warning at the same point as the `WARN` for a number, inside a MongoDB
+transaction of the caller's and outside one, and logs neither when it throws on a commit whose result MongoDB can't
+tell.
 
 A record that doesn't fit in one document, at most 16 MiB, or in the write that sends it, at most 16 MiB and 16 KiB
 with its filter, is encoded to BSON and split into chunks of 8 MiB. Each chunk is a document in a collection named
@@ -759,7 +763,9 @@ The upgrade guide has the procedure for operators, in
   in the store, and nothing reads or deletes them, since a release, a completion and a delete all go by the instance's
   current quarantine id. A 0.34.0 `delete` after a downgrade removes none of the records.
 - Deleting a quarantined instance deletes the only copy the saga has of the events it skipped. On a push source that
-  can be the only copy there is. The MongoDB store logs a WARN with the number of records it deleted. A TTL index or a
+  can be the only copy there is. The MongoDB store logs a WARN with the number of records it deletes. Inside a MongoDB
+  transaction of the caller's, it logs it before the caller commits, so a rollback can leave a WARN for a delete that
+  was never kept. When the store throws on a commit of its own whose result MongoDB can't tell, it logs none. A TTL index or a
   job that removes instances in the database deletes none of their records. The records and their chunks stay in the
   database with no instance, where no release can replay them and nothing deletes them.
 - An event erased from the event store while an instance holds it, for a GDPR request for example, stays in its record

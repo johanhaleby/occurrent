@@ -38,14 +38,15 @@ import java.util.Optional;
  * {@code BigInteger} or {@code BigDecimal} with its value, and a {@code BigDecimal} keeps its scale. It hands back any
  * other such number as a {@code Long} when the decimal its {@code toString} writes is an integer that fits in one, and
  * otherwise as a {@code BigDecimal} with the value and scale of that decimal. When {@code toString} doesn't write a
- * decimal, as for {@code NaN} or an infinity, the store hands back its {@code doubleValue} as a {@code Double}. Once it
- * has written the record of the input, it logs a warning that names both classes and never the value. A store that
- * writes in a transaction of the caller's logs it before the caller commits, so the warning is logged even when the caller rolls back. A map or a list inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't
- * hold the data that way may hold its bytes instead, and then returns a {@code JsonCloudEventData} read from those
- * bytes with the same JSON value for data that was one, and a {@code BytesCloudEventData} with the same bytes for data
- * of any other class. A number in the JSON keeps its value but not always its node class, so {@code 1.10} may come back
- * as {@code 1.1}. The
- * saga keeps no other copy of a skipped event.
+ * decimal, as for {@code NaN} or an infinity, the store hands back its {@code doubleValue} as a {@code Double}. It logs
+ * a warning that names both classes and never the value, and only for an input it writes the record of. A store that
+ * writes in a transaction of the caller's may log it before the caller commits, so a rollback can leave a warning for a
+ * record that was never kept. A call that throws may log none, even when the record was written. A map or a list
+ * inside the data may come back as another implementation of {@code Map} or {@code List}. A store that can't hold the
+ * data that way may hold its bytes instead, and then returns a {@code JsonCloudEventData} read from those bytes with
+ * the same JSON value for data that was one, and a {@code BytesCloudEventData} with the same bytes for data of any
+ * other class. A number in the JSON keeps its value but not always its node class, so {@code 1.10} may come back as
+ * {@code 1.1}. The saga keeps no other copy of a skipped event.
  * <p>
  * Every write of a record is one of the three {@code compareAndSave} methods here, and each writes the instance and its
  * records together, in one atomic write. The instance is saved only when its stored version is the expected one, and
