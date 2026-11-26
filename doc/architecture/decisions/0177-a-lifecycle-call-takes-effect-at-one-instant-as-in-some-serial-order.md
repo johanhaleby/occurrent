@@ -221,9 +221,14 @@ resume made once the stop had returned would.
 
 A `start(true)` makes the same read before its turn for every subscription it may resume, one thread per
 subscription, and waits up to 10 seconds for those reads. In its turn it resumes each subscription whose read came in
-time and is still current. It resumes every other one once its turn is over, without the lock, reading again, unless a
-`stop()` or a `shutdown()` came after the turn. So the `start(true)` returns only once those resumes have returned, but
-it holds the lock for none of them.
+time and is still current. It resumes every other one once its turn is over, without the lock, unless a `stop()` or a
+`shutdown()` came after the turn. It does so also when a resume in its turn threw. Each of those resumes runs on a
+thread of its own, at the same time as the others, so a checkpoint storage that never answers for X holds up the
+resume of X and no other. A resume whose read didn't come in time waits for that read and resumes from it. It reads
+again when that read failed, or when its subscription's registration or stored position changed after the read
+began. So the `start(true)` returns only once those resumes have returned or thrown, but it holds the lock for none
+of them. From an action, the lifecycle thread hands each of them over as described next, starts them all at once, and
+waits at most 10 seconds in all for them to begin.
 
 A call for X that an action handed over, a subscribe, a resume, a positioned resume, a pause or a cancel, runs on a
 thread of its own without the model lock, as the same call made from another thread does. The lifecycle thread waits
