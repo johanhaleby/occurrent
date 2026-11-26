@@ -118,25 +118,10 @@ class RabbitMqConfirmPublisherTest {
     }
 
     @Test
-    void close_still_closes_a_channel_that_reports_closed_and_returns_normally_when_that_throws_AlreadyClosedException() throws Exception {
+    void close_closes_the_channel() throws Exception {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
-        when(channel.isOpen()).thenReturn(false);
-        doThrow(alreadyClosed(channel)).when(channel).close();
-        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
-
-        assertThatCode(publisher::close).doesNotThrowAnyException();
-
-        verify(channel).close();
-    }
-
-    @Test
-    void close_closes_an_open_channel() throws Exception {
-        Connection connection = mock(Connection.class);
-        Channel channel = mock(Channel.class);
-        when(connection.openChannel()).thenReturn(Optional.of(channel));
-        when(channel.isOpen()).thenReturn(true);
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
 
         publisher.close();
@@ -145,11 +130,10 @@ class RabbitMqConfirmPublisherTest {
     }
 
     @Test
-    void close_ignores_an_AlreadyClosedException_thrown_by_the_channel_close() throws Exception {
+    void close_returns_normally_when_the_channel_close_throws_AlreadyClosedException() throws Exception {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
-        when(channel.isOpen()).thenReturn(true);
         doThrow(alreadyClosed(channel)).when(channel).close();
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
 
@@ -167,7 +151,6 @@ class RabbitMqConfirmPublisherTest {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
-        when(channel.isOpen()).thenReturn(true);
         doThrow(new ShutdownSignalException(true, false, null, channel)).when(channel).close();
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
 
@@ -181,7 +164,6 @@ class RabbitMqConfirmPublisherTest {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
-        when(channel.isOpen()).thenReturn(true);
         IOException closeFailure = new IOException("close failed");
         doThrow(closeFailure).when(channel).close();
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
@@ -198,7 +180,6 @@ class RabbitMqConfirmPublisherTest {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class);
         when(connection.openChannel()).thenReturn(Optional.of(channel));
-        when(channel.isOpen()).thenReturn(true);
         TimeoutException closeFailure = new TimeoutException("close timed out");
         doThrow(closeFailure).when(channel).close();
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
@@ -232,7 +213,6 @@ class RabbitMqConfirmPublisherTest {
             return Optional.of(retiringChannel);
         });
         when(retiringChannel.isOpen()).thenReturn(true);
-        when(replacementChannel.isOpen()).thenReturn(true);
         when(retiringChannel.waitForConfirms(anyLong())).thenThrow(new TimeoutException("confirm timed out"));
         RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofMillis(50));
         BasicProperties properties = new BasicProperties.Builder().contentType("text/plain").build();
