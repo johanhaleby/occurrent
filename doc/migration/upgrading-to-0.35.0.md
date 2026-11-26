@@ -2442,21 +2442,26 @@ skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` u
 does `start(true)` on the blocking stack. With more than one instance, stop every instance and delete or replace the
 checkpoint stored for the subscription, if there is one, instead of cancelling, as
 [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
-describes. A reactor `start(true)` keeps it held paused and replays nothing. On a
-blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
+describes. A reactor `start(true)` keeps it held paused and replays nothing.
+
+On a blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
 stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
-when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. While
-a replay that `subscribe(..)` started is still running for a subscription paused during that replay, the resume stores
-nothing and reads no present position, since that replay reads the stored position to decide where it goes live from.
+when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. On
+the instance whose `subscribe(..)` started the held replay, a position a restart starts from is stored over whatever
+was stored, a resume token another instance stored too, and also when nothing was.
+
+While a replay that `subscribe(..)` started is still running for a subscription paused during that replay, the resume
+stores nothing and reads no present position, since that replay reads the stored position to decide where it goes live
+from.
 
 A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
 catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
 from without a live start is stored with the present position as its live start, in the new form, which 0.34 refuses.
 A DCB catch-up replays only from a position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a
 resume at a time stores nothing. A `GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model
-doesn't restart at, store nothing, so the position the catch-up stored stays. A resume that needs the present position
-to store, such as one at `StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event
-store nor the MongoDB model answers one.
+doesn't restart at, store nothing, so what is stored stays. A resume that needs the present position to store, such as
+one at `StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event store nor the MongoDB
+model answers one.
 
 A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
@@ -3125,25 +3130,22 @@ and the resume throws `CheckpointWriteConditionNotFulfilledException`, as
 [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint)
 describes.
 
-Over a resume token, a resume at a catch-up position, a `GlobalCheckpoint` or a time stores nothing, so the token stays.
-The exception is an instance whose subscription never went live, because the replay its `subscribe(..)` started lost
-its live start and the instance holds the subscription paused. That instance stores what
-[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) says, as
-every instance does when the stored checkpoint is a position a catch-up stored.
+Over a stored resume token, a resume at a catch-up position, a `GlobalCheckpoint` or a time stores nothing, so the
+token stays. The exception is an instance whose subscription never went live, because the replay its `subscribe(..)`
+started lost its live start and the instance holds the subscription paused. That instance stores what
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) says,
+also over the token.
 
-Another instance that paused the subscription when it lost the history too stays paused, and its
-`resumeSubscription(id)` keeps throwing `CatchupCannotResumeException`. Restart it with a start that reads the stored
-checkpoint, such as the subscription model default, and it goes on from what the resumed instance stored.
+Another instance that paused the subscription when the history of the stored resume token was lost stays paused, and
+its `resumeSubscription(id)` keeps throwing `CatchupCannotResumeException`. Restart it with a start that reads the
+stored checkpoint, such as the subscription model default.
 
-When the resumed instance stored nothing, neither at the resume nor for an event since, the restart reads the
-checkpoint stored before the resume. Over a resume token whose history is gone,
+When the stored checkpoint is a resume token whose history is gone,
 [A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
-describes what the restart does.
-
-Over a catch-up position whose live start is gone, the restart replays from it when the replay that stored it started
-at position 0 or the beginning of time. When that replay started later, the restart is refused or held paused, as
+describes what the restart does. When it is a catch-up position whose live start is gone,
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) and
 [A catch-up refuses a start that could skip an event committed below it](#a-catch-up-refuses-a-start-that-could-skip-an-event-committed-below-it)
-describes.
+describe it.
 
 When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
 instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its

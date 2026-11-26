@@ -38,6 +38,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
@@ -63,6 +64,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -148,11 +150,11 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         historyLostOff();
         write("gap");
         a.resumeAt(t);
-        awaitStoredToBeTheTokenOf("gap");
+        awaitCheckpointOfEventStored(a, "gap");
         write("w1");
-        awaitStoredToBeTheTokenOf("w1");
+        awaitCheckpointOfEventStored(a, "w1");
         write("w2");
-        awaitStoredToBeTheTokenOf("w2");
+        awaitCheckpointOfEventStored(a, "w2");
         Throwable resumeOfB = catchThrowable(() -> b.catchup.resumeSubscription(subscriptionId));
         quiet();
 
@@ -174,18 +176,18 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         historyLostOff();
         write("gap");
         a.resumeAt(t);
-        awaitStoredToBeTheTokenOf("gap");
+        awaitCheckpointOfEventStored(a, "gap");
         write("w1");
-        awaitStoredToBeTheTokenOf("w1");
+        awaitCheckpointOfEventStored(a, "w1");
         write("w2");
-        awaitStoredToBeTheTokenOf("w2");
+        awaitCheckpointOfEventStored(a, "w2");
 
         // When B is restarted and an event is written
         b.shutdown();
         Instance restartedB = new Instance("B");
         restartedB.start();
         write("w3");
-        awaitStoredToBeTheTokenOf("w3");
+        awaitCheckpointOfEventStored(a, "w3");
         await("w3 is delivered to both").atMost(10, SECONDS).untilAsserted(() -> {
             assertThat(restartedB.ids()).contains("w3");
             assertThat(a.ids()).contains("w3");
@@ -207,11 +209,11 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         historyLostOff();
         write("gap");
         a.resumeAt(t);
-        awaitStoredToBeTheTokenOf("gap");
+        awaitCheckpointOfEventStored(a, "gap");
         write("w1");
-        awaitStoredToBeTheTokenOf("w1");
+        awaitCheckpointOfEventStored(a, "w1");
         write("w2");
-        awaitStoredToBeTheTokenOf("w2");
+        awaitCheckpointOfEventStored(a, "w2");
 
         // When B is resumed at T and its handler is held on the first event it replays, then A is restarted
         b.holdItsHandler();
@@ -239,11 +241,11 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         historyLostOff();
         write("gap");
         a.resumeAt(t);
-        awaitStoredToBeTheTokenOf("gap");
+        awaitCheckpointOfEventStored(a, "gap");
         write("w1");
-        awaitStoredToBeTheTokenOf("w1");
+        awaitCheckpointOfEventStored(a, "w1");
         write("w2");
-        awaitStoredToBeTheTokenOf("w2");
+        awaitCheckpointOfEventStored(a, "w2");
 
         // When B is resumed at T and has delivered what it replays, then A is restarted and an event is written
         b.resumeAt(t);
@@ -253,7 +255,7 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         Instance restartedA = new Instance("A");
         restartedA.start();
         write("w3");
-        awaitStoredToBeTheTokenOf("w3");
+        awaitCheckpointOfEventStored(b, "w3");
         await("w3 is delivered to both").atMost(10, SECONDS).untilAsserted(() -> {
             assertThat(restartedA.ids()).contains("w3");
             assertThat(b.ids()).contains("w3");
@@ -272,17 +274,17 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         historyLostOff();
         write("gap");
         a.resumeAt(t);
-        awaitStoredToBeTheTokenOf("gap");
+        awaitCheckpointOfEventStored(a, "gap");
         write("w1");
-        awaitStoredToBeTheTokenOf("w1");
+        awaitCheckpointOfEventStored(a, "w1");
         write("w2");
-        awaitStoredToBeTheTokenOf("w2");
+        awaitCheckpointOfEventStored(a, "w2");
 
         // When B is cancelled and an event is written
         b.catchup.cancelSubscription(subscriptionId);
         String storedRightAfterTheCancel = label(checkpointStorage.read(subscriptionId));
         write("w3");
-        awaitStoredToBeTheTokenOf("w3");
+        awaitCheckpointOfEventStored(a, "w3");
         quiet();
 
         // Then the checkpoint is gone right after the cancel, and A stores one again for the next event it delivers
@@ -302,7 +304,7 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         write("e1");
         write("e2");
         await("e1 and e2 are delivered").atMost(10, SECONDS).untilAsserted(() -> assertThat(a.ids()).containsExactly("e1", "e2"));
-        awaitStoredToBeTheTokenOf("e2");
+        awaitCheckpointOfEventStored(a, "e2");
         Checkpoint t = new StringBasedCheckpoint(requireNonNull(checkpointStorage.read(subscriptionId)).asString());
         a.shutdown();
         a = new Instance("A");
@@ -312,16 +314,16 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         historyLostOff();
         write("gap");
         a.resumeAt(t);
-        awaitStoredToBeTheTokenOf("gap");
+        awaitCheckpointOfEventStored(a, "gap");
         write("w1");
-        awaitStoredToBeTheTokenOf("w1");
+        awaitCheckpointOfEventStored(a, "w1");
         write("w2");
-        awaitStoredToBeTheTokenOf("w2");
+        awaitCheckpointOfEventStored(a, "w2");
         a.shutdown();
         Instance restarted = new Instance("A");
         restarted.start();
         write("w3");
-        awaitStoredToBeTheTokenOf("w3");
+        awaitCheckpointOfEventStored(restarted, "w3");
         await("w3 is delivered").atMost(10, SECONDS).untilAsserted(() -> assertThat(restarted.ids()).contains("w3"));
 
         // Then it delivers the three events after T, and a restart continues after the last of them
@@ -342,7 +344,7 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
             assertThat(a.ids()).containsExactly("e1", "e2");
             assertThat(b.ids()).containsExactly("e1", "e2");
         });
-        awaitStoredToBeTheTokenOf("e2");
+        awaitCheckpointOfEventStored(a, "e2");
         Checkpoint t = new StringBasedCheckpoint(requireNonNull(checkpointStorage.read(subscriptionId)).asString());
         a.shutdown();
         b.shutdown();
@@ -357,16 +359,13 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
         return t;
     }
 
-    // Waits for a token not seen before to be stored and says it is the position of eventId
-    private void awaitStoredToBeTheTokenOf(String eventId) {
-        await("a checkpoint stored for " + eventId).atMost(10, SECONDS).until(() -> {
+    // Waits for the instance to deliver the event and for the stored checkpoint to be the one delivered with it, never for any checkpoint to exist, as one stored for an earlier event or a quiet position is not the event's
+    private void awaitCheckpointOfEventStored(Instance instance, String eventId) {
+        await("the checkpoint delivered with " + eventId + " is stored").atMost(10, SECONDS).until(() -> {
             Checkpoint stored = checkpointStorage.read(subscriptionId);
-            if (stored == null || eventOfToken.containsKey(stored.asString())) {
-                return false;
-            }
-            eventOfToken.put(stored.asString(), eventId);
-            return true;
+            return stored != null && instance.checkpointDeliveredWith(eventId).map(c -> c.asString().equals(stored.asString())).orElse(false);
         });
+        eventOfToken.put(instance.checkpointDeliveredWith(eventId).orElseThrow().asString(), eventId);
     }
 
     private String label(Checkpoint checkpoint) {
@@ -434,6 +433,10 @@ class ResumeAtAPositionOnOneInstanceOfSeveralAfterHistoryLostTest {
 
         List<String> ids() {
             return delivered.stream().map(CloudEvent::getId).toList();
+        }
+
+        Optional<Checkpoint> checkpointDeliveredWith(String eventId) {
+            return delivered.stream().filter(e -> e.getId().equals(eventId)).findFirst().map(CheckpointAwareCloudEvent::getCheckpointOrThrowIAE);
         }
 
         void shutdown() {
