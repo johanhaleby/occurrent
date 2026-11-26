@@ -600,7 +600,8 @@ An application whose `DurableSubscriptionModel` has a `CheckpointWriteVersionSou
 `CompetingConsumerCheckpointWriteVersionSource` the Spring Boot starter uses for a competing consumer, and either
 records the first position of a subscription that starts at the model default with no checkpoint stored, or
 subscribes from a checkpoint already stored, such as the start position the Spring Boot starter stores for the
-subscription at registration. Compiles unchanged.
+subscription at registration, or resumes a paused subscription at the stored checkpoint with
+`resumeSubscription(id)`. Compiles unchanged.
 
 ### What changes
 
@@ -644,13 +645,18 @@ after the events in between and never delivered them. When the storage holds a n
 `CheckpointWriteConditionNotFulfilledException`, and under `CompetingConsumerSubscriptionModel` it returns and the
 subscription waits for the lease, as for a first position above.
 
+A plain `resumeSubscription(id)` that resumes at the stored checkpoint stores this node's version with it the same way
+before it resumes. When the storage holds a newer version, it throws `CheckpointWriteConditionNotFulfilledException`,
+nothing is resumed and the subscription stays paused. When `CompetingConsumerSubscriptionModel` resumes the
+subscription because this node got the lease, it gives the lease back and the node stays a candidate for it.
+
 ### What to do
 
 If you catch `StartPositionAlreadyPinnedException` from `subscribe` to alert or to subscribe again, a lost race
-against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. So does a
-subscribe from a stored checkpoint whose version is newer than this node's. Under
-`CompetingConsumerSubscriptionModel` the new exception doesn't reach `subscribe`, since the subscription waits for the
-lease.
+against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. So do a
+subscribe and a plain `resumeSubscription(id)` from a stored checkpoint whose version is newer than this node's.
+Under `CompetingConsumerSubscriptionModel` the new exception doesn't reach `subscribe`, since the subscription waits
+for the lease.
 
 A storage of your own that doesn't override the three-argument `resolveFirstCheckpointRace`, or answers it empty,
 gets the `ifAbsent()` write and no version, as in 0.34.0. Until the next checkpoint write stores the version, a node
