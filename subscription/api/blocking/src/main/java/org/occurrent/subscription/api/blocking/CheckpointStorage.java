@@ -216,6 +216,11 @@ public interface CheckpointStorage {
      * such as one written for a delivered event, nothing is written and this answers {@link Optional#empty()}, as the
      * default does.
      * <p>
+     * The blocking {@code DurableSubscriptionModel} also calls this before it starts a subscription from a checkpoint
+     * already stored, with that checkpoint as {@code candidate}, so {@code writeVersion} is stored with it. When this
+     * answers empty, the model reads the stored checkpoint again and calls this with the one it reads, unless that is
+     * {@code candidate} again.
+     * <p>
      * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
      * allow it. When the storage holds a newer version, whatever checkpoint is stored, nothing is written and
      * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
