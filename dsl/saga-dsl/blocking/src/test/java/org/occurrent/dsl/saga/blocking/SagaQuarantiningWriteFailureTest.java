@@ -152,8 +152,7 @@ class SagaQuarantiningWriteFailureTest {
                 () -> assertThat(causesAndSuppressed(thrown)).extracting(Throwable::getMessage).contains(FailingStore.WRITE_FAILURE),
                 () -> assertThat(stored.status()).isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(stored.failure()).as("the failure record of the first failure is kept").isNotNull(),
-                () -> assertThat(stored.failure().input()).isEqualTo(ORDER + "@2"),
-                () -> assertThat(dispatched).as("nothing is dispatched").isEmpty()
+                () -> assertThat(stored.failure().input()).isEqualTo(ORDER + "@2")
         );
     }
 

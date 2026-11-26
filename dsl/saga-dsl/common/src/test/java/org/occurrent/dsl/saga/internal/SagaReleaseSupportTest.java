@@ -593,7 +593,10 @@ class SagaReleaseSupportTest {
 
         @Test
         void applies_a_held_event_without_a_stream_id_and_version_as_it_would_have_been_live() {
-            SagaEnvelope<OrderState> current = quarantined(releasingOn(9), 3L);
+            SagaEnvelope<OrderState> base = quarantined(releasingOn(9), 3L);
+            SagaEnvelope<OrderState> current = new SagaEnvelope<>(base.sagaId(), new AwaitingPayment("other"), base.status(), base.version(), base.timers(), base.streamWatermarks(),
+                    base.positionWatermark(), base.createdAt(), base.updatedAt(), base.completedAt(), base.currentStep(), base.started(), base.failure(), base.streamMarks(),
+                    base.quarantineSkipCount());
 
             Outcome<OrderState, OrderCommand> outcome = replay(current, new SkippedInput(0, "e:1", heldEvent("e:1")), new OrderPlaced("o1"), new EventMeta(null, null, 7L));
 
