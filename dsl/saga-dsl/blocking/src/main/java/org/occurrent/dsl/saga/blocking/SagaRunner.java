@@ -146,6 +146,17 @@ import static java.util.Objects.requireNonNull;
  * Commands are dispatched before the save, and a lost compare-and-set retries the step, so a single input can
  * re-dispatch its whole command list several times (up to {@code maxCasAttempts}). Receivers must be idempotent and
  * tolerate that. See {@link SagaRunnerConfig} and {@link SagaConcurrencyException}.
+ * <p>
+ * Before it dispatches an input's commands, the runner asks the store whether it can write the instance with the input
+ * applied, see {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs#fits}. When the store can't, such as
+ * {@code SpringMongoSagaStateStore} for an instance of more than 16 MiB, no command is dispatched and the input fails
+ * with an {@link IllegalStateException} like any other failing input, so with quarantine on the instance is quarantined
+ * once the input's budget runs out.
+ * <p>
+ * When the store can't write the failure record either, it's written without its message and without listing the event
+ * as pending, so the budget still runs. When even that doesn't fit, nothing is written, the event fails on every delivery
+ * and is never quarantined, and an ERROR names the instance. A store that doesn't implement
+ * {@code SagaStateStoreSkippedInputs} isn't asked, so it dispatches the commands of an input whose save it then fails.
  *
  * @param <E> the domain event type
  * @param <C> the command type

@@ -647,6 +647,33 @@ public final class SagaExecutionSupport {
     }
 
     /**
+     * The smallest write that records the failure of the input {@code meta} names, for when the store cannot write
+     * {@code full}, which {@link #onFailure} returned for {@code current}, or {@code null} when no smaller write records
+     * anything. Save it the way {@code full} is saved.
+     * <p>
+     * The failure record holds no message, and the stream marks get no pending entry for the input, so the input's
+     * clock is on the failure record alone, as it is for an input with no stream. When {@code full} only lists an input
+     * the failure record names already as pending, nothing is left to write, and this returns {@code null}. A write that
+     * quarantines the instance still quarantines it, and a release applies the input whatever the marks say, see
+     * {@link #replay}.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onFailureBare(@Nullable SagaEnvelope<S> current, EventMeta meta, FailureRecord<S> full) {
+        SagaEnvelope<S> written = full.envelope();
+        SagaFailure failure = written.failure();
+        if (failure == null || current != null && failure.equals(current.failure())) {
+            return null;
+        }
+        SagaFailure bare = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(), null,
+                failure.releasedAt(), failure.quarantineId());
+        // As withFailure builds them, without the pending entry
+        Map<String, StreamMarks> streamMarks = current == null ? Map.of()
+                : withReplacedFailure(current.streamMarks(), current.streamWatermarks(), currentFailure(current), meta);
+        return new FailureRecord<>(new SagaEnvelope<>(written.sagaId(), written.state(), written.status(), written.version(), written.timers(),
+                written.streamWatermarks(), written.positionWatermark(), written.createdAt(), written.updatedAt(), written.completedAt(),
+                written.currentStep(), written.started(), bare, streamMarks, written.quarantineSkipCount()), full.expectedVersion(), full.quarantined());
+    }
+
+    /**
      * The instance a further release would write for the record {@code meta} names, once {@code requarantined}, which
      * {@link #onReleaseTooLarge} returned for it, is released again at {@code now}. That is {@code applied}, which the
      * release computed for the record, with the trimmed marks and the failure record the further release starts from,
@@ -980,9 +1007,9 @@ public final class SagaExecutionSupport {
 
     // A failure record names one input, so a different input failing replaces it. A record written before pending
     // existed is then the only memory that its input was never applied, and its event type is not known. It is kept as a
-    // version of the stream, which a stream version identifies exactly. Only such records can get here unlisted, because a
-    // failure recorded now is pending in the same write, so this holds at most the record an instance carried over from
-    // before.
+    // version of the stream, which a stream version identifies exactly. Only two kinds of record get here unlisted, a
+    // record written before pending existed and a record onFailureBare wrote, because a failure recorded any other way is
+    // pending in the same write.
     private static Map<String, StreamMarks> withReplacedFailure(Map<String, StreamMarks> streamMarks, Map<String, Long> streamWatermarks,
                                                                @Nullable SagaFailure replaced, EventMeta meta) {
         if (replaced == null || replaced.input().equals(meta.redeliveryKey())) {

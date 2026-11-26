@@ -1200,12 +1200,15 @@ one listed and from the first id again once a poll lists fewer than `limit`. It 
 which `SagaRunner.run` calls when quarantine is on, before the saga gets its first input. It throws an
 `IllegalStateException` when the store can't make those writes atomic in the database it's connected to, and does
 nothing otherwise. It implements `fits(candidate)`, which a release calls before every write it makes that writes the
-whole instance, and for the write that applies a record before it dispatches the record's commands. It returns `false`
+whole instance, and for the write that applies a record before it dispatches the record's commands. A live input calls it too, for
+the write that applies the input, before it dispatches the input's commands. When it returns `false` there, no command
+is dispatched and the input fails like any other failing input. It returns `false`
 when the store can't write `candidate`, such as an instance whose write would go over a size limit of the store's, and
-`true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a release
-dispatch the commands of a record whose write then fails, on every attempt. It implements
+`true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a live input or
+a release dispatch the commands of an input whose write then fails, on every attempt. It implements
 `fitsWithoutState(saga, expectedVersion)`, which a release calls before every write that leaves the stored state where
-it is, the one that ends the quarantine included. It returns what `fits` returns for the instance as stored with the
+it is, the one that ends the quarantine included. A live input that fails calls it before its failure record, the
+write that lists it as pending and the write that quarantines the instance. It returns what `fits` returns for the instance as stored with the
 fields `compareAndSaveWithoutState` sets taken from `saga`, and `true` when no instance is stored under the id or it is
 stored at another version than `expectedVersion`. It may read the database for that, and it doesn't decode the stored
 state, since a release calls it after a read of the instance failed to decode, and a throw there would leave the
@@ -1662,7 +1665,10 @@ its writes.
 `compareAndSave` and `compareAndSaveWithoutState` stay a single-document write each, and wait until a majority of the
 replica set has the write in its on-disk journal. When a majority doesn't acknowledge it within 10 seconds, the write
 throws, and outside a transaction of yours the store's `RetryStrategy` tries it again. On a client with a `timeoutMS` above 0, where the driver sends
-no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that timed out can still be on the primary. Reads
+no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that the driver refuses with a
+`BsonMaximumSizeExceededException`, or that the server refuses as a document of more than 16 MiB, throws on its first
+attempt, whatever the strategy retries, since it's as large on every attempt. 0.34.0 sent it again, up to 9 more times
+by default. A write that timed out can still be on the primary. Reads
 at read concern `majority` don't return it until a majority has it, so the saga doesn't act on it before then.
 
 `find` and `findWithoutState` read an instance they don't find at `majority` again at read concern `linearizable`,

@@ -233,7 +233,9 @@ public interface SagaStateStoreSkippedInputs {
     boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId);
 
     /**
-     * Whether the store can write {@code candidate}, the whole instance as a write a release is about to make leaves it.
+     * Whether the store can write {@code candidate}, the whole instance as a write the saga is about to make leaves it.
+     * A live input asks before it dispatches its commands, and when the answer is {@code false} it dispatches nothing
+     * and fails like any other failing input, see {@code SagaRunner}.
      * A release asks before every write it makes that writes the whole instance, and asks
      * {@link #fitsWithoutState(StoredSaga, long)} before every write that leaves the stored state where it is. For the
      * write that applies a record, the release asks before it dispatches the record's commands. When that write fails after them, the commands went out for an input the
@@ -244,9 +246,9 @@ public interface SagaStateStoreSkippedInputs {
      * <p>
      * A store whose writes have a size limit answers {@code false} for an instance whose write would go over it. A store
      * with no limit answers {@code true} to every instance, as {@link InMemorySagaStateStore} does. A store with a limit
-     * that answers {@code true} anyway makes the release dispatch the commands of a record whose write the store then
-     * refuses, on every attempt. The release calls this outside a transaction, and the answer must not depend on a read
-     * of the database.
+     * that answers {@code true} anyway makes a live input or a release dispatch the commands of an input whose write the
+     * store then refuses, on every attempt. A release calls this outside a transaction, and the answer must not depend
+     * on a read of the database.
      */
     boolean fits(StoredSaga candidate);
 
@@ -256,7 +258,8 @@ public interface SagaStateStoreSkippedInputs {
      * the instance stored with {@code expectedVersion}. The answer is the one {@link #fits(StoredSaga)} gives for the
      * stored instance with the fields that write sets replaced by those of {@code saga}. A release asks before every
      * write it makes without the state, the one that starts it, the failure record, the one that quarantines the
-     * instance again and the one that ends the quarantine.
+     * instance again and the one that ends the quarantine. A live input that fails asks before its failure record, the
+     * write that lists it as pending and the write that quarantines the instance.
      * <p>
      * The store measures the instance as it holds it and decodes nothing of it, so an instance whose state no longer
      * decodes gets an answer too. A release asks this after a read of the instance failed, such as on a state that no
@@ -265,7 +268,8 @@ public interface SagaStateStoreSkippedInputs {
      * not hold, or holds with another version than {@code expectedVersion}, fits, since the compare-and-set refuses the
      * write anyway.
      * <p>
-     * Unlike {@link #fits(StoredSaga)}, the answer depends on a read of the database, made outside a transaction. A
+     * Unlike {@link #fits(StoredSaga)}, the answer depends on a read of the database, which a release makes outside a
+     * transaction. A
      * store with no size limit answers {@code true} without reading, as {@link InMemorySagaStateStore} does.
      *
      * @param saga            the instance without its state, as the write would be given it

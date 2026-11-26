@@ -118,9 +118,23 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
     }
 
     public boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
+        return compareAndSave(encode(sagaId, envelope, expectedVersion), expectedVersion);
+    }
+
+    /**
+     * The whole {@code envelope} as {@link #compareAndSave(StoredSaga, long)} writes it, so the store can be asked whether
+     * it fits about the bytes it is then given, without encoding the instance twice.
+     */
+    public StoredSaga encode(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
         sameInstance(sagaId, envelope);
         forgetOnInsert(sagaId, expectedVersion);
-        return store.compareAndSave(codec.encode(envelope), expectedVersion);
+        return codec.encode(envelope);
+    }
+
+    /** Write {@code saga}, which {@link #encode(String, SagaEnvelope, long)} gave for the same {@code expectedVersion}. */
+    public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+        requireNonNull(saga, "saga cannot be null");
+        return store.compareAndSave(saga, expectedVersion);
     }
 
     /** An insert, which is an expected version of 0, writes the whole envelope, because no stored state exists to leave alone. */
@@ -154,8 +168,14 @@ public final class SagaEnvelopes<S extends @Nullable Object> {
 
     /** Whether {@code records} can write the whole {@code envelope}, see {@link SagaStateStoreSkippedInputs#fits}. */
     public boolean fits(SagaStateStoreSkippedInputs records, SagaEnvelope<S> envelope) {
+        return fits(records, codec.encode(envelope));
+    }
+
+    /** Whether {@code records} can write {@code saga}, which {@link #encode(String, SagaEnvelope, long)} gave. */
+    public boolean fits(SagaStateStoreSkippedInputs records, StoredSaga saga) {
         requireNonNull(records, "records cannot be null");
-        return records.fits(codec.encode(envelope));
+        requireNonNull(saga, "saga cannot be null");
+        return records.fits(saga);
     }
 
     /**
