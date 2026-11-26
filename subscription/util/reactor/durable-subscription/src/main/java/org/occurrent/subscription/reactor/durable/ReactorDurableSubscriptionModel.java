@@ -33,6 +33,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -3756,7 +3757,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         } else if (conditionUnknown != null) {
             // Neither a conditional nor an unconditional delete is safe to run without knowing which the storage takes
             inPlaceOfWaiting = Mono.error(new IllegalStateException("Could not delete the stored checkpoint of cancelled subscription " + subscriptionId +
-                                                                    ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again.",
+                                                                    ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again. "
+                                                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT,
                     conditionUnknown));
         } else {
             Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, new LinkedHashMap<>()).sequencedKeySet()));
@@ -3828,7 +3830,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     private void startDelete(String subscriptionId, Mono<Void> delete) {
         delete.subscribe(unused -> {
-        }, throwable -> log.warn("Failed to delete the stored checkpoint of cancelled subscription {} before the model was shut down. Cancel it again once it runs, or a later subscribe with the subscription-model default start position resumes from that checkpoint.", subscriptionId, throwable));
+        }, throwable -> log.warn("Failed to delete the stored checkpoint of cancelled subscription {} before the model was shut down. Cancel it again once it runs, or a later subscribe with the subscription-model default start position resumes from that checkpoint. "
+                                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, throwable));
     }
 
     /**

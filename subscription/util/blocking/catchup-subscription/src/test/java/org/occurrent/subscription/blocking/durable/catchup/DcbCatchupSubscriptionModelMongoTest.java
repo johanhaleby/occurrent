@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
@@ -267,6 +268,10 @@ class DcbCatchupSubscriptionModelMongoTest {
         assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                 .hasMessageContaining("subscription")
                 .hasMessageContaining("after position 1")
+                .hasMessageContaining("If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ")
+                .hasMessageNotContaining("Cancel the subscription first, which deletes the checkpoint stored for it.")
+                .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                 .hasMessageContaining("EventMetadata.getCheckpoint()");
         assertThat(storage.read("subscription")).as("stored").isNull();
         assertThat(received).as("delivered").isEmpty();

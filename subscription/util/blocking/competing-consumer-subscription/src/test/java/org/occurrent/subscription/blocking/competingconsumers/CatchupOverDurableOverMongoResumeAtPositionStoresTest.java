@@ -37,9 +37,13 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
@@ -66,6 +70,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -73,6 +78,7 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -143,9 +149,8 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
         // Given a running subscription that has delivered e1, paused, with two events written while it was paused
         catchup.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
         eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
-        await("e1 is delivered and its checkpoint stored").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
-        await("e1's checkpoint is stored").atMost(5, SECONDS).until(() -> checkpointStorage.exists(subscriptionId));
-        Checkpoint storedBeforeTheResume = requireNonNull(checkpointStorage.read(subscriptionId));
+        await("e1 is delivered").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
+        Checkpoint storedBeforeTheResume = awaitE1sCheckpointStored();
         catchup.pauseSubscription(subscriptionId);
         eventStore.write(streamId, serialize(new NameWasChanged("while-paused-1", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "one")));
         eventStore.write(streamId, serialize(new NameWasChanged("while-paused-2", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "two")));
@@ -171,7 +176,7 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
         catchup.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
         eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
         await("e1 is delivered").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
-        await("e1's checkpoint is stored").atMost(5, SECONDS).until(() -> checkpointStorage.exists(subscriptionId));
+        awaitE1sCheckpointStored();
         catchup.pauseSubscription(subscriptionId);
         eventStore.write(streamId, serialize(new NameWasChanged("while-paused-1", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "one")));
         eventStore.write(streamId, serialize(new NameWasChanged("while-paused-2", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "two")));
@@ -228,6 +233,87 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
 
     @Test
     @Timeout(60)
+    void a_resume_at_a_global_position_above_the_beginning_stores_nothing_over_a_stored_resume_token() {
+        // Given a paused subscription with a resume token stored for it, as another instance stores after it delivers an event
+        Checkpoint token = pausedWithAResumeTokenStored();
+
+        // When it is resumed at a global position above the beginning
+        RepositionableSubscriptions.findIn(catchup).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(5)));
+
+        // Then the resume token is still what is stored
+        assertThat(checkpointStorage.read(subscriptionId)).as("over a resume token the catch-up replaces nothing, and the MongoDB model doesn't restart at a global position").isEqualTo(token);
+    }
+
+    @Test
+    @Timeout(60)
+    void a_resume_at_global_position_0_stores_nothing_over_a_stored_resume_token() {
+        // Given a paused subscription with a resume token stored for it, as another instance stores after it delivers an event
+        Checkpoint token = pausedWithAResumeTokenStored();
+
+        // When it is resumed at global position 0, the beginning
+        RepositionableSubscriptions.findIn(catchup).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)));
+
+        // Then the resume token is still what is stored
+        assertThat(checkpointStorage.read(subscriptionId)).as("over a resume token the catch-up replaces nothing, and a position at the beginning is not stored in its place").isEqualTo(token);
+    }
+
+    @Test
+    @Timeout(60)
+    void a_resume_at_a_time_after_the_beginning_stores_nothing_over_a_stored_resume_token() {
+        // Given a paused subscription with a resume token stored for it, as another instance stores after it delivers an event
+        Checkpoint token = pausedWithAResumeTokenStored();
+
+        // When it is resumed at a time after the beginning of time
+        RepositionableSubscriptions.findIn(catchup).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(TimeBasedCheckpoint.from(OffsetDateTime.of(2026, 1, 1, 0, 0, 1, 0, UTC))));
+
+        // Then the resume token is still what is stored
+        assertThat(checkpointStorage.read(subscriptionId)).as("over a resume token the catch-up replaces nothing, and the MongoDB model doesn't restart at a time").isEqualTo(token);
+    }
+
+    @Test
+    @Timeout(60)
+    void a_resume_at_a_catch_up_time_checkpoint_stores_nothing_over_a_stored_resume_token() {
+        // Given a paused subscription with a resume token stored for it, as another instance stores after it delivers an event
+        Checkpoint token = pausedWithAResumeTokenStored();
+        Checkpoint catchupTime = CatchupTimeCheckpoint.of("2026-01-01T00:00:01Z", new StringBasedCheckpoint("a live start"), TimeBasedCheckpoint.beginningOfTime().asString());
+
+        // When it is resumed at a catch-up time checkpoint
+        RepositionableSubscriptions.findIn(catchup).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(catchupTime));
+
+        // Then the resume token is still what is stored
+        assertThat(checkpointStorage.read(subscriptionId)).as("over a resume token the catch-up replaces nothing, and the MongoDB model doesn't restart at a catch-up position").isEqualTo(token);
+    }
+
+    @Test
+    @Timeout(60)
+    void a_resume_at_a_resume_token_that_another_lease_holder_has_written_over_is_refused_and_leaves_the_newer_checkpoint_stored_and_the_subscription_paused() {
+        // Given a subscription that has delivered e1 with write version 1 and is paused, and a newer checkpoint stored by another instance with a newer lease
+        catchup.shutdown();
+        mongoModel = springModel();
+        catchup = catchupOver(mongoModel, id -> OptionalLong.of(1));
+        catchup.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
+        eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
+        await("e1 is delivered").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
+        Checkpoint storedByThisInstance = awaitE1sCheckpointStored();
+        catchup.pauseSubscription(subscriptionId);
+        eventStore.write(streamId, serialize(new NameWasChanged("while-paused", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "one")));
+        Checkpoint newer = requireNonNull(mongoModel.globalCheckpoint());
+        checkpointStorage.save(subscriptionId, newer, CheckpointWriteCondition.notOlderThan(5));
+
+        // When it is resumed at the resume token this instance stored
+        Throwable thrown = catchThrowable(() -> RepositionableSubscriptions.findIn(catchup).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(storedByThisInstance)));
+
+        // Then the write is refused, the newer checkpoint is still stored, and the subscription is still paused
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the resume").isExactlyInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(newer).as("a token other than the one this instance stored").isNotEqualTo(storedByThisInstance),
+                () -> assertThat(checkpointStorage.read(subscriptionId)).as("stored after the refused resume").isEqualTo(newer),
+                () -> assertThat(catchup.isPaused(subscriptionId)).as("paused after the refused resume").isTrue()
+        );
+    }
+
+    @Test
+    @Timeout(60)
     void a_competing_consumer_model_over_the_stack_finds_no_model_to_resume_a_subscription_at_a_position() {
         // Given a competing consumer model over the catch-up model, with a subscription paused through it
         competing = competingOver(catchup);
@@ -251,8 +337,8 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
         competing = competingOver(catchup);
         competing.subscribe("node", subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
         eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
-        await("e1 is delivered and its checkpoint stored").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
-        await("e1's checkpoint is stored").atMost(5, SECONDS).until(() -> checkpointStorage.exists(subscriptionId));
+        await("e1 is delivered").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
+        awaitE1sCheckpointStored();
         competing.pauseSubscription(subscriptionId);
         eventStore.write(streamId, serialize(new NameWasChanged("while-paused", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "one")));
         boolean pausedBeforeTheResume = competing.isPaused(subscriptionId);
@@ -285,6 +371,24 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
         return stored;
     }
 
+    // A running subscription that has delivered an event, whose resume token is stored for it, and then paused
+    private Checkpoint pausedWithAResumeTokenStored() {
+        catchup.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), delivered::add).waitUntilStarted();
+        eventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
+        await("e1 is delivered").atMost(5, SECONDS).untilAsserted(() -> assertThat(ids()).containsExactly("e1"));
+        Checkpoint token = awaitE1sCheckpointStored();
+        catchup.pauseSubscription(subscriptionId);
+        return token;
+    }
+
+    // Waits for the value e1's delivery stores, never for a checkpoint to exist, as the live start is stored before e1 arrives
+    private Checkpoint awaitE1sCheckpointStored() {
+        CloudEvent e1 = delivered.stream().filter(e -> e.getId().equals("e1")).findFirst().orElseThrow();
+        Checkpoint e1sCheckpoint = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(e1);
+        await("e1's checkpoint is stored").atMost(5, SECONDS).until(() -> e1sCheckpoint.equals(checkpointStorage.read(subscriptionId)));
+        return e1sCheckpoint;
+    }
+
     // A new stack over the same storage, as a restart makes, which starts the subscription
     private void assertARestartWithTheDefaultStartStarts() {
         catchup.shutdown();
@@ -299,7 +403,14 @@ class CatchupOverDurableOverMongoResumeAtPositionStoresTest {
 
     // The catch-up model over the durable model over the MongoDB model, the three sharing one checkpoint storage, as the Spring Boot starter builds them
     private CatchupSubscriptionModel catchupOver(SpringMongoSubscriptionModel mongo) {
-        DurableSubscriptionModel durable = new DurableSubscriptionModel(mongo, checkpointStorage);
+        return catchupOver(mongo, new DurableSubscriptionModel(mongo, checkpointStorage));
+    }
+
+    private CatchupSubscriptionModel catchupOver(SpringMongoSubscriptionModel mongo, CheckpointWriteVersionSource writeVersionSource) {
+        return catchupOver(mongo, new DurableSubscriptionModel(mongo, checkpointStorage, writeVersionSource));
+    }
+
+    private CatchupSubscriptionModel catchupOver(SpringMongoSubscriptionModel mongo, DurableSubscriptionModel durable) {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(useCheckpointStorage(checkpointStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));
         return new CatchupSubscriptionModel(durable, eventStore, config);
     }

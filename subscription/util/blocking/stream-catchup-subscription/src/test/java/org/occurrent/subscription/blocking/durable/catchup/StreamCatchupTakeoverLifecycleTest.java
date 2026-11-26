@@ -50,6 +50,7 @@ import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
@@ -637,6 +638,30 @@ class StreamCatchupTakeoverLifecycleTest {
         if (!storing) {
             assertThat(received).as("the event written while paused, which the replay that ran again delivers").filteredOn(writtenWhilePaused::equals).hasSize(1);
         }
+    }
+
+    @Test
+    @Timeout(60)
+    void a_loss_the_live_model_reports_again_for_a_subscription_it_holds_paused_after_a_takeover_that_a_pause_beat_logs_that_a_cancel_deletes_the_checkpoint_and_how_to_delete_it_when_several_instances_run_it() throws InterruptedException {
+        // Given a takeover that a pause got to first, so no replay runs and the live model holds the subscription paused
+        TheTakeoverIsAskedForWhileAnotherCallHoldsTheSubscription theTakeover = new TheTakeoverIsAskedForWhileAnotherCallHoldsTheSubscription(true, () -> catchup.pauseSubscription(ID));
+        theTakeover.isAskedForWhileACallIsQueued();
+        theTakeover.letTheCallsGo();
+        assertThat(waitUpTo(Duration.ofSeconds(10), () -> logged.events.stream().anyMatch(StreamCatchupTakeoverLifecycleTest::decidesTheTakeover))).as("the takeover found the pause").isTrue();
+        assertThat(catchup.isPaused(ID)).as("paused").isTrue();
+
+        // When the live model reports the loss of the same live start again
+        liveModel.losesTheHistoryOfWhatItHoldsPaused(ID);
+
+        // Then
+        assertThat(logged.events).filteredOn(event -> event.getFormattedMessage().contains("again after the catch-up took it over")).singleElement().satisfies(event ->
+                assertThat(event.getFormattedMessage())
+                        .contains("No replay of the catch-up resumes it now. The subscription model holds the subscription paused until it is resumed.")
+                        .contains("If the subscription model loses that position again, cancel the subscription, which deletes any checkpoint stored for it, and subscribe it again.")
+                        .doesNotContain("which deletes the checkpoint stored for it")
+                        .doesNotContain("cancel the subscription and subscribe it again.")
+                        .endsWith(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT));
     }
 
     @ParameterizedTest(name = "storing={0}")

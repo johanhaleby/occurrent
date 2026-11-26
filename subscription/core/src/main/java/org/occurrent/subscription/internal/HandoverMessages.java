@@ -80,7 +80,26 @@ public final class HandoverMessages {
     public static String catchUpFailed(String noun) {
         return "Catch-up failed for this " + noun + ", so it refuses live events rather than acknowledging events "
                 + "that nothing folded, and the source keeps redelivering them. Fix the cause, then replace it: a "
-                + "subscription by cancelling it and subscribing again, a projection feed by building a new one.";
+                + "subscription by cancelling it and subscribing again, a projection feed by building a new one. "
+                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT;
+    }
+
+    /**
+     * The message a reactor catch-up-then-live caller shows once its catch-up failed because the checkpoint stored under
+     * its id is not a catch-up marker, with the caller's own noun substituted in. A cancel deletes that checkpoint, and
+     * something else, such as a durable subscription, may still use it, so the message says to cancel only when nothing
+     * else does, where {@link #catchUpFailed(String)} says to cancel.
+     *
+     * @param noun The noun describing what cannot accept live events, e.g. {@code "projection feed"} or
+     *             {@code "subscription"}.
+     */
+    public static String catchUpFailedOnANonMarker(String noun) {
+        return "Catch-up failed for this " + noun + ", because the checkpoint stored under its id is not a catch-up "
+                + "marker. It refuses live events rather than acknowledging events that nothing folded, and the source "
+                + "keeps redelivering them. Replace it with one under a new id. Cancelling a subscription deletes the "
+                + "checkpoint stored under its id, so cancel it only when nothing else uses that checkpoint. "
+                + SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " "
+                + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     /**
@@ -96,7 +115,7 @@ public final class HandoverMessages {
         return "An event the handler of this " + noun + " fed it failed to apply after it was queued, so it refuses "
                 + "live events rather than acknowledging events that nothing folded, and the source keeps redelivering "
                 + "them. Fix the cause, then replace it: a subscription by cancelling it and subscribing again, a "
-                + "projection feed by building a new one.";
+                + "projection feed by building a new one. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     /**

@@ -42,6 +42,7 @@ import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscription
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -557,7 +558,9 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             SoftAssertions.assertSoftly(softly -> {
                 softly.assertThat(notStarted).as("why the subscribe that took the delete over did not start").hasStackTraceContaining(READ_FAILED);
                 softly.assertThat(cancelEnded).as("how the cancel ended").isInstanceOf(IllegalStateException.class)
-                        .hasMessageStartingWith("Could not delete the stored checkpoint of cancelled subscription " + SUBSCRIPTION_ID)
+                        .hasMessage("Could not delete the stored checkpoint of cancelled subscription " + SUBSCRIPTION_ID
+                                    + ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again. "
+                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                         .hasCause(evaluationFailed);
                 softly.assertThat(model.awaitsADeleteDecision(SUBSCRIPTION_ID)).as("a delete decision awaited once the cancel ended").isFalse();
             });

@@ -204,8 +204,12 @@ before the refusal.
 It ends on its own once every node in the deployment runs 0.33.0, because from then on every release keeps
 incrementing the token rather than resetting it. If you need it to end sooner, on a subscription that is stuck
 cycling, `CheckpointStorage.delete(subscriptionId)` clears the checkpoint and its stored version together, and the
-subscription resumes as a fresh one. That costs a replay. Everything since the subscription's global checkpoint is
-redelivered, which is within the at-least-once contract this library has always kept, not a new kind of loss.
+subscription starts as a fresh one, from its own start. Stop every node before the delete and start them all again
+with the same start, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. The first node to take the lease then finds no checkpoint and starts from its own start, so with a start
+at the present the events since the deleted checkpoint are never delivered, even with every node stopped. A start at
+the beginning delivers them again, which is within the at-least-once contract.
 
 ## 4. Redis Cluster
 
@@ -255,6 +259,9 @@ that exact shape worked there like any other, and this is a behaviour change for
 If you have such an id, migrate it before upgrading, while still on the previous version. Read the checkpoint
 under the old id, save it under a new one that does not start with the reserved prefix, delete the old id, then
 point wherever the application passes that subscription id (a `subscribe(..)` call, typically) at the new one.
+When more than one instance runs the subscription, do it with every instance stopped, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+in the 0.35.0 upgrade guide describes, so that no instance stores a newer checkpoint under the old id after it is read.
 Do this through the storage's own API and before the upgrade, because afterward `read` refuses the old id the
 same as `save` and `delete` do, so the API can no longer see the checkpoint to move it. If the upgrade has already
 happened, migrate directly in Redis instead, with the application stopped, `GET` the old key, `SET` the new one to
@@ -579,7 +586,10 @@ answers empty, with `IllegalStateException` naming the wrapped model. A read tha
 whatever it threw, unwrapped, rather than becoming an `IllegalStateException`. Either way, once the model can
 answer, register again to get past it, unless the registration was made while the model was stopped and never
 started. That one keeps its id until `cancelSubscription(subscriptionId)` releases it, so cancel it first, then
-register again. Subscribing with a `StartAt` of your own sidesteps the read on any of these paths.
+register again. The cancel deletes the checkpoint stored for the id, so with more than one instance running the
+subscription, stop every instance instead and start them all again with the same start, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. Subscribing with a `StartAt` of your own sidesteps the read on any of these paths.
 `ReactorDurableSubscriptionModel` also refuses with `IllegalStateException` when the `CheckpointStorage` it pins that first position to answers empty
 from `save(..)` instead of handing back the checkpoint it wrote, naming the storage and the position. Only a
 registration resolving to the subscription model default reaches that write, so a `StartAt` of your own avoids it
