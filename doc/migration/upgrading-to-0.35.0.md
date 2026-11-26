@@ -576,8 +576,10 @@ and the one it builds reads only its own config, so it needs the config method a
 ### Who is affected
 
 An application whose `DurableSubscriptionModel` has a `CheckpointWriteVersionSource`, such as the
-`CompetingConsumerCheckpointWriteVersionSource` the Spring Boot starter uses for a competing consumer, and records the
-first position of a subscription that starts at the model default with no checkpoint stored. Compiles unchanged.
+`CompetingConsumerCheckpointWriteVersionSource` the Spring Boot starter uses for a competing consumer, and either
+records the first position of a subscription that starts at the model default with no checkpoint stored, or
+subscribes from a checkpoint already stored, such as the start position the Spring Boot starter stores for the
+subscription at registration. Compiles unchanged.
 
 ### What changes
 
@@ -607,10 +609,20 @@ During a rolling upgrade, a 0.34.0 node that has lost its lease settles a lost r
 MongoDB storages it can replace a first position a 0.35.0 node stored with an earlier one, which delivers events
 again but skips none.
 
+A subscribe that starts from a checkpoint already stored now stores this node's version with it first, through the
+same three-argument `resolveFirstCheckpointRace` with that checkpoint as the candidate, and starts from the checkpoint
+the call answers. That covers the start position the Spring Boot starter stores at registration, which it writes
+without a version. In 0.34.0 a node that had lost its lease could store the checkpoint of a later event over the
+position the new lease holder started from. When the new holder stopped before its first save, the next one resumed
+after the events in between and never delivered them. When the storage holds a newer version, `subscribe` throws
+`CheckpointWriteConditionNotFulfilledException`, and under `CompetingConsumerSubscriptionModel` it returns and the
+subscription waits for the lease, as for a first position above.
+
 ### What to do
 
 If you catch `StartPositionAlreadyPinnedException` from `subscribe` to alert or to subscribe again, a lost race
-against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. Under
+against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. So does a
+subscribe from a stored checkpoint whose version is newer than this node's. Under
 `CompetingConsumerSubscriptionModel` the new exception doesn't reach `subscribe`, since the subscription waits for the
 lease.
 
