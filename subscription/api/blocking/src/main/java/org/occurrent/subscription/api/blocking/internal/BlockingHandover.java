@@ -310,9 +310,19 @@ public final class BlockingHandover<T, K> {
     // takes the replay turn, so asking again before then, from any thread, adds an ask to it rather than a second
     // replay.
     private @Nullable AskedCatchUp<T> askedByOwnCode = null;
+    // Starts the thread handOffCatchUpsAskedByOwnCode() hands the asked catch-ups to. Thread::start outside tests.
+    private final Consumer<Thread> startAskedCatchUpThread;
 
     private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun,
                              @Nullable String id) {
+        this(deliver, dedupId, options, noun, id, Thread::start);
+    }
+
+    // Package-private for the tests that make the start of the thread an acceptIfLive(..) hands its asked catch-ups to
+    // fail.
+    BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun,
+                     @Nullable String id, Consumer<Thread> startAskedCatchUpThread) {
+        this.startAskedCatchUpThread = startAskedCatchUpThread;
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
@@ -684,7 +694,8 @@ public final class BlockingHandover<T, K> {
      * returns, unless an interrupt makes that thread give up or leave it as described below. When that call is
      * {@link #acceptIfLive(Object)}, the
      * replay runs on a virtual thread that call starts instead, before {@link #acceptIfLive(Object)} returns without
-     * waiting for it. A call from any thread
+     * waiting for it. When that thread does not start, {@link #acceptIfLive(Object)} logs a warning and throws what
+     * the start threw, and the calls stay asked for, as described below for an interrupt. A call from any thread
      * that asks before that replay takes its turn asks for the same replay, so a call on another thread can return
      * before the replay has run. That replay keeps replaying while the {@link Source} of any call it stands for answers
      * {@link Source#keepReplaying()} with {@code true}, and makes every other call on the source of the call that asked
@@ -1186,8 +1197,9 @@ public final class BlockingHandover<T, K> {
             return;
         }
         Thread runner;
+        AskedCatchUp<T> asked;
         synchronized (lock) {
-            AskedCatchUp<T> asked = askedByOwnCode;
+            asked = askedByOwnCode;
             if (asked == null || (asked.askedOn != null && asked.askedOn != Thread.currentThread())) {
                 return;
             }
@@ -1195,7 +1207,22 @@ public final class BlockingHandover<T, K> {
                     .unstarted(() -> runCatchUpsAskedByOwnCode(false));
             asked.askedOn = runner;
         }
-        runner.start();
+        try {
+            startAskedCatchUpThread.accept(runner);
+        } catch (Throwable e) {
+            // A thread that never ran must not keep the asks, or every later call finds them taken and no ask from
+            // this handover's own code replays again. Left without a thread, they are taken over by a later call the
+            // way the asks an interrupt leaves are, see catchUp(..).
+            synchronized (lock) {
+                if (asked.askedOn == runner) {
+                    asked.askedOn = null;
+                }
+                lock.notifyAll();
+            }
+            log.warn("A catch-up that the own code of the {} asked for is left for the next call into it, because "
+                    + "the thread that was to run it did not start.", describe(), e);
+            throw e;
+        }
     }
 
     // Runs once the calling thread has left this handover's code, so the replay no longer waits for it. A failure is
