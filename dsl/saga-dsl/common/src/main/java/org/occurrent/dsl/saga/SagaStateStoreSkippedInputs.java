@@ -234,9 +234,10 @@ public interface SagaStateStoreSkippedInputs {
 
     /**
      * Whether the store can write {@code candidate}, the whole instance as a write the saga is about to make leaves it.
-     * A live input asks before it dispatches its commands, and when the answer is {@code false} it dispatches nothing
-     * and fails like any other failing input, see {@code SagaRunner}.
-     * A release asks before every write it makes that writes the whole instance, and asks
+     * A live input asks on every compare-and-set attempt, before that attempt dispatches its commands. When the answer
+     * is {@code false}, that attempt dispatches nothing and the input fails like any other failing input, while an
+     * earlier attempt that lost its compare-and-set has dispatched its commands already, see {@code SagaRunner}. A live
+     * input that fails asks it too before a failure record that inserts the instance. A release asks before every write it makes that writes the whole instance, and asks
      * {@link #fitsWithoutState(StoredSaga, long)} before every write that leaves the stored state where it is. For the
      * write that applies a record, the release asks before it dispatches the record's commands. When that write fails after them, the commands went out for an input the
      * instance never applied, and every later attempt sends them again. When the answer is {@code false}, the release
@@ -259,7 +260,8 @@ public interface SagaStateStoreSkippedInputs {
      * stored instance with the fields that write sets replaced by those of {@code saga}. A release asks before every
      * write it makes without the state, the one that starts it, the failure record, the one that quarantines the
      * instance again and the one that ends the quarantine. A live input that fails asks before its failure record, the
-     * write that lists it as pending and the write that quarantines the instance.
+     * write that lists it as pending and the write that quarantines the instance, unless that write inserts the
+     * instance, which it asks {@link #fits(StoredSaga)} about instead.
      * <p>
      * The store measures the instance as it holds it and decodes nothing of it, so an instance whose state no longer
      * decodes gets an answer too. A release asks this after a read of the instance failed, such as on a state that no

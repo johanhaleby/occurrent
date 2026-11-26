@@ -85,6 +85,10 @@ public enum SagaStatus {
      * <ul>
      *   <li>The store read the decision is made on and the write that records it both complete. When either throws, the
      *       runner logs nothing of its own about the quarantine.</li>
+     *   <li>The store can take that write, in full or with no failure message. A store that implements
+     *       {@code SagaStateStoreSkippedInputs} is asked before the write, and when it can't take even the smaller one,
+     *       nothing is written and the runner logs an ERROR, at most once per {@code quarantineAfter} for the
+     *       instance.</li>
      *   <li>The compare-and-set write wins within {@code maxCasAttempts} attempts. When another writer changed the
      *       instance first, the runner reads it again and works the decision out again from what it holds now, so
      *       nothing is written when that writer applied the event, completed the instance or quarantined it. When every
@@ -104,7 +108,8 @@ public enum SagaStatus {
      * carrying no redelivery key, one that failed with an {@link OutOfMemoryError}, or one on an instance that already
      * counts the event as handled. A failure also records nothing when the store read the decision is made on or the
      * record write throws, which includes the codec failing to encode the saga's initial state when the record is the
-     * instance's first write, or when every attempt at that write loses its compare-and-set. A later failing event can try that write again.
+     * instance's first write, or when every attempt at that write loses its compare-and-set, or when the store can't
+     * take the record even without its failure message. A later failing event can try that write again.
      */
     QUARANTINED
 }

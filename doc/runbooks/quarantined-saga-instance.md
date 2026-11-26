@@ -66,8 +66,8 @@ failure does.
 
 ## How you find out
 
-Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, and a fourth when the runner cannot record a
-failure at all, all naming the saga's subscription id and the instance's saga id, and all logging the exception with its
+Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, a fourth when the runner cannot record a
+failure because the instance kept changing, and an `ERROR` when the store can't take the failure record at all, all naming the saga's subscription id and the instance's saga id, and all logging the exception with its
 stack trace. There is no metric and no health indicator for any of this, in 0.34.0 or 0.35.0.
 
 The first `WARN` says the instance failed on an event and leaves it to whatever feeds the subscription whether the
@@ -87,6 +87,12 @@ instance's status with step 1 rather than reading the quiet either way.
 
 When an instance is quarantined, the same logger logs an `ERROR` saying it is now `QUARANTINED`. That line is the one
 to alert on. It names two durations, how long the event had been failing and then the budget, in that order.
+
+Alert on the `ERROR` saying the instance "could not record the failure" too. The runner logs it when the store can't
+write the instance with the failure recorded, even with no failure message, as the section on writes that don't fit
+below describes. Nothing is written, so the instance stays `ACTIVE`, is never quarantined on that event and doesn't
+appear in step 1. The line repeats at most once per quarantine budget for the instance, however often the event is
+offered again.
 
 A release in step 5 logs lines of its own from the same logger. The one to alert on is an `ERROR` saying the instance
 is `QUARANTINED` again, and step 5 lists the others.
@@ -184,7 +190,8 @@ SagaFailure failure = instance.failure();
 //                          saga or its command dispatcher threw, and it can also be a store or
 //                          converter failure, since the runner catches the whole path including the
 //                          read that decodes the state
-// failure.failureMessage() that exception's message, or null when it had none. Cut to the first
+// failure.failureMessage() that exception's message, or null when it had none or the store couldn't
+//                          take the record with it. Cut to the first
 //                          1000 characters with "... (truncated)" appended when it was longer,
 //                          so the log lines are where a long message survives whole
 // failure.releasedAt()     when a release of the instance started, or null when none is running
@@ -368,12 +375,26 @@ names the instance and says to delete it. The timer poller tries the instance ag
 again until you do. The same happens when the store can't take the write that releases the instance, or the one that
 deletes the record of an input the instance applied already. Deleting the instance deletes the inputs it recorded, so
 dump them first with `mongodump`, as step 6 of the rollback below does. When the store can't take the write that starts a release,
-the release starts with the marks trimmed to the reorder window instead, since a write outside a release doesn't ask
-the store and can leave more marks than a release may write. When the store can't take that either, `release` throws
+the release starts with the marks trimmed to the reorder window instead. When the store can't take that either, `release` throws
 an `IllegalStateException` that names the instance and says the same.
 
+A live input outside a release asks the store the same way, on every compare-and-set attempt, before that attempt
+dispatches the input's commands. When the store can't take the instance with the input applied, the attempt dispatches
+nothing and the input fails with an `IllegalStateException`. An earlier attempt that lost its compare-and-set to
+another writer has dispatched its commands already, and the exception message says how many, so check it before you
+send any of them by hand.
+
+- An event that fails this way gets a failure record and is quarantined once its budget runs out, like any other
+  failing event. When the store can't take the full failure record, the runner writes it without its failure message,
+  so `failure.failureMessage()` reads `null`.
+- When the store can't take even that, the runner writes nothing and logs the `ERROR` saying it "could not record the
+  failure", at most once per quarantine budget for the instance. The event fails on every delivery and the instance is
+  never quarantined on it, so delete the instance or handle the event by hand.
+- A timeout that fails this way never quarantines the instance. Its timer stays due, the instance stays `ACTIVE`, and
+  every poll tries the timer again, dispatches nothing and logs the `WARN` "Failed to fire saga timer".
+
 A store of your own whose `SagaStateStoreSkippedInputs.fits` answers `true` to every instance refuses nothing, so a
-release on it dispatches the commands of an input whose write the store then fails.
+release on it, or a live input, dispatches the commands of an input whose write the store then fails.
 
 **When `release` throws.** It throws an `IllegalStateException` before it writes anything when:
 

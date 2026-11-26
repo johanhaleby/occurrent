@@ -140,8 +140,7 @@ public final class SagaSubscription implements AutoCloseable {
      * it deletes them. The timer poller tries the instance again on every poll and logs that ERROR again. The same holds
      * when the store can't take the write that releases the instance, or the one that deletes the record of an input the
      * instance applied already. When the store can't take the write that starts the release, the release starts with
-     * the marks trimmed to the reorder window instead, since a live write asks the store nothing and can leave more marks
-     * than a release may write. When the store can't take that either, this throws an {@link IllegalStateException} that
+     * the marks trimmed to the reorder window instead. When the store can't take that either, this throws an {@link IllegalStateException} that
      * names the instance and the way out, and logs it as an ERROR.
      * {@code SpringMongoSagaStateStore} refuses an instance that takes more than 16 MiB of BSON, and a write that takes
      * more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id. A store whose {@code fits}

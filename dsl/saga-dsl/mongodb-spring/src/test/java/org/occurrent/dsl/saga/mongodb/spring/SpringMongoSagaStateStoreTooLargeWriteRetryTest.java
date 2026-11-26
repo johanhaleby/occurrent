@@ -18,10 +18,14 @@ package org.occurrent.dsl.saga.mongodb.spring;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoServerException;
+import com.mongodb.MongoWriteException;
+import com.mongodb.ServerAddress;
+import com.mongodb.WriteError;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Aggregates;
 import com.mongodb.client.model.Projections;
+import org.bson.BsonDocument;
 import org.bson.BsonMaximumSizeExceededException;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
@@ -36,6 +40,8 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import org.occurrent.retry.Backoff;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.data.mongodb.core.CollectionCallback;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -43,7 +49,9 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -72,6 +80,44 @@ class SpringMongoSagaStateStoreTooLargeWriteRetryTest {
     private static final int RETRIES_THE_STRATEGY_WOULD_MAKE = 5;
     // The server's refusal of an update whose resulting document is over 16 MiB
     private static final int UPDATE_RESULT_TOO_LARGE = 17419;
+    // What MongoDB 8.3 and later answers instead, BSONObjectTooLarge
+    private static final int BSON_OBJECT_TOO_LARGE = 10334;
+    // Any other server refusal, which the strategy retries
+    private static final int SOME_OTHER_SERVER_ERROR = 9999;
+
+    /**
+     * Answers every write with a write error of the code set, as a {@link MongoWriteException} thrown inside the callback of
+     * {@code execute}, so Spring translates it the way it translates the server's own reply. The test container runs
+     * MongoDB 8.0, which never answers 10334, so this is how an 8.3 server's answer reaches the store.
+     */
+    private static final class ServerRefusingMongoTemplate extends MongoTemplate {
+        private final AtomicInteger calls = new AtomicInteger();
+        private volatile int refusingWithCode = -1;
+
+        ServerRefusingMongoTemplate(MongoClient client, String database) {
+            super(client, database);
+        }
+
+        void refuseWith(int code) {
+            refusingWithCode = code;
+        }
+
+        int calls() {
+            return calls.get();
+        }
+
+        @Override
+        public <T> T execute(String collectionName, CollectionCallback<T> callback) {
+            calls.incrementAndGet();
+            int code = refusingWithCode;
+            if (code < 0) {
+                return super.execute(collectionName, callback);
+            }
+            return super.execute(collectionName, collection -> {
+                throw new MongoWriteException(new WriteError(code, "write refused with code " + code, new BsonDocument()), new ServerAddress(), Set.of());
+            });
+        }
+    }
 
     private MongoClient client;
     private String database;
@@ -93,7 +139,7 @@ class SpringMongoSagaStateStoreTooLargeWriteRetryTest {
     }
 
     // A store whose strategy would retry any failure up to the number of attempts above, quickly
-    private static SpringMongoSagaStateStore<String> store(FlakyMongoTemplate template) {
+    private static SpringMongoSagaStateStore<String> store(MongoTemplate template) {
         return new SpringMongoSagaStateStore<>(template, COLLECTION, String.class, null,
                 org.occurrent.retry.RetryStrategy.fixed(1).maxAttempts(RETRIES_THE_STRATEGY_WOULD_MAKE).backoff(Backoff.fixed(1)));
     }
@@ -170,6 +216,40 @@ class SpringMongoSagaStateStoreTooLargeWriteRetryTest {
         assertAll(
                 () -> assertThat(serverFailure(thrown)).as("the server refused it").isNotNull(),
                 () -> assertThat(serverFailure(thrown).getCode()).isEqualTo(UPDATE_RESULT_TOO_LARGE),
+                () -> assertThat(template.calls() - before).as("one attempt, never retried").isEqualTo(1)
+        );
+    }
+
+    @Test
+    void control_a_write_the_server_refuses_with_another_code_is_retried_up_to_the_attempts_of_the_strategy() {
+        ServerRefusingMongoTemplate template = new ServerRefusingMongoTemplate(client, database);
+        SpringMongoSagaStateStore<String> store = store(template);
+        SagaEnvelopes.of(store, null).compareAndSave("refused", instance("refused", "x", 1), 0);
+        template.refuseWith(SOME_OTHER_SERVER_ERROR);
+        int before = template.calls();
+
+        Throwable thrown = catchThrowable(() -> SagaEnvelopes.of(store, null).compareAndSave("refused", instance("refused", "xx", 2), 1));
+
+        assertAll(
+                () -> assertThat(serverFailure(thrown)).as("the refusal reached the caller").isNotNull(),
+                () -> assertThat(serverFailure(thrown).getCode()).isEqualTo(SOME_OTHER_SERVER_ERROR),
+                () -> assertThat(template.calls() - before).as("every attempt the strategy allows").isEqualTo(RETRIES_THE_STRATEGY_WOULD_MAKE)
+        );
+    }
+
+    @Test
+    void a_write_the_server_refuses_with_the_code_of_MongoDB_8_3_and_later_for_a_document_over_16_MiB_is_thrown_after_one_attempt_though_the_strategy_would_retry() {
+        ServerRefusingMongoTemplate template = new ServerRefusingMongoTemplate(client, database);
+        SpringMongoSagaStateStore<String> store = store(template);
+        SagaEnvelopes.of(store, null).compareAndSave("too-large", instance("too-large", "x", 1), 0);
+        template.refuseWith(BSON_OBJECT_TOO_LARGE);
+        int before = template.calls();
+
+        Throwable thrown = catchThrowable(() -> SagaEnvelopes.of(store, null).compareAndSave("too-large", instance("too-large", "xx", 2), 1));
+
+        assertAll(
+                () -> assertThat(serverFailure(thrown)).as("the refusal reached the caller").isNotNull(),
+                () -> assertThat(serverFailure(thrown).getCode()).isEqualTo(BSON_OBJECT_TOO_LARGE),
                 () -> assertThat(template.calls() - before).as("one attempt, never retried").isEqualTo(1)
         );
     }

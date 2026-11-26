@@ -261,8 +261,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // CommandOperationHelper.transformWriteException
     private static final int TRANSACTIONS_NOT_SUPPORTED_ERROR_CODE = 20;
     private static final String TRANSACTIONS_NOT_SUPPORTED_ERROR_MESSAGE = "Transaction numbers";
-    // The server's refusal of a document over 16 MiB (BSONObjectTooLarge), and of an update whose resulting document
-    // would be
+    // The server's refusal of a replacement or an update whose resulting document would be over 16 MiB, BSONObjectTooLarge
+    // from MongoDB 8.3 on and the unnamed 17419 before it
     private static final int BSON_OBJECT_TOO_LARGE_ERROR_CODE = 10334;
     private static final int UPDATE_RESULT_TOO_LARGE_ERROR_CODE = 17419;
     private static final String QUARANTINE_NEEDS_TRANSACTIONS = "SpringMongoSagaStateStore needs a MongoDB replica set or sharded cluster for quarantine, since it writes a quarantined saga instance and the inputs it skips in one transaction. ";
@@ -1308,10 +1308,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     /**
-     * Whether a release can write {@code candidate}. MongoDB stores a document of at most {@link #MAX_DOCUMENT_SIZE}
-     * bytes of BSON, and the driver sends a write only when its statement, the compare-and-set filter together with the
-     * replacement or the update, takes at most {@link #MAX_STATEMENT_SIZE} bytes. A release replaces the instance whole
-     * or updates every field but the state, so this checks the document and both statements. The filter holds the saga
+     * Whether the saga can write {@code candidate}, which a live input asks before it dispatches its commands and a
+     * release asks before every write of the whole instance. MongoDB stores a document of at most
+     * {@link #MAX_DOCUMENT_SIZE} bytes of BSON, and the driver sends a write only when its statement, the compare-and-set
+     * filter together with the replacement or the update, takes at most {@link #MAX_STATEMENT_SIZE} bytes. The saga
+     * replaces the instance whole or updates every field but the state, so this checks the document and both statements. The filter holds the saga
      * id, so an instance of exactly 16 MiB fits only when its id takes less than about 16 KiB. The check encodes the
      * writes the way the driver does and reads nothing from the database.
      */

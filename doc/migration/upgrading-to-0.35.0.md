@@ -804,7 +804,9 @@ A saga instance document gains a `streamMarks` field. It holds, per stream, a `f
 each type has its highest applied `mark`, the `applied` versions below it and a `horizon`, the highest version it has
 stopped remembering, and a `pending` list of event types with the `versions` of each that failed. A document without
 `pending` reads as nothing pending. A `legacyFailed` list of stream versions, kept per stream beside `floor`, holds the
-failures described above, and a document without it reads as an empty list. `pending` is a list rather than a map because
+failures described above, and a document without it reads as an empty list. It also holds the version of a 0.35.0
+failure record that the store couldn't take in full, once another input's failure replaces it, since the saga writes
+such a record without its message and lists its version as pending only when it is at or below `floor`. `pending` is a list rather than a map because
 stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
 type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
 A release of a quarantined instance also keeps every version it applies, and the write that ends the release, which
@@ -1201,14 +1203,16 @@ which `SagaRunner.run` calls when quarantine is on, before the saga gets its fir
 `IllegalStateException` when the store can't make those writes atomic in the database it's connected to, and does
 nothing otherwise. It implements `fits(candidate)`, which a release calls before every write it makes that writes the
 whole instance, and for the write that applies a record before it dispatches the record's commands. A live input calls it too, for
-the write that applies the input, before it dispatches the input's commands. When it returns `false` there, no command
-is dispatched and the input fails like any other failing input. It returns `false`
+the write that applies the input, on every compare-and-set attempt before that attempt dispatches the input's commands.
+When it returns `false` there, that attempt dispatches nothing and the input fails like any other failing input. An
+earlier attempt that lost its compare-and-set has dispatched its commands already. A live input that fails also calls
+it before a failure record that inserts the instance. It returns `false`
 when the store can't write `candidate`, such as an instance whose write would go over a size limit of the store's, and
 `true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a live input or
 a release dispatch the commands of an input whose write then fails, on every attempt. It implements
 `fitsWithoutState(saga, expectedVersion)`, which a release calls before every write that leaves the stored state where
 it is, the one that ends the quarantine included. A live input that fails calls it before its failure record, the
-write that lists it as pending and the write that quarantines the instance. It returns what `fits` returns for the instance as stored with the
+write that lists it as pending and the write that quarantines the instance, unless that write inserts the instance. It returns what `fits` returns for the instance as stored with the
 fields `compareAndSaveWithoutState` sets taken from `saga`, and `true` when no instance is stored under the id or it is
 stored at another version than `expectedVersion`. It may read the database for that, and it doesn't decode the stored
 state, since a release calls it after a read of the instance failed to decode, and a throw there would leave the

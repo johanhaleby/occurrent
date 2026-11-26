@@ -89,6 +89,7 @@ class SagaLiveWriteTooLargeTest {
             .withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT);
     // The input of the second event of the stream, the one these tests fail on
     private static final String FAILING_INPUT = ORDER + "@2";
+    private static final Duration HOLD = Duration.ofMinutes(10);
     private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
 
     sealed interface OrderEvent permits OrderPlaced, ItemAdded {
@@ -115,6 +116,9 @@ class SagaLiveWriteTooLargeTest {
     }
 
     private volatile boolean aFails = false;
+    private volatile boolean placedFails = false;
+    // How many compare-and-sets of the saga the store loses to another writer, which writes a newer version first
+    private final AtomicInteger lostWrites = new AtomicInteger();
     private volatile Predicate<SagaEnvelope<Order>> fits = candidate -> true;
     private final AtomicReference<Instant> now = new AtomicReference<>(START);
     private final InMemoryEventStore eventStore = new InMemoryEventStore();
@@ -155,12 +159,23 @@ class SagaLiveWriteTooLargeTest {
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, e) -> new Order(e.orderId(), List.of()))
                 .evolve(ItemAdded.class, (state, e) -> state.with(e.item()))
+                .react(OrderPlaced.class, (state, e) -> {
+                    if (placedFails) {
+                        throw new IllegalStateException("cannot start " + e.orderId());
+                    }
+                    return List.of();
+                })
                 .react(ItemAdded.class, (state, e) -> {
                     if (aFails && e.item().equals("a")) {
                         throw new IllegalStateException("cannot pack " + e.item());
                     }
+                    if (e.item().equals("hold")) {
+                        return List.of(SagaEffect.startTimeout("hold", HOLD));
+                    }
                     return List.of(SagaEffect.issue(new Pack(e.orderId(), e.item())));
                 })
+                .evolveOnTimeout("hold", (state, timeout) -> state.with("timed out"))
+                .reactOnTimeout("hold", (state, timeout) -> List.of(SagaEffect.issue(new Pack(state.orderId(), "timed out"))))
                 .build();
     }
 
@@ -424,7 +439,153 @@ class SagaLiveWriteTooLargeTest {
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("cannot pack a"),
                 () -> assertThat(instance()).as("nothing is written, the version included").isEqualTo(before),
-                () -> assertThat(errors()).singleElement().asString().contains("'" + ORDER + "'").contains("could not list it as pending"),
+                () -> assertThat(errors()).singleElement().asString().contains("'" + ORDER + "'").contains("could not list it as pending")
+                        .contains("cannot write the instance with it listed"),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
+    // Allows the first allowed questions about an instance with "a" applied, and refuses every one after
+    private void refuseTheItemAfterAsking(int allowed) {
+        AtomicInteger asked = new AtomicInteger();
+        fits = candidate -> !appliedItem(candidate, "a") || asked.incrementAndGet() <= allowed;
+    }
+
+    private static String throwableMessageOf(ILoggingEvent event) {
+        return event.getThrowableProxy() == null ? "" : event.getThrowableProxy().getMessage();
+    }
+
+    @Test
+    void an_attempt_the_store_refuses_after_an_earlier_attempt_lost_its_write_says_the_earlier_attempt_dispatched_the_command_and_dispatches_nothing_itself() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        refuseTheItemAfterAsking(1);
+        lostWrites.set(1);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+
+        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(a));
+
+        SagaEnvelope<Order> after = instance();
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("cannot apply the event")
+                        .hasMessageContaining("This attempt dispatched none of its commands, but 1 command was dispatched by the earlier attempt, which lost its write to another writer.")
+                        .hasMessageNotContaining("No command of it was dispatched."),
+                () -> assertThat(dispatched).as("the first attempt dispatched it, the second dispatched nothing").containsExactly(new Pack(ORDER, "a")),
+                () -> assertThat(after.failure()).isNotNull(),
+                () -> assertThat(after.failure().failureMessage()).contains("1 command was dispatched by the earlier attempt")
+                        .doesNotContain("No command of it was dispatched."),
+                () -> assertThat(after.state().items()).as("the input is not applied").isEmpty()
+        );
+    }
+
+    @Test
+    void an_attempt_the_store_refuses_after_two_earlier_attempts_lost_their_writes_counts_the_commands_of_both() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        refuseTheItemAfterAsking(2);
+        lostWrites.set(2);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+
+        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(a));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("This attempt dispatched none of its commands, but 2 commands were dispatched by the 2 earlier attempts, which lost their write to another writer.")
+                        .hasMessageNotContaining("No command of it was dispatched."),
+                () -> assertThat(dispatched).containsExactly(new Pack(ORDER, "a"), new Pack(ORDER, "a"))
+        );
+    }
+
+    @Test
+    void a_timer_whose_firing_the_store_cannot_write_dispatches_nothing_stays_due_and_does_not_quarantine_the_instance_and_the_failure_names_the_timer() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "hold")));
+        assertThat(instance().timers()).as("control: the timer is scheduled").hasSize(1);
+        now.set(now.get().plus(HOLD).plusSeconds(1));
+        fits = candidate -> !appliedItem(candidate, "timed out");
+
+        execution.pollTimers();
+
+        SagaEnvelope<Order> after = instance();
+        List<ILoggingEvent> warnings = appender.list.stream().filter(e -> e.getLevel() == Level.WARN && e.getFormattedMessage().contains("Failed to fire saga timer")).toList();
+        assertAll(
+                () -> assertThat(dispatched).isEmpty(),
+                () -> assertThat(after.timers()).as("the timer stays due").hasSize(1),
+                () -> assertThat(after.timers().getFirst().name()).isEqualTo("hold"),
+                () -> assertThat(after.timers().getFirst().dueAtEpochMilli()).isLessThanOrEqualTo(now.get().plusMillis(1).toEpochMilli()),
+                () -> assertThat(after.status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(after.failure()).as("a timer failure is not an input failure of the instance").isNull(),
+                () -> assertThat(after.state().items()).as("the timeout is not applied").doesNotContain("timed out"),
+                () -> assertThat(warnings).singleElement().satisfies(warning -> assertThat(throwableMessageOf(warning))
+                        .contains("cannot apply the timer 'hold'").contains("No command of it was dispatched.")),
+                () -> assertThat(errors()).isEmpty()
+        );
+    }
+
+    @Test
+    void the_first_input_of_an_instance_whose_failure_record_the_store_cannot_write_in_full_is_recorded_without_its_message_because_an_insert_is_asked_about_the_whole_instance() {
+        SagaExecution<OrderEvent, Order, Object> execution = execution(CONFIG);
+        placedFails = true;
+        fits = candidate -> !hasFailureMessage(candidate);
+        CloudEvent placed = append(new OrderPlaced(nextEventId(), ORDER));
+
+        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(placed));
+
+        SagaEnvelope<Order> after = instance();
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("cannot start " + ORDER),
+                () -> assertThat(after.failure()).as("the bare record is inserted").isNotNull(),
+                () -> assertThat(after.failure().input()).isEqualTo(ORDER + "@1"),
+                () -> assertThat(after.failure().failureMessage()).as("the full record is not written").isNull(),
+                () -> assertThat(after.status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(dispatched).isEmpty(),
+                () -> assertThat(errors()).as("the bare record fit, so no ERROR").isEmpty()
+        );
+    }
+
+    @Test
+    void the_error_that_a_failure_record_cannot_be_written_is_logged_once_per_interval_for_the_instance_however_often_the_event_is_delivered() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        aFails = true;
+        fits = candidate -> !hasFailure(candidate);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+
+        for (int delivery = 0; delivery < 4; delivery++) {
+            catchThrowable(() -> execution.onCloudEvent(a));
+            now.set(now.get().plus(BUDGET.dividedBy(10)));
+        }
+        List<String> withinTheInterval = errors();
+        now.set(START.plus(BUDGET));
+        catchThrowable(() -> execution.onCloudEvent(a));
+        List<String> pastTheInterval = errors();
+
+        assertAll(
+                () -> assertThat(withinTheInterval).as("four deliveries inside the interval").singleElement().asString()
+                        .contains("'" + ORDER + "'").contains("could not record the failure").contains("This is logged at most once per PT1M for the instance."),
+                () -> assertThat(pastTheInterval).as("due again once the interval has passed").hasSize(2),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
+    @Test
+    void the_error_that_an_input_cannot_be_listed_as_pending_is_logged_once_per_interval_for_the_instance_however_often_the_event_is_delivered() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG_WITHOUT_QUARANTINE);
+        aFails = true;
+        fits = candidate -> !hasPending(candidate);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+        Duration interval = SagaExecution.UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE;
+
+        for (int delivery = 0; delivery < 4; delivery++) {
+            catchThrowable(() -> execution.onCloudEvent(a));
+            now.set(now.get().plus(interval.dividedBy(10)));
+        }
+        List<String> withinTheInterval = errors();
+        now.set(START.plus(interval));
+        catchThrowable(() -> execution.onCloudEvent(a));
+        List<String> pastTheInterval = errors();
+
+        assertAll(
+                () -> assertThat(withinTheInterval).as("four deliveries inside the interval").singleElement().asString()
+                        .contains("'" + ORDER + "'").contains("could not list it as pending").contains("This is logged at most once per PT5M for the instance."),
+                () -> assertThat(pastTheInterval).as("due again once the interval has passed").hasSize(2),
                 () -> assertThat(dispatched).isEmpty()
         );
     }
@@ -482,6 +643,12 @@ class SagaLiveWriteTooLargeTest {
 
         @Override
         public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            if (lostWrites.getAndUpdate(lost -> Math.max(0, lost - 1)) > 0) {
+                // Another writer, a timer or another node, got there first
+                SagaEnvelope<Order> current = envelopes.find(ORDER).orElseThrow();
+                assertThat(envelopes.compareAndSave(ORDER, current, current.version())).as("control: the other writer wrote").isTrue();
+                return false;
+            }
             return inMemory.compareAndSave(saga, expectedVersion);
         }
 

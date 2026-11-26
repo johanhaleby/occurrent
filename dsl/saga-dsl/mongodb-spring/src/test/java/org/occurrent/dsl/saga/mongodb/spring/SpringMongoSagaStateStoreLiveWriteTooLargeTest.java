@@ -62,6 +62,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -117,6 +118,7 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
     private SagaEnvelopes<String> envelopes;
     private final List<Pack> dispatched = new CopyOnWriteArrayList<>();
     private final Set<String> failing = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger failedReactions = new AtomicInteger();
     private SagaSubscription subscription;
     private ListAppender<ILoggingEvent> appender;
     private Logger executionLog;
@@ -148,7 +150,12 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
 
     // The ERRORs other than the one that announces a quarantine, which every quarantine logs
     private List<String> errors() {
-        return appender.list.stream().filter(e -> e.getLevel() == Level.ERROR).map(ILoggingEvent::getFormattedMessage)
+        // The subscription thread appends while this streams, so it reads a copy taken under the appender's own lock
+        List<ILoggingEvent> logged;
+        synchronized (appender) {
+            logged = List.copyOf(appender.list);
+        }
+        return logged.stream().filter(e -> e.getLevel() == Level.ERROR).map(ILoggingEvent::getFormattedMessage)
                 .filter(message -> !message.contains("is now QUARANTINED")).toList();
     }
 
@@ -160,6 +167,7 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
                 .evolve(ItemAdded.class, (state, e) -> state + "y".repeat(STATE_GROWTH))
                 .react(ItemAdded.class, (state, e) -> {
                     if (failing.contains(e.item())) {
+                        failedReactions.incrementAndGet();
                         throw new IllegalStateException("cannot pack " + e.item() + " " + "m".repeat(5_000));
                     }
                     return List.of(SagaEffect.issue(new Pack(e.item(), e.quantity())));
@@ -326,6 +334,23 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
                 () -> assertThat(errors()).allSatisfy(error -> assertThat(error).contains("'" + ORDER + "'").contains("could not record the failure")),
                 () -> assertThat(instance()).as("nothing is written, the version included").isEqualTo(before),
                 () -> assertThat(instance().status()).as("never quarantined").isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
+    @Test
+    void the_error_that_a_failure_record_cannot_be_written_even_without_its_message_is_logged_once_across_the_redeliveries_of_the_event() {
+        startedWithRoomLeft(SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)), ROOM_FOR_NOTHING);
+        failing.add("book");
+
+        write(new ItemAdded(ORDER, "book", 2));
+
+        // Redelivered every 200 ms, so six failed reactions take a second, inside the interval of the ERROR
+        await().ignoreExceptions().atMost(Duration.ofSeconds(60)).until(() -> failedReactions.get() >= 6);
+        assertAll(
+                () -> assertThat(errors()).as("the first delivery said it and the five after it did not").singleElement().asString()
+                        .contains("'" + ORDER + "'").contains("could not record the failure").contains("This is logged at most once per PT5M for the instance."),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(dispatched).isEmpty()
         );
     }
