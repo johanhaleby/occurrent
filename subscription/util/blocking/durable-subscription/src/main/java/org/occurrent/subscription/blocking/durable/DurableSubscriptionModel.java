@@ -156,7 +156,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * </ul>
  */
 @NullMarked
-public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, PreparedResumeSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
@@ -213,6 +213,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // monitor, since a virtual thread that waits for the checkpoint store while it holds one keeps its carrier thread
     // on JDK 21 to 23
     private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
+    // The last storage write or delete this model made for each id, numbered from storageWrites once it has returned or
+    // thrown, so a prepared resume whose read began before it sees that it moved. A delete removes the id, so nothing
+    // is kept for an id that is gone
+    private final AtomicLong storageWrites = new AtomicLong();
+    private final ConcurrentMap<String, Long> lastStorageWriteOf = new ConcurrentHashMap<>();
 
     // The subscribes that ask their function before they take the lock for their id, kept until they hold it
     private final Set<Asked> asking = ConcurrentHashMap.newKeySet();
@@ -419,6 +424,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     throw e;
                 } catch (RuntimeException e) {
                     log.warn("Failed to save the quiet position of subscription {}. Trying again in {}.", subscriptionId, config.quietPositionSaveInterval, e);
+                } finally {
+                    wroteTo(subscriptionId);
                 }
             });
         });
@@ -438,6 +445,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             } catch (CheckpointWriteConditionNotFulfilledException e) {
                 log.warn("Did not store the position subscription {} restarts from after its history was lost, since another node has written its checkpoint with a newer lease: {}",
                         subscriptionId, e.getMessage());
+            } finally {
+                wroteTo(subscriptionId);
             }
         });
     }
@@ -559,7 +568,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     if (persistCheckpoint.test(cloudEvent)) {
                         Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
                         stored = registration.saveUnlessCancelled(() -> {
-                            storage.save(subscriptionId, checkpoint, writeCondition);
+                            try {
+                                storage.save(subscriptionId, checkpoint, writeCondition);
+                            } finally {
+                                wroteTo(subscriptionId);
+                            }
                             registration.lastWrite.set(System.nanoTime());
                         });
                     }
@@ -756,6 +769,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // resolveFirstCheckpointRace. One that cannot falls back to reading the stored position back and checking it
     // is the one this node itself computed.
     private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
+        try {
+            return saveFirstPositionOnce(subscriptionId, globalCheckpoint);
+        } finally {
+            wroteTo(subscriptionId);
+        }
+    }
+
+    private Checkpoint saveFirstPositionOnce(String subscriptionId, Checkpoint globalCheckpoint) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so this is the write
             // before this method existed and two nodes recording a first position at the same moment keep the
@@ -947,23 +968,96 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return underLockFor(subscriptionId, () -> resumeFromStoredCheckpoint(subscriptionId));
     }
 
+    /**
+     * Read the checkpoint and write version {@link #resumeSubscription(String)} decides from, under this model's lock
+     * for the id, without resuming anything. A subscribe of the id on another thread whose {@code StartAt.dynamic}
+     * function is still being asked is waited for, as {@link #resumeSubscription(String)} waits for it, and if that
+     * function doesn't return within 10 seconds, this throws {@link IllegalStateException}.
+     */
+    @Override
+    public PreparedResume prepareResume(String subscriptionId) {
+        waitForAsksOnOtherThreads(subscriptionId);
+        return underLockFor(subscriptionId, () -> {
+            // Before anything is read, so a write that returns after the read began moves what is prepared
+            Long lastWrite = lastStorageWriteOf.get(subscriptionId);
+            CheckpointRegistration registration = registrations.get(subscriptionId);
+            boolean notCheckpointed = notCheckpointedSubscriptions.contains(subscriptionId);
+            Checkpoint resumeAt = notCheckpointed ? null : storedCheckpointToResumeAt(subscriptionId, registration);
+            return new DurablePreparedResume(this, subscriptionId, lastWrite, registration, notCheckpointed, resumeAt);
+        });
+    }
+
+    /**
+     * Resume a paused subscription where {@link #resumeSubscription(String)} would have, from what {@link #prepareResume(String)}
+     * read, without reading storage. Empty when this model wrote or deleted the id's checkpoint since the read began,
+     * when the id was subscribed or cancelled since, or when another call holds this model's lock for the id.
+     */
+    @Override
+    public Optional<Subscription> resumeAsPrepared(String subscriptionId, PreparedResume prepared) {
+        if (!(prepared instanceof DurablePreparedResume read) || read.model != this || !read.subscriptionId.equals(subscriptionId)) {
+            throw new IllegalArgumentException("The prepared resume passed to resume subscription " + subscriptionId + " wasn't prepared for it by this model");
+        }
+        IdLock idLock = idLocks.compute(subscriptionId, (__, held) -> held == null ? new IdLock() : held.oneMoreCaller());
+        try {
+            // Not waited for, since its holder can be in a storage call, and an empty result has the caller read again
+            if (!idLock.lock.tryLock()) {
+                return Optional.empty();
+            }
+            try {
+                if (!Objects.equals(lastStorageWriteOf.get(subscriptionId), read.lastWrite) || registrations.get(subscriptionId) != read.registration
+                    || notCheckpointedSubscriptions.contains(subscriptionId) != read.notCheckpointed) {
+                    return Optional.empty();
+                }
+                return Optional.of(resumeAt(subscriptionId, read.resumeAt));
+            } finally {
+                idLock.lock.unlock();
+            }
+        } finally {
+            idLocks.computeIfPresent(subscriptionId, (__, held) -> held.oneCallerLess() ? null : held);
+        }
+    }
+
+    private record DurablePreparedResume(DurableSubscriptionModel model, String subscriptionId, @Nullable Long lastWrite, @Nullable CheckpointRegistration registration,
+                                         boolean notCheckpointed, @Nullable Checkpoint resumeAt) implements PreparedResume {
+    }
+
     // Callers hold the id lock
     private Subscription resumeFromStoredCheckpoint(String subscriptionId) {
-        if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
-            Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
-            if (repositionable.isPresent()) {
-                // Asked before anything is read, so a checkpoint this subscribe stores after the answer is the one read
-                // below, or makes the version read below differ from the one read at subscribe
-                CheckpointRegistration registration = registrations.get(subscriptionId);
-                StoredBefore before = registration == null ? null : registration.storedBeforeOwnStartUnlessItStoredOne();
-                OptionalLong writeVersion = before == null || !before.known() ? OptionalLong.empty() : storage.writeVersion(subscriptionId);
-                Checkpoint checkpoint = storage.read(subscriptionId);
-                if (checkpoint != null && (before == null || !before.stillStored(checkpoint, writeVersion))) {
-                    return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
-                }
-            }
+        Checkpoint resumeAt = notCheckpointedSubscriptions.contains(subscriptionId) ? null : storedCheckpointToResumeAt(subscriptionId, registrations.get(subscriptionId));
+        return resumeAt(subscriptionId, resumeAt);
+    }
+
+    // The stored checkpoint to move the wrapped model to, or null to resume it where it is. Callers hold the id lock
+    // and read the registration first, so a checkpoint this subscribe stores after that is the one read here, or makes
+    // the version read here differ from the one read at subscribe
+    private @Nullable Checkpoint storedCheckpointToResumeAt(String subscriptionId, @Nullable CheckpointRegistration registration) {
+        if (RepositionableSubscriptions.findIn(getWrappedSubscriptionModel()).isEmpty()) {
+            return null;
+        }
+        StoredBefore before = registration == null ? null : registration.storedBeforeOwnStartUnlessItStoredOne();
+        OptionalLong writeVersion = before == null || !before.known() ? OptionalLong.empty() : storage.writeVersion(subscriptionId);
+        Checkpoint checkpoint = storage.read(subscriptionId);
+        return checkpoint != null && (before == null || !before.stillStored(checkpoint, writeVersion)) ? checkpoint : null;
+    }
+
+    // Reads no storage. Callers hold the id lock
+    private Subscription resumeAt(String subscriptionId, @Nullable Checkpoint resumeAt) {
+        if (resumeAt != null) {
+            return RepositionableSubscriptions.findIn(getWrappedSubscriptionModel()).orElseThrow().resumeSubscription(subscriptionId, StartAt.checkpoint(resumeAt));
         }
         return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+    }
+
+    private void wroteTo(String subscriptionId) {
+        lastStorageWriteOf.put(subscriptionId, storageWrites.incrementAndGet());
+    }
+
+    private void deleteFromStorage(String subscriptionId) {
+        try {
+            storage.delete(subscriptionId);
+        } finally {
+            lastStorageWriteOf.remove(subscriptionId);
+        }
     }
 
     /**
@@ -1033,7 +1127,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // write would otherwise overwrite
             Checkpoint previous = storage.read(subscriptionId);
             CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
-            storage.save(subscriptionId, position, writeCondition);
+            try {
+                storage.save(subscriptionId, position, writeCondition);
+            } finally {
+                wroteTo(subscriptionId);
+            }
             try {
                 return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(position));
             } catch (Throwable e) {
@@ -1059,6 +1157,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             if (putBackFailure != resumeFailure) {
                 resumeFailure.addSuppressed(putBackFailure);
             }
+        } finally {
+            wroteTo(subscriptionId);
         }
     }
 
@@ -1116,9 +1216,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             stopUntrackedRegistrations(subscriptionId);
             CheckpointRegistration registration = registrations.remove(subscriptionId);
             if (registration == null) {
-                storage.delete(subscriptionId);
+                deleteFromStorage(subscriptionId);
             } else {
-                registration.cancelled(() -> storage.delete(subscriptionId));
+                registration.cancelled(() -> deleteFromStorage(subscriptionId));
             }
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.remove(subscriptionId);

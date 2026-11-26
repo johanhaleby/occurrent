@@ -193,32 +193,69 @@ The rule needs one lock for each scope, taken in a fixed order:
 | Order | Lock | Taken by |
 | --- | --- | --- |
 | 1 | `ManualStartSubscriptionModel` model lock | its `start(..)`, `stop()` and registration |
-| 2 | catch-up model lock, read and write | `start(..)`, `stop()` and `shutdown()` exclusively, across the loop over every id and the wrapped model's own `start(..)` or `stop()`. Every per-id call shared, around its claim, apart from `resumeSubscription(X)`, which takes it exclusively. Replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it exclusively across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
-| 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, as today |
+| 2 | catch-up model lock | `start(..)`, `stop()` and `shutdown()`, across the loop over every id and the wrapped model's own `start(..)`, `stop()` or `shutdown()`, and the turn of `resumeSubscription(X)`. No other per-id call takes it, and replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
+| 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, and a `stop()` for each X whose replay it parks |
 | 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check that the replay may still store a catch-up checkpoint, which records the store as under way, but never while it runs the action, asks the predicate that decides whether to store, or stores |
 | 5 | `lifecycleLock` | short reads and writes of shared fields, nothing taken under it |
 
 The model lock replaces the reasoning behind `lifecycleGeneration`, `liveDelegateResumes` and `stoppedByFailedStart`.
-A `start(..)` or `stop()` waits for the per-id calls in flight and then runs alone. A per-id call waits for a
-`start(..)` or `stop()` in flight.
+A `start(..)`, a `stop()`, a `shutdown()` and the turn of a resume run one at a time. A `stop()` takes the claim and
+the handover lock of each subscription whose replay it parks, so it waits for a call for that subscription or a step of
+its replay that is under way.
 
-A per-id call waits at most 10 seconds for the shared model lock, as it waits at most 10 seconds for its claim. A call
-that times out on either wait took no effect (`NOTHING_CHANGED`). The bound matters for an action that makes a per-id
-call. A `stop()` holds the model lock exclusively while the wrapped model's `stop()` waits for the actions that run,
-and an action that calls `pauseSubscription(Y)` in that time waits for the same lock. The MongoDB change-stream
-models' `stop()` gives up on a running action after 1 second, so the pause gets the lock after at most that long. With
-a wrapped model whose `stop()` waits for its actions without a deadline, the pause throws after 10 seconds, the action
-ends, and the `stop()` goes on.
+No thread holds the model lock across a checkpoint storage call, a call to the wrapped model for one subscription that
+can wait for I/O, or code the caller supplied, apart from the three cases at the end of this part. So a checkpoint
+storage that never answers for subscription X holds up only X. A resume of Y runs and delivers, a `start(true)`
+resumes the other subscriptions, `stop()` returns within 10 seconds, and `shutdown()` shuts the wrapped model down.
 
-The exclusive wait has no deadline. It ends once every per-id call in flight has returned. A per-id call holds the
-shared lock while it waits for the handover lock, the wrapped model and the checkpoint storage, and none of those waits
-has a deadline, so a wrapped model or a checkpoint storage that never returns holds up `start(..)` and `stop()` too. The
-one exception is a wait for the handover lock while code the caller supplied runs under it, described below.
+A resume reads before its turn, without the lock. It reads the position each catch-up model stored for X, and, when
+the wrapped model implements `PreparedResumeSubscriptions`, what the wrapped model's resume of X reads, by calling
+`prepareResume(X)`. The turn decides from what was read, and resumes the wrapped model with
+`resumeAsPrepared(X, prepared)`, which reads nothing. `DurableSubscriptionModel` implements it.
 
-The one bound on the exclusive wait comes from code the caller supplied, and so does one of the two bounds on a
+The turn uses what was read only while X has the same registration, no write or delete of X's stored position by the
+catch-up, or by the wrapped model on its behalf, has returned since the read began, and no `stop()` has taken effect
+since. Otherwise the resume reads again and runs another turn. So no `stop()` completes between what a resume reads and
+the wrapped model's resume. A resume that was reading when a `stop()` took effect takes effect after that stop, as a
+resume made once the stop had returned would.
+
+A `start(true)` makes the same read before its turn for every subscription it may resume, one thread per
+subscription, and waits up to 10 seconds for those reads. In its turn it resumes each subscription whose read came in
+time and is still current. It resumes every other one once its turn is over, without the lock, reading again, unless a
+`stop()` or a `shutdown()` came after the turn. So the `start(true)` returns only once those resumes have returned, but
+it holds the lock for none of them.
+
+A call for X that an action handed over, a subscribe, a resume, a positioned resume, a pause or a cancel, runs on a
+thread of its own without the model lock, as the same call made from another thread does. The lifecycle thread waits
+for it to begin, which is when it has taken its claim, or for a resume when its turn is over. It waits at most 10
+seconds, so the call keeps its place among the handed calls. Then it logs at `ERROR`, withdraws the call and goes on
+with the calls handed over after it. A withdrawn call throws `IllegalStateException` at its claim or its turn and
+changes nothing. So the `StartAt.dynamic(..)` function of a handed subscribe runs without the lock, and a `start(..)`,
+`stop()` or `shutdown()` made meanwhile doesn't wait for it. Another call for X waits for X's claim, at most 10 seconds.
+
+A thread that holds the model lock and waits for one subscription gives up after 10 seconds, whatever it waits for.
+That covers a `stop()` waiting for the claim or the handover lock of a replay it parks, while the replay waits for its
+checkpoint storage or the wrapped model, and a resume's turn waiting for a cancelled replay to return. A `stop()` that
+gives up has stopped the model all the same (`STOPPED_ALL_THE_SAME`), and that replay parks itself, as described below.
+A replay a resume started can be in its handover then, waiting for its storage to give it the live start. Once the read
+returns, it finds the model stopped and parks instead of resuming the wrapped model. A resume in the wrapped model that
+blocks until after the stop gave up still resumes the subscription there.
+A `shutdown()` that waits for the lock while its holder has waited 100 milliseconds or more for one subscription shuts
+the wrapped model down without the lock.
+
+The three cases that still hold the model lock across I/O or code the caller supplied are these:
+
+1. The wrapped model's own `start(..)`, `stop()` and `shutdown()`, and whatever they read.
+2. A wrapped model that doesn't implement `PreparedResumeSubscriptions` reads in its `resumeSubscription(X)`, which the
+   turn calls. A wrapped model that isn't part of Occurrent and whose resume blocks holds the lock until it returns. A
+   `shutdown()` that waits for the lock meanwhile shuts the wrapped model down without the lock, as above, so the
+   wrapped model then has a resume and a `shutdown()` running at once, as it would with two threads calling it.
+3. A `StartAt.dynamic(..)` function that a start's or a resume's turn asks, and a `CatchupListener` that a resume
+   relaunching a parked replay tells. Both run under the lock, bounded as follows.
+
+The one bound on the wait for the lock comes from code the caller supplied, and so does one of the two bounds on a
 resume's wait behind the handed calls. The other is the wait for the actions that handed those calls over, described
-under the lifecycle thread below. The lifecycle thread asks the `StartAt.dynamic(..)` function of a subscribe handed over from an action under
-the model lock, and a resume that relaunches a parked replay calls a `CatchupListener` under it. Such code can wait for
+under the lifecycle thread below. Such code can wait for
 a `start(..)` or `stop()` made on another thread, and that call waits for the lock the code holds. The catch-up marks
 the code while it runs under the model lock. A `start(..)`, `stop()`, `stopReplay()`, `resumeReplay()` or
 `resumeSubscription(..)` from another thread gives up once the marked code and its own wait have both run for 10
@@ -235,10 +272,10 @@ method is the competing consumer model's `shutdown()`, which calls the catch-up 
 method reaches the models inside, so nothing calls `shutdown()` again.
 
 The handed shutdown doesn't run on the lifecycle thread, because a call queued there ahead of it can wait for the model
-lock that the marked code holds. A call an action handed over waits for that lock with no deadline, whether it is a
-`start(..)`, `stop()`, `stopReplay()`, `resumeReplay()`, `pauseSubscription(id)` or `cancelSubscription(id)`, a resume
-or a subscribe, or a `shutdown()`. Marked code that waits for the wrapped model to be shut down would then keep a
-handed shutdown queued behind that call from ever running.
+lock that the marked code holds. A `start(..)`, `stop()`, `stopReplay()`, `resumeReplay()` or `shutdown()` an action
+handed over waits for that lock on the lifecycle thread with no deadline. Marked code that waits for the wrapped model
+to be shut down would then keep a handed shutdown queued behind that call from ever running. A handed call for one
+subscription holds the lifecycle thread up for at most 10 seconds, as described above.
 
 When the marked code never returns, the handed shutdown waits for good, so the wrapped model goes on running. A second
 `shutdown()` held up the same way before the handed one has run hands over no second one. A `shutdown()` that gets the
@@ -260,17 +297,20 @@ once the function returns, so the wrapped model would keep a subscription that a
 removed. A wrapped model that asks the function while it holds a monitor its `shutdown()` takes too, as
 `ChangeStreamSubscriptions` takes `synchronized (monitor)` in its `shutdown()`, `stop()` and `start(..)`, would also
 hold a shutdown without the lock there for as long as the function runs. Running the code the caller supplied outside
-the model lock would let these calls go on without waiting for it. This release doesn't do that, so a function or a
-listener that waits for a lifecycle call made on another thread makes that call throw after 10 seconds.
+the model lock would let these calls go on without waiting for it. This release does that for a subscribe handed over
+from an action, as described above, but not for a function a start's or a resume's turn asks, or for a listener a
+relaunch tells. Such a function or listener that waits for a lifecycle call made on another thread makes that call
+throw after 10 seconds.
 
 The replay thread also tells a `CatchupListener` while it holds the subscription's handover lock, with no model lock
 held. It does so when the replay runs again from its origin because the live start left the history, and when a replay
 a resume started runs again after a failure. A listener there that waits for a `stop()` made on another thread would
-hold that stop for good. The stop holds the model lock and waits for the handover lock to park the replay, so every
-other lifecycle call and `shutdown()` would wait behind it too. The catch-up marks code the caller supplied that runs
-under a handover lock, per subscription. A lifecycle call for that subscription holds its claim, and it gives up once
-the marked code and its own wait for the handover lock have both run for 10 seconds. It throws `IllegalStateException`
-saying what it did before it took the claim. A `stop()` that gives up has stopped the model (`STOPPED_ALL_THE_SAME`),
+hold that stop as long as it waits. The stop holds the model lock and waits for the handover lock to park the replay,
+so every other lifecycle call and `shutdown()` would wait behind it too. The catch-up marks code the caller supplied
+that runs under a handover lock, per subscription. A lifecycle call for that subscription holds its claim, and it gives
+up once the marked code and its own wait for the handover lock have both run for 10 seconds. A call that also holds the
+model lock, such as a `stop()`, gives up after 10 seconds of waiting for the handover lock whatever holds it, as
+described above. Either throws `IllegalStateException` saying what it did before it took the claim. A `stop()` that gives up has stopped the model (`STOPPED_ALL_THE_SAME`),
 and the replay parks itself once the listener returns. It then stays parked, as a replay the stop parked does, until a
 `start(true)` or a resume of its own subscription. A `start(false)` made before the listener returns, such as the one a
 resume of another subscription can make in a stopped model, doesn't let it go on. A call for another subscription that
@@ -279,7 +319,7 @@ waits behind that stop waits those 10 seconds, and then goes on.
 A call waiting behind the handed calls gives up only while the lifecycle thread hasn't begun it, and then the lifecycle
 thread skips it, so the calls that do run keep their order. The cost is that code the caller supplied that runs longer
 than 10 seconds for other reasons makes these calls throw where they would have waited. A per-id call already has the
-same 10 second bound on its claim and on the model lock.
+same 10 second bound on its claim.
 
 A `start(..)`, `stop()`, `stopReplay()` or `resumeReplay()` called on a replay thread outside the subscriber's action,
 such as in a `CatchupListener`, or from a thread that holds a claim, throws at once, because it would wait for a per-id
@@ -291,8 +331,10 @@ doesn't throw, since 0.34.0 ran such a call on the calling thread and an action 
 or live. It doesn't take the lock when the lock is free either, since then its outcome would depend on whether another
 thread held the lock at that instant. It returns at once and hands the call to a lifecycle thread the children of one
 dispatcher share. The lifecycle thread gets the calls an action handed over once that action has returned, in the
-order the action made them, and runs what it gets one at a time, in the order it came. It waits for the model lock and
-then runs the call, so the call takes effect after the action returns and in turn with the others. Calls handed over
+order the action made them, and runs what it gets one at a time, in the order it came. For a call of the model it
+waits for the model lock and then runs the call. A call for one subscription it starts on a thread of its own, and
+waits for that call to begin, as described above. So the call takes effect after the action returns and in turn with
+the others. Calls handed over
 from two actions run in the order the actions returned, which is the order in which they take effect. Until then the
 wrapped model can go on delivering to the action, and the replay can go on to its next event. The lifecycle thread doesn't run a call once a `shutdown()` has begun, and logs an `ERROR` naming the
 model for a call that throws. It inherits no inheritable thread-local from the thread that happens to create it. The
@@ -323,14 +365,16 @@ before it. So while A's action doesn't return, those calls throw after 10 second
 subscription's delivery or resume waits for them.
 
 A `resumeSubscription(X)` made on such a thread runs in turn with `start(..)`, `stop()` and `shutdown()` too. It waits
-for the calls handed over before it that concern X, and then holds the model lock while it reads whether the model is stopped and X
-paused, starts the model when both hold, and has the wrapped model resume X. With that read outside the lock, a
-`stop()` could complete between the read and the wrapped model's resume. The wrapped model could then run X again after the
-stop had paused it, the model read as stopped, and a subscription made afterwards from the start of the history stayed
-parked until the next start. The resume takes X's claim under the model lock, in the order a `stop()` takes them when
-it parks the replays. A thread that holds a claim never takes the model lock, so the two orders can't cross. The resume
-holds the lock while it waits up to 10 seconds for X's claim or for a replay a failed cancel ended, and a `start(..)`,
-`stop()` or `shutdown()` waits for it that long.
+for the calls handed over before it that concern X, and reads what X's resume needs without the lock, as described
+above. Then, in its turn, it holds the model lock while it reads whether the model is stopped and X paused, starts the
+model when both hold, and has the wrapped model resume X from what was read. If a `stop()` completed between the read
+and the wrapped model's resume, the wrapped model could run X again after the stop had paused it, the model read as
+stopped, and a subscription made afterwards from the start of the history stayed parked until the next start. So the
+turn reads again when a stop came after the read. The resume takes X's claim under the model lock, in the order a
+`stop()` takes them when it parks the replays. A thread that holds a claim never takes the model lock, so the two
+orders can't cross. The resume holds the lock while it waits up to 10 seconds for X's claim or for a replay a failed
+cancel ended. A `start(..)` or `stop()` waits for it that long, and a `shutdown()` shuts the wrapped model down without
+the lock once that wait has run for 100 milliseconds.
 
 A resume from a replay's thread outside the action, such as in a `CatchupListener`, or from a thread in the middle of a
 call for a subscription, neither takes the model lock nor waits. A handed `stop()` parks the replays under their claims
@@ -427,10 +471,12 @@ catch-up model isn't meant to be started again.
 
 No thread waits for itself under these rules. A replay thread and a thread holding a claim of these children never take
 the model lock, since they throw or hand the call to the lifecycle thread. A thread running an action of these children
-doesn't take it for a call made in that action. So only a caller's own thread, the lifecycle thread and the thread of a handed shutdown take it. The
-actions a caller's thread waits for while it holds the lock run on other threads. The lifecycle thread gets a handed
-call only after the action that made it has returned, so it waits for no action, and no thread holding the lock waits
-for the lifecycle thread. A caller's thread that waits for the actions holding handed calls, or for the lifecycle
+doesn't take it for a call made in that action. So only a caller's own thread, the lifecycle thread, the thread a
+handed call for one subscription runs on, and the thread of a handed shutdown take it. The actions a caller's thread
+waits for while it holds the lock run on other threads. The lifecycle thread gets a handed call only after the action
+that made it has returned, so it waits for no action, and no thread holding the lock waits for the lifecycle thread.
+The lifecycle thread holds no lock while it waits for a handed call for one subscription to begin, and it waits at most
+10 seconds. A caller's thread that waits for the actions holding handed calls, or for the lifecycle
 thread, holds neither the model lock nor a claim and runs no action of the children, so those actions run on other
 threads. An action that waits for that caller's thread, after it handed a call over, waits for it at most 10 seconds,
 since the call on the caller's thread then gives up and throws. A `shutdown()` that calls the wrapped model's `shutdown()`

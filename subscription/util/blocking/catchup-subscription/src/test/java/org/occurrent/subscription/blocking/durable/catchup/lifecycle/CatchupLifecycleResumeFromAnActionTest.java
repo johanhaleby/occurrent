@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
+import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
@@ -26,6 +27,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -87,7 +89,7 @@ class CatchupLifecycleResumeFromAnActionTest {
         // When y receives an event, and the calls the action handed over have run
         runOnAThread(() -> live.publish(cloudEvent("live-1")));
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned").isTrue();
-        awaitTheHandedCalls();
+        awaitTheHandedCallsThrough(() -> model.resumeSubscription(X), SubscriptionAlreadyRunningException.class);
 
         // Then the outcome is that of the stop followed by the resume, which finds the model stopped and x paused
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();
@@ -107,7 +109,7 @@ class CatchupLifecycleResumeFromAnActionTest {
 
         // When the replay of y reaches its action, and the calls the action handed over have run
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of the replay of y returned").isTrue();
-        awaitTheHandedCalls();
+        awaitTheHandedCallsThrough(() -> model.resumeSubscription(X), SubscriptionAlreadyRunningException.class);
 
         // Then the outcome is that of the stop followed by the resume, which finds the model stopped and x paused
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();
@@ -156,7 +158,7 @@ class CatchupLifecycleResumeFromAnActionTest {
         goOn.countDown();
         stop.get(30, TimeUnit.SECONDS);
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of the replay of w returned").isTrue();
-        awaitTheHandedCalls();
+        assertThat(catchThrowable(() -> firstHandle.get().waitUntilStarted(WAIT))).as("what the handle of resumeSubscription(y) threw once the call the action handed over ran").isNull();
         assertThat(thrownByTheAction.get()).as("what resumeSubscription(y) threw in the action").isNull();
         assertThat(firstHandle.get()).as("the handle resumeSubscription(y) returned to the action").isNotNull();
 
@@ -204,7 +206,10 @@ class CatchupLifecycleResumeFromAnActionTest {
         // When y receives an event, and the calls the action handed over have run
         runOnAThread(() -> live.publish(cloudEvent("live-1")));
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned").isTrue();
-        awaitTheHandedCalls();
+        awaitTheHandedCallsThrough(() -> {
+            model.pauseSubscription(X);
+            return null;
+        }, SubscriptionNotRunningException.class);
 
         // Then the outcome is that of the resume followed by the pause, which finds x running
         assertThat(thrownByTheAction.get()).as("what the action threw, as the pause finds x still paused when it runs at once").isNull();
@@ -223,7 +228,7 @@ class CatchupLifecycleResumeFromAnActionTest {
         // When y receives an event, and the calls the action handed over have run
         runOnAThread(() -> live.publish(cloudEvent("live-1")));
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned").isTrue();
-        awaitTheHandedCalls();
+        awaitTheHandedCallsThrough(() -> model.resumeSubscription(X), UnknownSubscriptionException.class);
 
         // Then the outcome is that of the resume followed by the cancel, so x is unknown to the model, and the resume had started it before the cancel took it away
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();
@@ -276,7 +281,7 @@ class CatchupLifecycleResumeFromAnActionTest {
         // When y receives an event, and the calls the action handed over have run
         runOnAThread(() -> live.publish(cloudEvent("live-1")));
         assertThat(actionReturned.await(10, TimeUnit.SECONDS)).as("whether the action of y returned").isTrue();
-        awaitTheHandedCalls();
+        awaitTheHandedCallsThrough(() -> model.resumeSubscription(X, StartAt.now()), SubscriptionAlreadyRunningException.class);
 
         // Then the first resume started x, and the second, which found x running, reports it through its handle
         assertThat(thrownByTheAction.get()).as("what the action threw").isNull();
@@ -319,6 +324,17 @@ class CatchupLifecycleResumeFromAnActionTest {
     // A resume of a subscription nobody made runs behind the calls handed to the lifecycle thread, and changes nothing
     private void awaitTheHandedCalls() {
         assertThat(catchThrowable(() -> model.resumeSubscription("nobody"))).as("what a resume of a subscription nobody made threw").isInstanceOf(UnknownSubscriptionException.class);
+    }
+
+    // The call goes through the subscription the handed calls concern, so it takes that subscription's claim behind them. A call
+    // for another subscription is not ordered behind them. The call must not change the state the test then asserts
+    private void awaitTheHandedCallsThrough(Supplier<Subscription> probe, Class<? extends Throwable> expected) {
+        assertThat(catchThrowable(() -> {
+            Subscription handle = probe.get();
+            if (handle != null) {
+                handle.waitUntilStarted(WAIT);
+            }
+        })).as("what a call for the subscription the handed calls concern threw").isInstanceOf(expected);
     }
 
     private static void runOnAThread(Runnable body) {

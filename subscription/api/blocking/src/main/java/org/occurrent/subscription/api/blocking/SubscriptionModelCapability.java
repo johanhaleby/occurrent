@@ -21,7 +21,7 @@ import java.util.Optional;
 /**
  * Marker supertype for every blocking subscription model capability. {@link Subscribable}, {@link CancellableSubscriptions},
  * {@link Pushable}, {@link RepositionableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link IntrospectableSubscriptions},
- * {@link HistoryRetainingSubscriptions}, {@link HistoryLossReportingSubscriptions}, {@link StartRefusalReportingSubscriptions}, {@link CommitOrderedSubscriptions}, {@link RedeliveringSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
+ * {@link HistoryRetainingSubscriptions}, {@link HistoryLossReportingSubscriptions}, {@link StartRefusalReportingSubscriptions}, {@link CommitOrderedSubscriptions}, {@link RedeliveringSubscriptions}, {@link PreparedResumeSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
  * declaring it directly.
  * <p>
  * It exists so a method that accepts "whatever partial or complete subscription model a caller happens to hold" has a
@@ -40,6 +40,7 @@ import java.util.Optional;
  * @see StartRefusalReportingSubscriptions#findIn(SubscriptionModelCapability)
  * @see CommitOrderedSubscriptions#findIn(SubscriptionModelCapability)
  * @see RedeliveringSubscriptions#findIn(SubscriptionModelCapability)
+ * @see PreparedResumeSubscriptions#findIn(SubscriptionModelCapability)
  */
 public interface SubscriptionModelCapability {
 

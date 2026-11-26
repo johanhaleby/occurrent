@@ -2999,8 +2999,9 @@ the catch-up is not affected.
   `stop()` lets replays run again, and the start then stops only the wrapped model once more. A `stop()` from a
   `CatchupListener` still throws `IllegalStateException` and changes nothing.
 * Code the caller supplied, a `StartAt.dynamic(..)` function or a `CatchupListener`, can run under the model's lock.
-  Two examples are the function of a subscribe handed over from an action, and a listener that a
-  `resumeSubscription(id)` calls when it relaunches a parked replay. While such code runs there, each of the waits
+  Two examples are the function a `start(true)` or a `resumeSubscription(id)` asks for a subscription with a
+  dynamic start, and a listener that a `resumeSubscription(id)` calls when it relaunches a parked replay. The function
+  of a subscribe handed over from an action runs without the lock. While such code runs there, each of the waits
   above on another thread ends once that code and the wait have both run for 10 seconds. A `start(..)`, `stop()`,
   `stopReplay()`, `resumeReplay()` or `resumeSubscription(..)` then throws `IllegalStateException` with "Nothing was
   changed." in its message. A `shutdown()` throws `IllegalStateException` too, but by then it has ended the catch-up

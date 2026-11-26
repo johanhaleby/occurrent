@@ -2422,7 +2422,9 @@ class StreamCatchupResumeReplayMongoTest {
         storage.delete(subscriptionId);
 
         // Then no resume replay is registered, so a start that resumes lets the live delegate resume the subscriptions
-        assertThat(catchupB.anyResumeReplays()).as("a resume replay or a cancel is registered").isFalse();
+        var resumes = catchupB.new StartResumes(catchupB, List.of(catchupB), (id, read) -> null);
+        resumes.readBeforeTheTurn();
+        assertThat(catchupB.anyResumeReplays(resumes.reads())).as("a resume replay or a cancel is registered").isFalse();
     }
 
     @Test

@@ -381,7 +381,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             // attempt reaching this late cannot delete a later attempt's own temporary position.
             if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
                 returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                    cfg.storage().delete(subscriptionId);
+                    try {
+                        cfg.storage().delete(subscriptionId);
+                    } finally {
+                        positionMayHaveMoved(subscriptionId);
+                    }
                     return null;
                 });
             }
@@ -522,7 +526,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             // path: a superseded attempt reaching this late must not delete a later attempt's own temporary position.
             if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
                 returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                    cfg.storage().delete(subscriptionId);
+                    try {
+                        cfg.storage().delete(subscriptionId);
+                    } finally {
+                        positionMayHaveMoved(subscriptionId);
+                    }
                     return null;
                 });
             }

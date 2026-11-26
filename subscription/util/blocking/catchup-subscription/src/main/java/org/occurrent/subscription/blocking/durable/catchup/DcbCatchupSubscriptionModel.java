@@ -228,7 +228,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             // late must not delete a later attempt's own temporary position.
             if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
                 returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                    cfg.storage().delete(subscriptionId);
+                    try {
+                        cfg.storage().delete(subscriptionId);
+                    } finally {
+                        positionMayHaveMoved(subscriptionId);
+                    }
                     return null;
                 });
             }

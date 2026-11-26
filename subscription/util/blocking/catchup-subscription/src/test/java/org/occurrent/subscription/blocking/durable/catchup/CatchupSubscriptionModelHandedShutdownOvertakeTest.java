@@ -78,7 +78,7 @@ class CatchupSubscriptionModelHandedShutdownOvertakeTest {
     private final CountDownLatch callIsHeldBeforeTheLock = new CountDownLatch(1);
     private final CountDownLatch callMayTakeTheLock = new CountDownLatch(1);
     private final AtomicReference<@Nullable Call> heldCall = new AtomicReference<>();
-    // Runs on the thread that asks the function, under the model lock, once the call the function waited for has ended
+    // Runs on the thread that asks the function, a handed-call thread without the model lock, once the call the function waited for has ended
     private volatile Runnable onTheThreadHoldingTheLock = () -> {
     };
     private final AtomicReference<@Nullable Throwable> thrownUnderTheLock = new AtomicReference<>();
@@ -177,14 +177,14 @@ class CatchupSubscriptionModelHandedShutdownOvertakeTest {
     }
 
     @Test
-    void a_stop_made_by_the_function_under_the_model_lock_after_a_shutdown_handed_its_shutdown_over_stops_nothing() throws Exception {
-        // Given a function that waits for a shutdown on another thread, which threw and handed its wrapped model's shutdown over, and then makes a stop itself while it still holds the model lock
-        givenTheFunctionMakesACallUnderTheLockAfterTheShutdownHandedItsShutdownOver(model::stop);
+    void a_stop_made_by_the_function_of_a_handed_subscribe_after_the_shutdown_it_asked_has_completed_stops_nothing() throws Exception {
+        // Given a function, running on the thread of a handed subscribe, that waits for a shutdown on another thread, which completed and shut the wrapped model down, and then makes a stop itself
+        givenTheFunctionMakesACallAfterTheShutdownItAskedCompleted(model::stop);
 
         // When the function returns
         // Then the stop returned without error, the wrapped model got no stop from it, and it is shut down once
-        assertThat(thrownUnderTheLock.get()).as("what the stop made under the model lock threw").isNull();
-        assertThat(stopsSeenUnderTheLock.get()).as("the stops the wrapped model had got once the stop made under the model lock returned").isZero();
+        assertThat(thrownUnderTheLock.get()).as("what the stop made by the function threw").isNull();
+        assertThat(stopsSeenUnderTheLock.get()).as("the stops the wrapped model had got once the stop made by the function returned").isZero();
         functionMayReturn.countDown();
         assertTheWrappedModelIsShutDownOnce();
         assertThat(live.stops.get()).as("the stops the wrapped model got in all").isZero();
@@ -222,10 +222,9 @@ class CatchupSubscriptionModelHandedShutdownOvertakeTest {
         assertThat(heldCall.get().endedWithin(BOUND)).as("whether the held call returned once it could take the model lock").isTrue();
     }
 
-    // The function of z asks a shutdown from another thread under the model lock, on the lifecycle thread, which holds no claim
-    // for z while it asks. Once that shutdown has thrown and handed its wrapped model's shutdown over, which waits for the lock
-    // the function holds, the function itself makes call, so call finds the lock held by its own thread
-    private void givenTheFunctionMakesACallUnderTheLockAfterTheShutdownHandedItsShutdownOver(Runnable call) throws Exception {
+    // The function of z asks a shutdown from another thread on the thread of the handed subscribe of z, without the model lock.
+    // Once that shutdown has completed and shut the wrapped model down, the function itself makes call
+    private void givenTheFunctionMakesACallAfterTheShutdownItAskedCompleted(Runnable call) throws Exception {
         functionMayReturn = new CountDownLatch(1);
         onTheThreadHoldingTheLock = () -> {
             try {
@@ -237,11 +236,12 @@ class CatchupSubscriptionModelHandedShutdownOvertakeTest {
         };
         actionResumesXThenSubscribesZWhoseFunctionWaitsForAShutdown();
         awaitTheFunction();
-        assertTheShutdownThrewAfterTheWait(callOfTheFunction.get());
+        assertThat(callOfTheFunction.get().thrown()).as("what shutdown() threw").isNull();
+        assertThat(callOfTheFunction.get().elapsed()).as("how long the shutdown took, while the function waited for it").isLessThan(WAIT);
     }
 
     // The action of y, a live action, hands the resume of x over and then subscribes z paused behind it, so z subscribes on
-    // the lifecycle thread under the model lock and asks the function there. The function runs a shutdown on another thread
+    // a thread of its own, without the model lock, and asks the function there. The function runs a shutdown on another thread
     // and waits for it
     private void actionResumesXThenSubscribesZWhoseFunctionWaitsForAShutdown() throws Exception {
         givenXPaused();
@@ -291,7 +291,7 @@ class CatchupSubscriptionModelHandedShutdownOvertakeTest {
         assertThat(listenerHoldsTheLock.await(20, TimeUnit.SECONDS)).as("whether the listener of z holds the model lock").isTrue();
     }
 
-    // Runs on the thread that holds the model lock and asks the caller's code
+    // Runs on the handed-call thread that asks the caller's code
     private void waitForTheShutdown() {
         Call started = new Call("call-the-function-waits-for", model::shutdown);
         callOfTheFunction.set(started);
