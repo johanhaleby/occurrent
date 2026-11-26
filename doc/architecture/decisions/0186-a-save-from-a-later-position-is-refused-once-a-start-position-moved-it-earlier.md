@@ -53,9 +53,15 @@ log, until something pauses and resumes it.
 A save with `any()`, which a `DurableSubscriptionModel` without a version source writes, isn't refused and removes the
 field. Such a node has no fence against an older lease either. The reactor `ReactorDurableSubscriptionModel` saves an
 event's checkpoint with `any()`. On the reactor stack B starts from P_B, the checkpoint the first-position race settled,
-also through the reactive Spring Boot starter, so B delivers the events between P_B and P_H. When B stops before it has
-delivered them all and a save of H's is the last one stored, B's next start resumes after P_H, and no node delivers the
-events between P_B and P_H that B hadn't reached.
+also through the reactive Spring Boot starter, so B delivers the events between P_B and P_H. The blocking Spring Boot
+starter starts B from P_B the same way when the application defines a subscription model without
+`CompetingConsumerSubscriptionModel`. When B stops before it has delivered them all and a save of H's is the last one
+stored, B's next start resumes after P_H, and no node delivers the events between P_B and P_H that B hadn't reached.
+
+Under `CompetingConsumerSubscriptionModel` the blocking starter starts B at the model default, which reads the stored
+checkpoint once B holds the lease. With `occurrent.subscription.competing-consumer.fence-checkpoints=false` the
+starter's version source answers no version, so H saves with `any()`. H's next save then writes a position after P_H
+over P_B, and no node delivers the events between P_B and P_H.
 
 The `notOlderThan` contract of the MongoDB storages, released in 0.33.0, refuses a write it allowed before. No API
 changes for it, so the changelog lists it as a fix of behaviour shipped in 0.34.0, with a section in the upgrade guide.
