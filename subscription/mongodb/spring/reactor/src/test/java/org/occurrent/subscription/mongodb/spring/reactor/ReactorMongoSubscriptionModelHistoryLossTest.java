@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
@@ -47,9 +51,11 @@ import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ChangeStreamEvent;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
@@ -115,7 +121,9 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
     private ReactorMongoSubscriptionModel subscriptionModel;
     private final HistoryLossOnCue loss = new HistoryLossOnCue();
     private final CopyOnWriteArrayList<String> asked = new CopyOnWriteArrayList<>();
+    private final ListAppender<ILoggingEvent> modelLog = new ListAppender<>();
     private Checkpoint start;
+    private Level originalLogLevel;
 
     @BeforeEach
     void createClients() {
@@ -129,16 +137,56 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
         ReactiveTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(new ReactiveMongoTemplate(mongoClient, databaseName), eventStoreConfig);
+        Logger logger = (Logger) LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
+        originalLogLevel = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        modelLog.start();
+        logger.addAppender(modelLog);
     }
 
     @AfterEach
     void shutdown() {
+        Logger logger = (Logger) LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
+        logger.detachAppender(modelLog);
+        logger.setLevel(originalLogLevel);
+        modelLog.stop();
         if (subscriptionModel != null) {
             subscriptionModel.shutdown();
         }
         FailPoint.off(mongoClient);
         subscriberClient.close();
         mongoClient.close();
+    }
+
+    @Test
+    void a_named_subscription_whose_history_is_lost_when_the_model_does_not_restart_it_logs_what_to_do_when_instances_compete() {
+        subscriptionModel = modelOver(false);
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("errorCode", HISTORY_LOST));
+
+        subscriptionModel.subscribe("sub", null, StartAt.now(), event -> Mono.empty());
+
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(modelLog.list).as("what the model logged about the lost history")
+                .filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("will not restart subscription"))
+                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("subscription sub")
+                        .contains("Consider removing its checkpoint from the durable storage when one stores it, or use a catch-up subscription to get up to speed if needed. ")
+                        .doesNotContain("Consider removing the subscription from the durable storage")
+                        .contains(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT).doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)));
+    }
+
+    @Test
+    void an_unnamed_subscription_whose_history_is_lost_when_the_model_does_not_restart_it_logs_nothing_about_instances_that_compete() {
+        subscriptionModel = modelOver(false);
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("errorCode", HISTORY_LOST));
+
+        subscriptionModel.subscribe(null, StartAt.now()).subscribe(event -> {
+        }, error -> {
+        });
+
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(modelLog.list).as("what the model logged about the lost history")
+                .filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("will not restart subscription"))
+                .singleElement().satisfies(event -> assertThat(event.getFormattedMessage()).contains("the subscription").doesNotContain("stop every instance")
+                        .contains("will not restart subscription! Consider using a catch-up subscription to get up to speed if needed.")
+                        .doesNotContain("durable storage").doesNotContain("checkpoint")));
     }
 
     @Test

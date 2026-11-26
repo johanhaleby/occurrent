@@ -87,6 +87,14 @@ class CompetingConsumerStopAndShutdownDuringADurableSubscribeTest {
             assertThat(CompletableFuture.runAsync(call)).as("[%s during the subscribe of nc, while a read of its stored position is held]", called).succeedsWithin(EVENTUALLY);
             read.open();
             assertThat(subscribing).as("the subscribe of nc").succeedsWithin(EVENTUALLY);
+            // The subscribe is not refused for a first position that could be overwritten, which would end it before it got to what is asserted next
+            Throwable outcome = subscribing.join();
+            if (called.equals("shutdown()") && durableModelStartsAt.equals("default")) {
+                // shutdown() runs while the read is held, so the subscribe finds the model shut down when it resumes
+                assertThat(outcome).as("[the subscribe of nc, shut down while it reads its stored position]").isInstanceOf(IllegalStateException.class).hasMessageContaining("was not made, since CompetingConsumerSubscriptionModel was shut down");
+            } else {
+                assertThat(outcome).as("[the subscribe of nc, %s during it, start position the durable model gets: %s]", called, durableModelStartsAt).isNull();
+            }
 
             assertThat(fixture.wrapped.runs("nc")).as("[nc runs in the wrapped model once %s and the subscribe returned]", called).isFalse();
         } finally {
@@ -173,6 +181,12 @@ class CompetingConsumerStopAndShutdownDuringADurableSubscribeTest {
     private static final class Storage implements CheckpointStorage {
         private final AtomicInteger reads = new AtomicInteger();
         private final AtomicReference<@Nullable Gate> nextRead = new AtomicReference<>();
+
+        // Nothing is stored, so a write that only holds when nothing is stored always holds
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
 
         @Override
         public @Nullable Checkpoint read(String subscriptionId) {

@@ -416,9 +416,31 @@ public class OccurrentProperties {
          * every restart, and ignores the answer when a checkpoint is stored. Starting anyway means no start position
          * is recorded before the first delivery, so a crash before the first checkpoint is saved starts over from
          * wherever the feed has reached by then, and an event whose delivery failed before the crash is not
-         * redelivered. The default is {@code false}, which refuses such a subscription when it is created.
+         * redelivered. The default is {@code false}, which refuses such a subscription when it is created. On the
+         * blocking stack, with a {@code CheckpointStorage} that answers {@code false} from
+         * {@code evaluatesWriteConditionsFor(String)} for the subscription, {@code true} here isn't enough. The
+         * subscription is still refused when it is created unless {@code start-when-first-position-can-be-overwritten}
+         * is {@code true} as well.
          */
         private boolean startWhenNoStartPositionCanBeRecorded = false;
+
+        /**
+         * Whether a subscription whose first position would be recorded in a {@code CheckpointStorage} that answers
+         * {@code false} from {@code evaluatesWriteConditionsFor(String)} starts anyway instead of being refused. The
+         * first position is written with {@code CheckpointWriteCondition.ifAbsent()}, so of two nodes recording one at
+         * the same moment only one write is stored. A storage that can't evaluate that condition could only write it
+         * unconditionally, and then the two nodes can overwrite each other's first position and lose the events between
+         * the two positions for good. Starting anyway writes it unconditionally, with a warning. The default is
+         * {@code false}, which refuses such a subscription when it is created, before anything is written for it. Every
+         * {@code CheckpointStorage} Occurrent ships evaluates write conditions, apart from
+         * {@code SpringRedisCheckpointStorage} in Cluster-safe mode for an id Redis Cluster can't put in one slot with its
+         * version key, and for an id in the reserved namespace of its version key, which it refuses for every read and
+         * write anyway. The starter reads this before it stores a live start as the first checkpoint, and the MongoDB
+         * starters pass it to the durable subscription model they build. A durable subscription model the application
+         * builds itself doesn't read it, so set {@code startWhenFirstPositionCanBeOverwritten(true)} on that model's
+         * config as well.
+         */
+        private boolean startWhenFirstPositionCanBeOverwritten = false;
 
         /**
          * Tuning for the catch-up-then-live handover used by a push-fed projection's bootstrap.
@@ -450,6 +472,14 @@ public class OccurrentProperties {
 
         public void setStartWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
             this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
+        }
+
+        public boolean isStartWhenFirstPositionCanBeOverwritten() {
+            return startWhenFirstPositionCanBeOverwritten;
+        }
+
+        public void setStartWhenFirstPositionCanBeOverwritten(boolean startWhenFirstPositionCanBeOverwritten) {
+            this.startWhenFirstPositionCanBeOverwritten = startWhenFirstPositionCanBeOverwritten;
         }
 
         // The released getter/setter shape (isX(): boolean / setX(boolean)) is kept, unlike the two getters above,

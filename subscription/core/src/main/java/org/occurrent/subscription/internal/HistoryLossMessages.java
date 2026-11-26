@@ -23,6 +23,11 @@ import org.occurrent.subscription.Checkpoint;
 /**
  * The wording a blocking and a reactor catch-up share when the subscription model no longer has the history to resume
  * a subscription, kept in one place so the two stacks cannot drift.
+ * <p>
+ * A subscription can lose its history with nothing stored under its id, such as one that started from a checkpoint
+ * given in code, or one a catch-up runs without a durable subscription model, so a message for a named subscription
+ * appends {@link SharedStorageMessages#CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT}. A message that asks for a
+ * cancel says that the cancel deletes any checkpoint stored for the subscription, so that sentence covers the cancel too.
  */
 public final class HistoryLossMessages {
 
@@ -34,7 +39,8 @@ public final class HistoryLossMessages {
      * lost its history. The arguments are the subscription id, the lost position and the lost position again.
      */
     public static final String TERMINAL_FAILURE_LOG = "The subscription model no longer has the history to resume catch-up subscription {} from {}, so the subscription is paused and delivers nothing more."
-            + " Resuming it throws CatchupCannotResumeException until it is cancelled. To get every event, cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept."
+            + " Resuming it throws CatchupCannotResumeException until it is cancelled, or resumed at a position on a blocking catch-up subscription model the application calls directly. To get every event, cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+            + " " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT
             + " Cancelling and subscribing again from now skips the events since {}.";
 
     /**
@@ -44,7 +50,8 @@ public final class HistoryLossMessages {
      * subscription id, the live start and the live start again.
      */
     public static final String LIVE_START_LOST_LOG = "The subscription model no longer has the history to resume catch-up subscription {} from {}, the live start its replay would go live from, so the subscription is paused and delivers nothing more."
-            + " Resuming it throws CatchupCannotResumeException until it is cancelled. To get every event, cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept."
+            + " Resuming it throws CatchupCannotResumeException until it is cancelled, or resumed at a position on a blocking catch-up subscription model the application calls directly. To get every event, cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+            + " " + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT
             + " Cancelling and subscribing again from now skips the events its replay hadn't delivered, which can start before {}.";
 
     /**
@@ -67,16 +74,20 @@ public final class HistoryLossMessages {
      * history. The arguments are the lost position and the lost position again.
      */
     public static final String UNNAMED_TERMINAL_FAILURE_LOG = "The subscription model no longer has the history to resume an unnamed catch-up subscription from {}, so its Flux fails with CatchupCannotResumeException."
-            + " To get every event, subscribe again from the beginning or from a checkpoint the application kept. Subscribing again from now skips the events since {}.";
+            + " To get every event, subscribe again from the beginning, or from a checkpoint the application kept that the subscription model still has the history back to. Subscribing again from now skips the events since {}.";
 
     /**
      * Refuses to go live from {@code checkpoint}, a position the subscription model no longer has the history back to,
-     * before anything is read. {@code subscriptionId} only names the subscription, and may be null.
+     * before anything is read. {@code subscriptionId} only names the subscription, and may be null. For a named
+     * subscription the refused checkpoint can be the one stored for it, which a start that defers to the subscription
+     * model default reads again, so the message says to delete it first.
      */
     public static CatchupCannotResumeException cannotStartFrom(@Nullable String subscriptionId, Checkpoint checkpoint) {
         return new HistoryLost(checkpoint, true, "Cannot start catch-up subscription " + name(subscriptionId) + " from checkpoint \"" + checkpoint.asString()
                 + "\", because the subscription model no longer has the history back to it, and starting from anywhere later would skip the events in between."
-                + " Start the subscription from the beginning, or from an earlier checkpoint the application kept.");
+                + (subscriptionId == null ? "" : " If the checkpoint is the one stored for the subscription, delete it first.")
+                + " Start the subscription from the beginning, or from another checkpoint the application kept that the subscription model still has the history back to."
+                + whenSeveralInstancesRunIt(subscriptionId, SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT));
     }
 
     /**
@@ -85,7 +96,8 @@ public final class HistoryLossMessages {
      */
     public static CatchupCannotResumeException historyLost(@Nullable String subscriptionId, Checkpoint lostFrom) {
         return new HistoryLost(lostFrom, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + lostFrom.asString()
-                + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept.");
+                + "\", where it stopped, and resuming from anywhere later would skip the events in between. Cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + whenSeveralInstancesRunIt(subscriptionId, SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT));
     }
 
     /**
@@ -97,7 +109,8 @@ public final class HistoryLossMessages {
     public static CatchupCannotResumeException liveStartLostOnResume(@Nullable String subscriptionId, Checkpoint liveStart) {
         return new HistoryLost(liveStart, true, "Cannot resume catch-up subscription " + name(subscriptionId) + ", because the subscription model no longer has the history back to \"" + liveStart.asString()
                 + "\", the live start its replay would go live from, and resuming from anywhere later would skip the events its replay hadn't delivered, which can start before that live start."
-                + " Cancel it and replay from the beginning, or subscribe again from a checkpoint the application kept.");
+                + " Cancel it, which deletes any checkpoint stored for it, and replay from the beginning, or subscribe again from a checkpoint the application kept that the subscription model still has the history back to."
+                + whenSeveralInstancesRunIt(subscriptionId, SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT));
     }
 
     /**
@@ -148,5 +161,10 @@ public final class HistoryLossMessages {
 
     private static String name(@Nullable String subscriptionId) {
         return subscriptionId == null ? "(unnamed)" : subscriptionId;
+    }
+
+    // An unnamed Flux stores no checkpoint, so only a named subscription has one that several instances share
+    private static String whenSeveralInstancesRunIt(@Nullable String subscriptionId, String clause) {
+        return subscriptionId == null ? "" : " " + clause;
     }
 }

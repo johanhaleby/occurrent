@@ -71,8 +71,10 @@ position conditionally, and that `DurableSubscriptionModel` "still records a fir
 `DurableSubscriptionModel.saveFirstPosition` writes the first position with `ifAbsent()`. When that write loses, it settles the race through
 `CheckpointStorage.resolveFirstCheckpointRace`, or refuses unless the position it reads back is the one it computed.
 
-A storage that answers `false` from `evaluatesWriteConditionsFor` still gets an unconditional write, and the model
-logs a warning saying so. That is the one case where the old sentence still describes what happens.
+A storage that answers `false` from `evaluatesWriteConditionsFor` got an unconditional write in 0.34.0, and the model
+logged a warning saying so. From 0.35.0 that first position is refused instead, per
+[ADR 184](0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md), and the old sentence
+describes what happens only with `startWhenFirstPositionCanBeOverwritten` set.
 
 ### 6. ADR 127: a handler a proxy cannot invoke does not always fail at startup
 

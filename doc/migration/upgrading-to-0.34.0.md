@@ -1373,13 +1373,21 @@ the marker read fails on a subscription that had already caught up, the next cat
 
 What to do:
 
-- After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. Once the
-  catch-up marker is gone, its catch-up replays the history, the failed event and the events after it included. An
-  event that no replay can bring back and nothing waits for is lost when applying it fails, or when the process stops
-  before it is applied.
+- After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. With more
+  than one instance running it, stop every instance instead, delete its catch-up marker from the `CheckpointStorage`
+  you passed for catch-up markers, start one instance again with the same start, and start the others once it has
+  stored the marker, as
+  [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes. Once the catch-up marker is gone, its catch-up replays the history, the failed event and the events
+  after it included. An event that no replay can bring back and nothing waits for is lost when applying it fails, or
+  when the process stops before it is applied.
 - When deleting the marker still fails after 3 retries, the subscription or feed logs an error naming its id. Delete
   the marker stored under that id in the `CheckpointStorage` you passed for catch-up markers before you subscribe again
-  or build the new feed, since a marker left in place makes that catch-up skip the replay.
+  or build the new feed, since a marker left in place makes that catch-up skip the replay. With more than one
+  instance running it, delete the marker with every instance stopped, start one instance again with the same start,
+  and start the others once it has stored the marker, as
+  [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
 - To have the call recognized, subscribe it on the thread the handler or fold was called on, by blocking on it for
   example, or return it as part of the `Mono` the handler returns. A handler that blocks on the call from a thread it
   switched to still waits forever.
@@ -1628,7 +1636,18 @@ oplog window, a restart still ends in lost history.
 If you widen the filter of a durable subscription and keep its id, it now resumes from the last quiet position it
 saved, so the events before that position that the old filter didn't match are not delivered. Before, it resumed after
 the last event the old filter matched, and received them. When you widen a filter, use a new subscription id, or
-subscribe once with a `StartAt` for the position to start from.
+subscribe once with a `StartAt` for the position to start from. Under a new id nothing is stored, so the subscription
+starts from its start position and repeats everything its handler did for the events after it, the records it writes,
+the commands it dispatches and the messages it sends. Stop every instance on the old id before the first one on the
+new id starts. Stopping them doesn't prevent the repeats. With more than one instance, what else a new id needs
+depends on where each instance keeps what the subscription builds, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+in the 0.35.0 upgrade guide describes.
+
+When the subscription under the new id starts at the present, as it does for `NOW` or `DEFAULT`, it gets no event
+committed before it starts. The events before that start that only the widened filter matches are never delivered, and
+neither are the events committed while no instance runs, after the last instance on the old id stops and before the
+first one on the new id starts.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
 below the oplog window. `neverSaveQuietPosition()` turns the save off. A subscription that then matches nothing for
@@ -2021,6 +2040,10 @@ What to do:
 2. When a later subscribe with the same id has to start from its own `StartAt`, also after a restart, wait for the
    `Mono`, for example with `cancelSubscription(id).block()` or by chaining on it. When it fails, or the process ended
    before it completed, call `cancelSubscription(id)` again. That works in a new process that never subscribed the id.
+   With more than one instance running the subscription, stop every instance instead, delete its checkpoint or its
+   catch-up marker from the `CheckpointStorage` that keeps it, and start them all again with the same start, as
+   [Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+   describes. For a marker, start one instance first, and start the others once it has stored the marker again.
 3. A class that implements either interface stops compiling. Return `Mono<Void>`. An implementation that cancels
    synchronously and stores nothing returns `Mono.empty()`.
 4. An implementation that deletes stored state asynchronously starts the delete when the method is called, returns a
@@ -2244,7 +2267,10 @@ the delete over, or the model is shut down, the cancel's `Mono` doesn't complete
 fails, and the delete is still tried again after that. A `shutdown()` stops the tries, also one waiting to be tried
 again. A try already under way runs to its end, and otherwise the `Mono` fails with the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
 so such a try can still reach the store after the `shutdown()`. When the checkpoint stays stored, call
-`cancelSubscription(id)` again once a model runs, as step 2 describes.
+`cancelSubscription(id)` again once a model runs, as step 2 describes. With more than one instance running the
+subscription, delete it with every instance stopped instead, and start them all again with the same start, as
+[Changing a checkpoint or marker that several instances share](upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes.
 
 When `ReactorDurableSubscriptionModel` drives the subscription itself, no call waits for where the feed is, on any
 thread. A `subscribe(..)` from the subscription-model default, or from `StartAt.now()`, asks the wrapped model's

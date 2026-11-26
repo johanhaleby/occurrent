@@ -50,7 +50,10 @@ public final class StartPositionPin {
      * Writes {@code position} as the first checkpoint of {@code subscriptionId}, unless a checkpoint is stored already.
      * A write that loses to a stored checkpoint is settled by {@link CheckpointStorage#resolveFirstCheckpointRace} first.
      * When the storage can't order the two, a checkpoint that existed before {@code position} was read is kept, and one
-     * that arrived after it must be {@code position} itself.
+     * that arrived after it must be {@code position} itself. A storage that answers {@code false} from
+     * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} gets an unconditional write with a warning instead,
+     * unless a checkpoint was stored already. Two nodes pinning at the same moment can then overwrite each other's first
+     * position and lose the events between the two, so a caller refuses that case first unless it accepts the loss.
      *
      * @param checkpointStorage        The storage that holds the subscription's checkpoint
      * @param subscriptionId           The subscription whose first position is pinned
@@ -80,9 +83,9 @@ public final class StartPositionPin {
                                 .then());
     }
 
-    // A storage that refuses ifAbsent() gets the write it got before the pin existed, as ReactorDurableSubscriptionModel
-    // gives it, logged rather than refused, since refusing would take out a storage that has worked until now. A
-    // stored checkpoint is left alone, because an unconditional write would move the subscription off it.
+    // Reached only when the caller accepts the loss of an unconditional first write, as the Spring Boot starters do
+    // with occurrent.subscription.start-when-first-position-can-be-overwritten. A stored checkpoint is left alone,
+    // because an unconditional write would move the subscription off it.
     private static Mono<Void> saveUnconditionally(CheckpointStorage storage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
         if (checkpointAlreadyExisted) {
             return Mono.empty();

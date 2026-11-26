@@ -25,6 +25,11 @@ The rule that `fencingToken` answers empty for a consumer that does not hold the
 gave up the lease answers with the token of the last lease it held, since that is the token a handler still
 running from that lease has to write with.
 
+Amended by [ADR 184](0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
+`ReactorDurableSubscriptionModel` no longer writes a first position unconditionally by default when
+`evaluatesWriteConditionsFor(String)` answers `false`, so the correction below saying it does is no longer true
+unless `startWhenFirstPositionCanBeOverwritten` is set.
+
 ## Context
 
 `MongoListenerLockService.acquireOrRefreshFor` computes a `version` that increments whenever the lease

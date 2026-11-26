@@ -33,6 +33,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -114,8 +115,12 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@code ERROR} logged. Where the wrapped model manages named subscriptions, the first position is recorded only once
  * that model has taken the subscribe, so there a refusal also cancels the subscription in the wrapped model. A storage
  * that answers {@code false}
- * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so that
- * write stays unconditional and is logged at {@code WARN} instead. See ADR 89. A {@code save(..)} for that first
+ * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so two nodes
+ * recording a first position at the same moment could overwrite each other's and lose the events between the two
+ * positions. That registration is refused the same way, with {@link IllegalStateException}, before anything is written
+ * for it. Every reactor storage Occurrent ships evaluates write conditions.
+ * {@link ReactorDurableSubscriptionModelConfig#startWhenFirstPositionCanBeOverwritten(boolean)} writes the first
+ * position unconditionally instead, logged at {@code WARN}, accepting that loss. See ADR 89. A {@code save(..)} for that first
  * position answering nothing, rather than the checkpoint it wrote, refuses the registration the same way, with
  * {@code IllegalStateException} naming the storage and the position it tried to record, since nothing then shows
  * whether the write reached storage.
@@ -358,6 +363,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // that point, which nothing outside this model can reach.
     private volatile Runnable onceNoWrappedCallIsInFlight = () -> {
     };
+    // Runs on the thread that counts a delivery as ended, once it has found the end not counted yet and before it counts
+    // it. Exists so a test can hold that thread there, which nothing outside this model can reach.
+    private volatile Runnable beforeADeliveryEndIsCounted = () -> {
+    };
     private final QuietPositionReportingSubscriptions.QuietPositionListener quietPositionListener = this::quietPositionSaverFor;
 
     /**
@@ -419,6 +428,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // this model's contract.
     void runOnceNoWrappedCallIsInFlight(Runnable hook) {
         this.onceNoWrappedCallIsInFlight = requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that holds a thread at the point the field describes. Not public, and not part of
+    // this model's contract.
+    void runBeforeADeliveryEndIsCounted(Runnable hook) {
+        this.beforeADeliveryEndIsCounted = requireNonNull(hook, "hook cannot be null");
     }
 
     /**
@@ -1668,10 +1683,22 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                     quietSaves.wrote();
                                 }), Mono.empty()).then();
                     }));
+            // Counted as ended once, before a completion, an error or a cancel goes on to the wrapped model, which can
+            // start the next delivery from it. Under the monitor of quietSaves, so whichever comes second waits until
+            // the first has counted the end.
             return Mono.defer(() -> {
+                AtomicBoolean ended = new AtomicBoolean();
+                Runnable end = () -> {
+                    synchronized (quietSaves) {
+                        if (ended.compareAndSet(false, true)) {
+                            beforeADeliveryEndIsCounted.run();
+                            quietSaves.deliveryEnded(stored.get());
+                        }
+                    }
+                };
                 quietSaves.deliveryStarted();
-                return delivered;
-            }).doFinally(__ -> quietSaves.deliveryEnded(stored.get()));
+                return delivered.doOnTerminate(end).doOnCancel(end);
+            });
         };
     }
 
@@ -1980,23 +2007,44 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // No original throwable to carry here, since answering nothing is how the wrapped model reports a problem it
     // cannot resolve, so this is what names the subscription and the way past it. Built at capturePositionNow's read
     // failure too, before storage is asked, so it cannot claim storage holds nothing: a checkpoint stored by then, or
-    // a start position of its own, still lets the subscription start despite this failure, and only the caller
+    // a start position of its own that doesn't resolve to the model default, still lets the subscription start
+    // despite this failure, and only the caller
     // consulting storage afterwards, in refusalOnceNothingIsStored or resolveStartAt, settles whether it is refused.
     private IllegalStateException positionSourceAnsweredNothing(String subscriptionId) {
         return new IllegalStateException("The wrapped subscription model " + subscription.getClass().getName() +
                                          " answered nothing when asked for the current position for subscription " +
                                          subscriptionId + ", which is how it reports a problem it cannot resolve. A " +
-                                         "checkpoint already stored for it, or a start position of its own, still lets " +
+                                         "checkpoint already stored for it, or a start position of its own that doesn't " +
+                                         "resolve to the model default, still lets " +
                                          "it start despite this failure; only when neither holds is the registration " +
                                          "refused rather than started from wherever the feed has reached by then, " +
                                          "which would skip whatever was written while it waited. Starting it is what " +
                                          "releases the id, so register it again after that, or after " +
                                          "cancelSubscription(String), once the model can answer. Subscribing with a " +
-                                         "StartAt of your own records no position and carries no such guarantee. To " +
+                                         "StartAt of your own that doesn't resolve to the model default records no " +
+                                         "position and carries no such guarantee. To " +
                                          "start anyway, accepting that loss window, configure " +
                                          "ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true), " +
                                          "or set occurrent.subscription.start-when-no-start-position-can-be-recorded=true " +
                                          "when using the Spring Boot starter.");
+    }
+
+    private IllegalStateException firstPositionCanBeOverwritten(String subscriptionId) {
+        return new IllegalStateException("Checkpoint storage " + storage.getClass().getName() + " does not evaluate " +
+                                         "write conditions for subscription " + subscriptionId + ", so the first " +
+                                         "position recorded for it could only be written unconditionally. Two nodes " +
+                                         "recording a first position for this subscription at the same moment could " +
+                                         "then overwrite each other's and lose the events between the two positions. " +
+                                         "The subscription is therefore refused before anything is written. Use a " +
+                                         "storage that evaluates CheckpointWriteCondition.ifAbsent() and answers true " +
+                                         "from evaluatesWriteConditionsFor(String) for this subscription. To start " +
+                                         "anyway, accepting that loss, configure " +
+                                         "ReactorDurableSubscriptionModelConfig.startWhenFirstPositionCanBeOverwritten(true), " +
+                                         "or, when a Spring Boot starter built this model, set " +
+                                         "occurrent.subscription.start-when-first-position-can-be-overwritten=true. " +
+                                         "A subscription with a checkpoint already " +
+                                         "stored, or with a StartAt of its own that doesn't resolve to the model " +
+                                         "default, records no first position and is never refused this way.");
     }
 
     // Refuses a dynamic StartAt that answered StartAt.now() and is handed to the wrapped model, when the read of where
@@ -2623,10 +2671,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     private Mono<Checkpoint> recordFirstPosition(String subscriptionId, Checkpoint positionRead, PositionWriter writer) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
-            // Nothing here can make a storage that writes unconditionally do otherwise, so the write is the one
-            // 0.32.0 made and two nodes recording a first position at the same moment keep the race. Logged rather
-            // than refused, because refusing would take out a storage that has worked until now over a capability
-            // it never claimed. A write that succeeds is not attempted again, so this reads once per subscription.
+            // Nothing here can make a storage that writes unconditionally do otherwise, so two nodes recording a first
+            // position at the same moment would race. Refused before anything is written, the way a lost race is,
+            // unless the config accepts that loss. A write that succeeds is not attempted again, so this warns once per
+            // subscription
+            if (!config.startWhenFirstPositionCanBeOverwritten) {
+                return Mono.error(() -> firstPositionCanBeOverwritten(subscriptionId));
+            }
             log.warn("Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
                      "position recorded for it is written unconditionally. Two nodes recording a first position " +
                      "for this subscription at the same moment can then lose the events between the two positions. " +
@@ -3706,7 +3757,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         } else if (conditionUnknown != null) {
             // Neither a conditional nor an unconditional delete is safe to run without knowing which the storage takes
             inPlaceOfWaiting = Mono.error(new IllegalStateException("Could not delete the stored checkpoint of cancelled subscription " + subscriptionId +
-                                                                    ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again.",
+                                                                    ", since asking the checkpoint storage whether it evaluates a condition on a delete failed. Cancel it again. "
+                                                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT,
                     conditionUnknown));
         } else {
             Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, new LinkedHashMap<>()).sequencedKeySet()));
@@ -3778,7 +3830,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     private void startDelete(String subscriptionId, Mono<Void> delete) {
         delete.subscribe(unused -> {
-        }, throwable -> log.warn("Failed to delete the stored checkpoint of cancelled subscription {} before the model was shut down. Cancel it again once it runs, or a later subscribe with the subscription-model default start position resumes from that checkpoint.", subscriptionId, throwable));
+        }, throwable -> log.warn("Failed to delete the stored checkpoint of cancelled subscription {} before the model was shut down. Cancel it again once it runs, or a later subscribe with the subscription-model default start position resumes from that checkpoint. "
+                                                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, throwable));
     }
 
     /**

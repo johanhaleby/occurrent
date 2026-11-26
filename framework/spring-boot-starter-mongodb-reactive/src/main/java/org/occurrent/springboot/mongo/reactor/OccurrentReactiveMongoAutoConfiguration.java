@@ -242,7 +242,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.resolveCollection(), eventStoreProperties.resolveTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().resolveRestartOnChangeStreamHistoryLost()));
         ReactorDurableSubscriptionModelConfig durableConfig = new ReactorDurableSubscriptionModelConfig(EveryN.everyEvent())
-                .startWhenNoStartPositionCanBeRecorded(occurrentProperties.getSubscription().isStartWhenNoStartPositionCanBeRecorded());
+                .startWhenNoStartPositionCanBeRecorded(occurrentProperties.getSubscription().isStartWhenNoStartPositionCanBeRecorded())
+                .startWhenFirstPositionCanBeOverwritten(occurrentProperties.getSubscription().isStartWhenFirstPositionCanBeOverwritten());
         CheckpointAwareSubscriptionModel catchupLayer = composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext);
         ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(catchupLayer, storage, durableConfig);
         // catchupLayer is handed over because it disappears inside the durable wrapper: ReplayAwareSubscriptions is

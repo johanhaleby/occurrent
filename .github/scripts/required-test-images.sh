@@ -19,7 +19,7 @@ else
     echo "::warning::Could not read integration-tests.mongo.version from pom.xml, so the Mongo image is not mirrored and will come from Docker Hub." >&2
 fi
 
-# RabbitMQ. The misc shard starts one for broker/rabbitmq/blocking's tests, derived the same way as Mongo.
+# RabbitMQ. The broker/rabbitmq/blocking tests start one, derived the same way as Mongo.
 rabbitmq_version=$(grep -oE '<integration-tests\.rabbitmq\.version>[^<]+' "$root/pom.xml" 2>/dev/null | sed 's/.*>//')
 if [ -n "$rabbitmq_version" ]; then
     echo "rabbitmq:$rabbitmq_version"

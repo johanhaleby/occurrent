@@ -45,6 +45,7 @@ import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
@@ -239,7 +240,8 @@ class SagaAnnotationRegistrar {
             } catch (RuntimeException | Error e) {
                 log.error("The background catch-up of saga {} failed. It has replayed no history and refuses every "
                         + "live event, so the source redelivers rather than losing them. Fix the cause, then cancel "
-                        + "the subscription and start it again.", id, e);
+                        + "the subscription and start it again. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT,
+                        id, e);
                 withPushCatchupStatus(status -> status.recordFailure(id, e));
             }
         });

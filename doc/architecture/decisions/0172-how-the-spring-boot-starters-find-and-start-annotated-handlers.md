@@ -234,8 +234,10 @@ they set `startAt`.
 - With a `CheckpointStorage` that Spring can pick, a single one or a `@Primary` one among several, the starter stores
   the live start as the subscription's first checkpoint, with `CheckpointWriteCondition.ifAbsent()`, and starts it at
   the subscription model's default, which resumes from that checkpoint. A storage that answers `false` from
-  `evaluatesWriteConditionsFor` gets an unconditional write with a warning instead, as `DurableSubscriptionModel`
-  gives it, since refusing would take out a storage that worked in 0.34.0.
+  `evaluatesWriteConditionsFor` fails the startup instead, unless
+  `occurrent.subscription.start-when-first-position-can-be-overwritten` is set, and then gets an unconditional write
+  with a warning, as the durable models do, per
+  [ADR 184](0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
 - At `NOW` with `resumeBehavior = SAME_AS_START_AT`, nothing is stored and the live subscription model starts there.
 - A subscription that has a checkpoint stored already, or whose start the application's `SubscriptionResumePoints`
   gives, starts as in 0.34.0. So does any other one when Spring can't pick a `CheckpointStorage`.

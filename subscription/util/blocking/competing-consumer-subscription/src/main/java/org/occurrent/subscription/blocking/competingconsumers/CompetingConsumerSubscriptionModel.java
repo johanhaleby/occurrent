@@ -20,6 +20,7 @@ import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscription
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscription.StartRefusal;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.internal.LostStartHold;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -4160,7 +4161,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     key.subscriberId(), key.subscriptionId(), refused);
         } else {
             log.error("The wrapped subscription model refused to start or resume a subscription from a position it no longer has the history back to, so the subscription is held paused and doesn't compete for the lease, since a grant would only be refused again. A resume competes for the lease again and is refused again when this node gets it."
-                            + " When the subscription's position is stored, stop every instance of the application and delete or replace that stored checkpoint. Otherwise cancel the subscription on every instance and subscribe it again from the beginning or from a checkpoint the application kept (subscriberId={}, subscriptionId={})",
+                            + " When the subscription's position is stored, stop every instance of the application, delete that stored checkpoint or replace it with a checkpoint the application kept that the subscription model still has the history back to, and start every instance again with the same start, as " + SharedStorageMessages.GUIDE + " describes."
+                            + " " + SharedStorageMessages.START_AT_THE_PRESENT_AFTER_A_DELETE
+                            + " Otherwise stop every instance and start them all again subscribed from the beginning, or from a checkpoint the application kept that the subscription model still has the history back to (subscriberId={}, subscriptionId={})",
                     key.subscriberId(), key.subscriptionId(), refused);
         }
         warnedInThisCall(key, refused);

@@ -36,6 +36,7 @@ import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -112,8 +113,15 @@ import java.util.stream.Stream;
  *       {@link #cancelSubscription(String)} deletes the marker, as clean-up. It deletes the marker before anything
  *       else, so a delete that throws cancels nothing, and the cancel can be tried again. A delete the store loses, or
  *       a marker write it applies after the delete, leaves a marker stored, and the next subscribe of the id then skips
- *       its replay. So a projection that has to be rebuilt, or whose filter changes, subscribes under a new id. ADR 179
- *       decides that the reactor stack reads its marker as a position to resume after instead of as done.</li>
+ *       its replay. So a projection that has to be rebuilt, or whose filter changes, subscribes under a new id.
+ *       Under a new id the subscription starts from the beginning of the history and repeats everything its handler
+ *       does, the records it writes, the commands it dispatches and the messages it sends. Stop every instance on the
+ *       old id before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one
+ *       instance, what else a new id needs depends on where each instance keeps what it builds and which broker queue
+ *       or consumer group it consumes, as
+ *       <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+ *       upgrade guide</a> describes.
+ *       ADR 179 decides that the reactor stack reads its marker as a position to resume after instead of as done.</li>
  * </ul>
  * Only stream and capability-agnostic subscription filters can be replayed (their plain {@link Filter} drives the
  * position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.
@@ -493,7 +501,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // no one.
                 log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
                         + "refuses every event, so the source redelivers rather than losing them. Cancel the "
-                        + "subscription and subscribe again once the cause is fixed.", subscriptionId, e);
+                        + "subscription and subscribe again once the cause is fixed. "
+                        + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, e);
                 // Dropped before the replay entry, so a start(true) racing this never sees a launcher with no replay
                 // running and relaunches a catch-up that failed. By identity, never by key alone, so this replay's
                 // own completion can never evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...)

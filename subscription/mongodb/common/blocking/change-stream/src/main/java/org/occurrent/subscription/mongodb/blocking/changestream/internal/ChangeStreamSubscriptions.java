@@ -48,6 +48,7 @@ import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptio
 import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -940,7 +941,8 @@ public final class ChangeStreamSubscriptions {
         UnsupportedStartAtException refusal = new UnsupportedStartAtException(lostFrom == null ? currentStartAt : StartAt.checkpoint(lostFrom),
                 "There was not enough oplog to resume subscription \"" + subscriptionId + "\"" + (lostFrom == null ? "" : " from " + lostFrom.asString())
                         + ", and restartSubscriptionsOnChangeStreamHistoryLost is off, so it is not restarted. Use a catch-up subscription to get up to speed, "
-                        + "remove its checkpoint from the durable storage, or turn restartSubscriptionsOnChangeStreamHistoryLost on.");
+                        + "remove its checkpoint from the durable storage when one stores it, or turn restartSubscriptionsOnChangeStreamHistoryLost on. "
+                        + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
         refusal.initCause(historyLost);
         return refusal;
     }
