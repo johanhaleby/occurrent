@@ -474,13 +474,14 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * It stops a catch-up asked for before it, whether its replay has started or not, and none asked for after it,
      * also when the view asks for one while the replay it stops is still running. The replay looks for a stop before
-     * each event and once more after the last one, also when the history is empty. A stop after that last look is not
-     * noticed, for example one that comes while a view that buffers during a replay writes that buffer in
-     * {@code replayCompleted()}. Neither is a stop before a catch-up that finds the marker already written, since that
-     * catch-up replays nothing. A catch-up that misses the stop goes live.
+     * each event and once more after the last one, also when the history is empty. The feed then looks again before
+     * each live event it held during the replay and once more right before the marker, so a stop that comes while a
+     * view that buffers during a replay writes that buffer in {@code replayCompleted()} is noticed too. A stop after
+     * that last look is not noticed, and neither is a stop before a catch-up that finds the marker already written,
+     * since that catch-up replays nothing. A catch-up that misses the stop goes live.
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay
-     * started. One that had not gone live drains nothing and does not go live, and {@link #acceptAndWait(Object)} throws both
+     * started. One that had not gone live delivers no more of what it held and does not go live, and {@link #acceptAndWait(Object)} throws both
      * for an event waiting on the replay and for one fed after the stop, so the listener has the broker deliver them
      * again, as {@link RoutingOutcome.Disposition#HOLD} describes. One
      * replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since

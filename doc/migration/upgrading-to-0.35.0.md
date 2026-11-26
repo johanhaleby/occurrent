@@ -223,6 +223,7 @@ other sections compile fine and behave differently, so read them first.
   `acceptOrDefer(..)` answers `DEFERRED` until the events held during the replay are delivered, where 0.34.0 went live
   before that. Compiles unchanged.
 - [A full live buffer fails a blocking catch-up push subscription](#a-full-live-buffer-fails-a-blocking-catch-up-push-subscription).
+- [A blocking catch-up stopped while it delivers what it held ends there](#a-blocking-catch-up-stopped-while-it-delivers-what-it-held-ends-there).
   An event written once the buffer is full fails the catch-up, where 0.34.0 refused the event and went live without
   it. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
@@ -4886,6 +4887,17 @@ later event.
 There is no code to change. A subscription that fails this way stays failed until you cancel it and subscribe again,
 and that replay delivers the event from the store. A history too large to replay while the writers fill the buffer
 needs a larger `maxBufferedEvents` in its `CatchupThenLiveOptions`.
+
+## A blocking catch-up stopped while it delivers what it held ends there
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` delivers the live events it
+held during its replay before it writes the catch-up marker. In 0.34.0 a `stopCatchUp()` that came after the last
+replayed event still let a feed write its marker, and a `stop()` that came then still let a subscription deliver every
+held event and go live. The catch-up now looks for a stop before each held event and once more right before the marker,
+and a stop it finds there writes no marker.
+
+There is no code to change. The next catch-up replays the history the stopped one would have marked, and the held
+events the stopped one kept reach the handler once, from that replay or after it.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 

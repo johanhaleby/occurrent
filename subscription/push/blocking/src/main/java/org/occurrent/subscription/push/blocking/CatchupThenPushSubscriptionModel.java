@@ -533,8 +533,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             // By identity, for the same reason the failure path above is: this replay's own completion must never
             // evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...) already put there. Forgetting
             // the entry and applying the pending pause are one guarded step with markCaughtUp's own check, so a
-            // cancelSubscription(id) plus subscribe(id, ...) landing between the post-loop keepReplaying() check
-            // inside catchUp(..) and here still finds this replay's ownership already gone and does neither.
+            // cancelSubscription(id) plus subscribe(id, ...) landing between the last keepReplaying() check inside
+            // catchUp(..), the one right before the handover goes live, and here still finds this replay's ownership
+            // already gone and does neither.
             interruptibleReplays.remove(subscriptionId, ownLaunch.get());
             // Package-private and a no-op in production. Lets a test stand immediately before the guarded
             // completion step, which is where a lifecycle call racing it has to be ordered against it.
@@ -657,7 +658,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     // The ownership check and the id-scoped write or side effect it guards have to be one step, or a stale replay's
     // own late completion can still act on an id a cancelSubscription(id) plus subscribe(id, ...) already gave to a
-    // newer one, even though the per-payload and post-loop keepReplaying() checks inside catchUp(..) both passed.
+    // newer one, even though every keepReplaying() check inside catchUp(..) passed.
     // Synchronized on the same monitor launchReplay's own replayingSubscriptions.put(..) and cancelSubscription's
     // replayingSubscriptions.remove(..) use, for the same reason relaunchInterruptedReplay already is: lifecycle
     // calls are rare enough that the lock costs nothing.
@@ -792,8 +793,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * and the subscription it belongs to is caught up rather than replayed again, since the attempt that wrote it
      * had read the whole history and held the id when the write began.
      * <p>
-     * The events buffered during the replay are delivered before the marker is written, so a stop arriving while
-     * they are being delivered is still early enough to be refused.
+     * The events buffered during the replay are delivered before the marker is written, and the delivery asks whether
+     * this model is stopped before each event and once more before the marker. A stop it finds ends the delivery and
+     * writes no marker. The events not yet delivered stay buffered for the catch-up {@link #start(boolean)} runs.
      * <p>
      * Live events fed while stopped are dropped rather than refused, the dropped-not-deferred contract every stopped
      * subscription model has (ADR 85). That is bounded here only because the stop is reversible: the window closes at

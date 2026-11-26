@@ -89,30 +89,36 @@ public final class BlockingHandover<T, K> {
         /**
          * Record that the catch-up completed. Called after the replay has been consumed and the live buffer has been
          * drained, so an implementation that reads "the current head" reads it <em>after</em> the replay, not before.
+         * Called only when {@link #keepReplaying()} answered {@code true} right before the handover went live.
          */
         void markCaughtUp();
 
         /**
-         * Whether the replay should keep going, asked once per payload before it is folded, and once more after the
-         * last one, right before {@link #markCaughtUp()} would otherwise run. Return {@code false} to stop one
-         * already in flight, because the model was stopped or is shutting down, or because whatever identifies this
-         * attempt (a subscription id, say) has since been reassigned to a different one.
+         * Whether the catch-up should keep going. The replay asks it once per payload before it is folded, and once
+         * more after the last one. The drain after it asks it before each buffered payload it delivers, and once more
+         * right before the handover goes live and {@link #markCaughtUp()} would run. A catch-up with nothing to replay
+         * asks it in its drain the same way. Return {@code false} to stop one already in flight, because the model was
+         * stopped or is shutting down, or because whatever identifies this attempt (a subscription id, say) has since
+         * been reassigned to a different one.
+         * <p>
+         * The last of those calls is made while this engine holds its monitor, so no live payload can buffer between
+         * the answer and going live. It must not block and must not call into this handover.
          * <p>
          * A stop is not a failure. {@link #markCaughtUp()} is not called and no failure is recorded, so the next
-         * catch-up replays the whole history and the handover stays usable.
+         * catch-up replays the whole history and the handover stays usable, and {@link BlockingHandover#catchUp}
+         * returns {@code false}.
          * <p>
-         * What the stop does with the live payloads depends on where the handover stood when the replay started. One
-         * that had not gone live drains nothing and does not go live. Every payload a caller is waiting on in
-         * {@link BlockingHandover#accept(Object)} is answered as not applied, so that call throws. Live payloads
-         * arriving after the stop are not buffered, so {@link BlockingHandover#accept(Object)} throws for them too
-         * and {@link BlockingHandover#acceptReportingDelivery(Object)} returns {@code false}. A payload
-         * {@link BlockingHandover#acceptReportingDelivery(Object)} buffered before the stop stays in the buffer for
-         * the next catch-up. One that was already live
-         * delivers what it buffered while the replay ran and goes on delivering, see
-         * {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
-         * per-payload one only ever runs before a fold, never after the last one: an attempt whose ownership lapses
-         * while that last fold is still running would otherwise reach {@link #markCaughtUp()} for a history its
-         * current owner never actually folded.
+         * What the stop does with the live payloads depends on where the handover stood when the catch-up started. One
+         * that had not gone live delivers no further buffered payload and does not go live. Every payload a caller is
+         * waiting on in {@link BlockingHandover#accept(Object)} is answered as not applied, so that call throws. Live
+         * payloads arriving after the stop are not buffered, so {@link BlockingHandover#accept(Object)} throws for them
+         * too and {@link BlockingHandover#acceptReportingDelivery(Object)} returns {@code false}. A payload
+         * {@link BlockingHandover#acceptReportingDelivery(Object)} buffered before the stop and not yet delivered stays
+         * in the buffer, in its place, for the next catch-up. One that was already live delivers the rest of what it
+         * buffered and goes on delivering, see {@link BlockingHandover#catchUp}. The check after the last replayed
+         * payload exists because the per-payload one only ever runs before a fold, never after the last one. An
+         * attempt whose ownership lapses while that last fold is still running would otherwise reach
+         * {@link #markCaughtUp()} for a history its current owner never actually folded.
          */
         default boolean keepReplaying() {
             return true;
@@ -706,7 +712,10 @@ public final class BlockingHandover<T, K> {
      *
      * @return {@code true} when the catch-up finished and the handover is live, or, for a call from code this handover
      * is running, once the catch-up has been asked for. {@code false} when
-     * {@link Source#keepReplaying()} stopped it partway, or when the calling thread was interrupted while waiting for
+     * {@link Source#keepReplaying()} stopped it partway, in the replay or while the buffer was delivered, and then no
+     * marker is written. A handover that was not live before stops with the payloads not yet delivered kept in the
+     * buffer, and one that was live delivers them and stays live. {@code false} too when the calling thread was
+     * interrupted while waiting for
      * the deliveries or the replay already running to end. The interrupt stays on the thread. An interrupted wait for
      * the deliveries changes nothing on the handover, and the replay an interrupted call waited for still goes live
      * when it ends. A failure throws rather than returning either, and so does a failure of a replay that code this
@@ -793,14 +802,19 @@ public final class BlockingHandover<T, K> {
                         // Claimed under the same lock that read replayRunning and draining, so neither a replay nor a
                         // second drain can start between the two and deliver into the view next to this drain.
                         draining = true;
+                        // A stop of this drain leaves the handover in the phase it had here. A catch-up that this
+                        // drain's own code asks for sets it to go live instead.
+                        liveWhenReplayStops = live;
+                        // A drain this call waited for can have stopped the handover, and the payloads fed during
+                        // this drain belong in its buffer.
+                        stopped = false;
                     }
                 }
                 if (failedWhileWaiting != null) {
                     refusedForAnotherFailure = true;
                     throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), failedWhileWaiting);
                 }
-                drainBufferAndGoLive(source);
-                return true;
+                return drainBufferAndGoLive(source);
             }
             if (Objects.requireNonNull(callDepth.get()) > 1) {
                 // Called from this handover's own code, which holds up everything the replay would wait for.
@@ -961,7 +975,10 @@ public final class BlockingHandover<T, K> {
                 replayRunning = false;
                 draining = true;
             }
-            drainBufferAndGoLive(source);
+            if (!drainBufferAndGoLive(source)) {
+                // Stopped after the history was read. No marker, so the next catch-up replays the history again.
+                return false;
+            }
             source.markCaughtUp();
             return true;
         } catch (Throwable e) {
@@ -1346,10 +1363,12 @@ public final class BlockingHandover<T, K> {
         }
     }
 
-    private void drainBufferAndGoLive(Source<T> source) {
-        deliverBufferAndGoLive(source);
+    // Answers false when source.keepReplaying() stopped the drain, which then writes no marker.
+    private boolean drainBufferAndGoLive(Source<T> source) {
+        return deliverBufferAndGoLive(source);
     }
 
+    // The three drains without a source to ask go live whatever happens, so nothing stops them.
     private void deliverBufferAndGoLive() {
         deliverBufferAndGoLive(null);
     }
@@ -1357,7 +1376,13 @@ public final class BlockingHandover<T, K> {
     // The one drain of this handover. The caller set draining under the lock that decided this call drains, and this
     // releases it on every path. It delivers the buffer in rounds and goes live only once a round finds the buffer
     // empty under the lock, so a payload fed while it runs buffers behind the ones it already took.
-    private void deliverBufferAndGoLive(@Nullable Source<T> source) {
+    //
+    // With a source it asks keepReplaying() before each delivery and once more under the lock right before going live.
+    // On false a handover that was not live before stops where it is and goes back to the phase it had, with the
+    // payloads not delivered back at the front of the buffer. One that was live before delivers the rest and goes live.
+    // Either way the answer is false.
+    private boolean deliverBufferAndGoLive(@Nullable Source<T> source) {
+        Drain<T> drain = new Drain<>(source);
         try {
             if (source != null) {
                 // Every drain with a source runs through here, including the one for a source that was already
@@ -1365,9 +1390,10 @@ public final class BlockingHandover<T, K> {
                 // replayCompleted().
                 source.historyDone();
             }
-            while (!deliverRound()) {
+            while (!deliverRound(drain)) {
                 // A payload fed during the round waits in the buffer for the next one.
             }
+            return !drain.stopped;
         } finally {
             synchronized (lock) {
                 draining = false;
@@ -1383,8 +1409,28 @@ public final class BlockingHandover<T, K> {
         }
     }
 
-    // Answers true when the buffer was empty and the handover went live, false once it delivered a round.
-    private boolean deliverRound() {
+    // What one drain knows across its rounds. Used only by the thread running that drain.
+    private static final class Drain<T> {
+        // The source asked before each delivery and before going live. Null for a drain that nothing stops, and set to
+        // null once a stop came on a handover that goes live on a stop.
+        private @Nullable Source<T> checked;
+        private boolean stopped;
+
+        private Drain(@Nullable Source<T> checked) {
+            this.checked = checked;
+        }
+    }
+
+    // Assumes lock is held. Called once the drain's source answered keepReplaying() with false. Answers whether the
+    // drain stops where it is, rather than delivering the rest unchecked and going live.
+    private boolean stopsDrainUnderLock(Drain<T> drain) {
+        drain.stopped = true;
+        drain.checked = null;
+        return !liveWhenReplayStops;
+    }
+
+    // Answers true when the drain ended, live or stopped, false once it delivered a round.
+    private boolean deliverRound(Drain<T> drain) {
         List<Held<T>> toDeliver;
         List<K> keysToDeliver;
         List<Held<T>> alreadyReplayed;
@@ -1398,6 +1444,12 @@ public final class BlockingHandover<T, K> {
         synchronized (lock) {
             throwIfBufferOverflowedUnderLock();
             if (buffer.isEmpty()) {
+                // Asked under the lock, so no payload can buffer between this answer and going live.
+                Source<T> checked = drain.checked;
+                if (checked != null && !checked.keepReplaying() && stopsDrainUnderLock(drain)) {
+                    stopUnderLock();
+                    return true;
+                }
                 live = true;
                 lock.notifyAll();
                 return true;
@@ -1440,7 +1492,15 @@ public final class BlockingHandover<T, K> {
             lock.notifyAll();
         }
         try {
-            deliverTaken(replayedBy, toDeliver, keysToDeliver, alreadyReplayed);
+            if (deliverTaken(drain, replayedBy, toDeliver, keysToDeliver, alreadyReplayed) < toDeliver.size()) {
+                // Stopped before a delivery. The payloads it did not get to go back to the front of the buffer, the
+                // way an interrupt puts them back, and the stop answers the ones a caller waits on.
+                synchronized (lock) {
+                    putBackUnansweredUnderLock(taken);
+                    stopUnderLock();
+                }
+                return true;
+            }
         } catch (Throwable e) {
             synchronized (lock) {
                 if (isInterruption()) {
@@ -1485,7 +1545,8 @@ public final class BlockingHandover<T, K> {
         lock.notifyAll();
     }
 
-    private void deliverTaken(Source<T> replayedBy, List<Held<T>> toDeliver, List<K> keysToDeliver, List<Held<T>> alreadyReplayed) {
+    // Answers how many of toDeliver it delivered before the drain's source stopped it, all of them when none did.
+    private int deliverTaken(Drain<T> drain, Source<T> replayedBy, List<Held<T>> toDeliver, List<K> keysToDeliver, List<Held<T>> alreadyReplayed) {
         // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
         // that comes after it.
         boolean reported = false;
@@ -1514,21 +1575,33 @@ public final class BlockingHandover<T, K> {
         // delivery that throws here still reaches catchUp's own catch block exactly as it did before this method
         // stopped holding the lock for the delivery itself.
         int delivered = 0;
+        // The first payload not handed to deliverOutsideLock(..), which releases the key of the one it was handed.
+        int notHandedOver = 0;
         try {
             for (; delivered < toDeliver.size(); delivered++) {
+                Source<T> checked = drain.checked;
+                if (checked != null && !checked.keepReplaying()) {
+                    synchronized (lock) {
+                        if (stopsDrainUnderLock(drain)) {
+                            return delivered;
+                        }
+                    }
+                }
                 Held<T> buffered = toDeliver.get(delivered);
+                notHandedOver = delivered + 1;
                 deliverOutsideLock(buffered.payload, keysToDeliver.get(delivered));
                 // Answered as each one is applied rather than after the whole drain, so its caller stops waiting as
                 // soon as its own payload is applied.
                 answer(buffered, Answer.APPLIED);
             }
+            return delivered;
         } finally {
-            // Every key was reserved above, before any of them was delivered. A delivery that throws leaves the
-            // rest of them reserved and never delivered, and a reserved key is skipped by every later attempt, so
+            // Every key was reserved above, before any of them was delivered. A delivery that throws or a stop leaves
+            // the rest of them reserved and never delivered, and a reserved key is skipped by every later attempt, so
             // a redelivery of one of those payloads would be dropped without ever being handled. Releasing them
             // here is what keeps the failure recoverable: the catch-up records the failure, the caller sees it,
             // and the payloads are still eligible when the source offers them again.
-            releaseReservations(keysToDeliver.subList(Math.min(delivered + 1, keysToDeliver.size()), keysToDeliver.size()));
+            releaseReservations(keysToDeliver.subList(notHandedOver, keysToDeliver.size()));
         }
     }
 
