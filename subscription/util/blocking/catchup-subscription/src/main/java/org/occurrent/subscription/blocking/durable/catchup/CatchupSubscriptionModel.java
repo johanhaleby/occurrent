@@ -709,8 +709,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     /**
-     * Pauses the subscription in the catch-up of this model that runs or holds its replay, or in the wrapped model
-     * otherwise.
+     * Pauses the subscription in the catch-up of this model that runs or holds its replay, or that has answered the
+     * wrapped model that it takes the subscription over after the wrapped model lost its history, or in the wrapped
+     * model otherwise.
      * <p>
      * Called from inside the action of a live call or a replay of this model after that action handed a call over, such
      * as a {@link #stop()} or a {@link #resumeSubscription(String)}, it returns at once and pauses the subscription on

@@ -24,6 +24,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -77,6 +78,11 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private volatile Runnable beforeTheNextCancel = () -> {
     };
     private final AtomicBoolean firstTakeOver = new AtomicBoolean(true);
+    private final AtomicBoolean firstTakeOverHeld = new AtomicBoolean(true);
+    private volatile Runnable beforeTheFirstTakeOverIsHeldPaused = () -> {
+    };
+    private final Set<String> losingTheHistory = ConcurrentHashMap.newKeySet();
+    private volatile boolean refusesAPauseOfAHeldSubscription;
     private volatile Runnable betweenTheFirstTakeOverPauseAndWhatFollows = () -> {
     };
     private volatile Function<String, @Nullable Boolean> answersIsPaused = subscriptionId -> null;
@@ -154,6 +160,19 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     LiveStartLosingSubscriptionModel beforeTheFirstPause(Runnable beforeTheFirstPause) {
         this.beforeTheFirstPause = beforeTheFirstPause;
+        return this;
+    }
+
+    // Runs on the thread that found the history lost, once the listener answered that it takes the subscription over and
+    // before the subscription is held paused. A pause made there finds a subscription the delegate doesn't know yet
+    LiveStartLosingSubscriptionModel beforeTheFirstTakeOverIsHeldPaused(Runnable beforeTheFirstTakeOverIsHeldPaused) {
+        this.beforeTheFirstTakeOverIsHeldPaused = beforeTheFirstTakeOverIsHeldPaused;
+        return this;
+    }
+
+    // A pause of a subscription it holds paused throws SubscriptionNotRunningException, as a MongoDB subscription model does
+    LiveStartLosingSubscriptionModel refusingAPauseOfAHeldSubscription() {
+        refusesAPauseOfAHeldSubscription = true;
         return this;
     }
 
@@ -286,6 +305,14 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private void historyLost(String subscriptionId, @Nullable SubscriptionFilter filter, Checkpoint lostFrom, Consumer<CloudEvent> action, OpenHandle handle) {
         for (HistoryLossListener listener : listeners) {
             if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver) {
+                if (firstTakeOverHeld.compareAndSet(true, false)) {
+                    losingTheHistory.add(subscriptionId);
+                    try {
+                        beforeTheFirstTakeOverIsHeldPaused.run();
+                    } finally {
+                        losingTheHistory.remove(subscriptionId);
+                    }
+                }
                 paused.put(subscriptionId, new Held(filter, action, StartAt.checkpoint(lostFrom)));
                 if (firstTakeOver.compareAndSet(true, false)) {
                     betweenTheFirstTakeOverPauseAndWhatFollows.run();
@@ -397,6 +424,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
             beforeTheFirstPause.run();
         }
         if (paused.containsKey(subscriptionId)) {
+            if (refusesAPauseOfAHeldSubscription) {
+                throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
+            }
+            return;
+        }
+        if (losingTheHistory.contains(subscriptionId)) {
             return;
         }
         Held resumedByAStart = runningWhereItWasHeld.remove(subscriptionId);

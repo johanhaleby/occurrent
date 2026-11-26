@@ -1262,7 +1262,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             if (startCall == null || afterTheTurn.isEmpty()) {
                 return;
             }
-            Consumer<String> resume = id -> resumeReadingFirst(model, id, models, stopsAtTheTurn, shutdownsBegunBefore, false, lateReadOf(id), null,
+            Consumer<String> resume = id -> resumeReadingFirst(model, id, models, stopsAtTheTurn, shutdownsBegunBefore, false, lateReadOf(id),
                     read -> lastCallSince(startCall).liveDelegateStopped() ? null : alone.apply(id, read));
             if (modelLock.isHeldByCurrentThread()) {
                 resumeEach(afterTheTurn, resume);
@@ -1662,26 +1662,26 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * A resume made from code another call runs under the model lock, such as a resume of a {@code start(true)} made
      * from inside another start, still holds the lock after its turn. When its turn throws {@link ReadAgain} to start a
-     * takeover, the rest of the resume, the takeover and the next turn, runs on a thread of its own once the calling
-     * thread has released the lock, so the takeover stores its position outside the lock. The handle it returns then
-     * starts once that turn has returned, and its {@code waitUntilStarted} throws what the rest threw, which is also
-     * logged at {@code ERROR}.
+     * takeover, the resume returns, and the takeover runs on a thread of its own once the calling thread has released the
+     * lock, so it stores its position outside the lock. That thread runs the takeover and nothing else, so a
+     * {@link #pauseSubscription(String)} made after the call that made the resume returned keeps the subscription paused,
+     * as {@link #takeOverIfAsked} describes. The handle the resume returns starts once the replay the takeover started has
+     * started, or the replay that runs for the subscription by then. Its {@code waitUntilStarted} answers {@code false}
+     * when no replay runs, and throws what the takeover threw, which is also logged at {@code ERROR}.
      */
     Subscription resumeReadingFirst(Object model, String subscriptionId, List<AbstractCatchupSubscriptionModel> models, Function<ResumeRead, @Nullable Subscription> alone) {
         awaitTheHandedCalls(subscriptionId, "resumeSubscription(" + subscriptionId + ")");
-        return resumeReadingFirst(model, subscriptionId, models, stopsOf(models), shutdownsBegun(model), true, null, null, alone);
+        return resumeReadingFirst(model, subscriptionId, models, stopsOf(models), shutdownsBegun(model), true, null, alone);
     }
 
     // As above, from the stops and shutdowns counted when the caller began. When a stop came since and throwsOnceStopped
     // is false, the turn changes nothing as it does after a shutdown, since the start whose resume this is came before it.
-    // The first turn uses readBefore when there is one, a read the caller made, and reads only when it moved. When there
-    // is a beforeReadingAgain, the takeover of a ReadAgain thrown on a thread that still held the lock, it runs first
+    // The first turn uses readBefore when there is one, a read the caller made, and reads only when it moved
     private Subscription resumeReadingFirst(Object model, String subscriptionId, List<AbstractCatchupSubscriptionModel> models, long stopsBefore, long shutdownsBegunBefore,
-                                            boolean throwsOnceStopped, @Nullable ResumeRead readBefore, @Nullable Supplier<@Nullable Subscription> beforeReadingAgain,
-                                            Function<ResumeRead, @Nullable Subscription> alone) {
+                                            boolean throwsOnceStopped, @Nullable ResumeRead readBefore, Function<ResumeRead, @Nullable Subscription> alone) {
         long[] stopsAtTheRead = {stopsBefore};
         ResumeRead notYetUsed = readBefore;
-        @Nullable Subscription startedBeforeReadingAgain = beforeReadingAgain == null ? null : beforeReadingAgain.get();
+        @Nullable Subscription startedBeforeReadingAgain = null;
         try {
             while (true) {
                 // Its replay may have handed over and gone live by the next turn, so that turn returns its handle rather
@@ -1711,11 +1711,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 } catch (ReadAgain moved) {
                     // A resume made from code another call runs under the lock, such as the resumes of a start made from
                     // inside a start, still holds the lock after its turn, and the takeover would throw ReadAgain again
-                    // here. So the rest of this resume runs once the thread has released the lock
+                    // here. So the takeover runs once the thread has released the lock, and nothing else of this resume
                     if (moved != ReadAgain.MOVED && modelLock.isHeldByCurrentThread()) {
-                        long stopsAtTheTakeover = stopsAtTheRead[0];
-                        return onceTheModelLockIsFree(model, subscriptionId, () -> resumeReadingFirst(model, subscriptionId, models, stopsAtTheTakeover, shutdownsBegunBefore,
-                                throwsOnceStopped, null, moved.beforeReadingAgain, alone));
+                        return onceTheModelLockIsFree(model, subscriptionId, () -> takeOverOnceTheCallerReturned(subscriptionId, moved.beforeReadingAgain));
                     }
                     startedBeforeReadingAgain = moved.beforeReadingAgain.get();
                 }
@@ -1740,6 +1738,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             }
         }));
         return new CatchupSubscription(subscriptionId, resumed);
+    }
+
+    // The takeover a resume left until the model lock is free, run once the call that made the resume has returned. Runs
+    // no other turn of the resume, since that turn would take off a pause made since the call returned and replay. Answers
+    // the handle of the replay the takeover started, or of the replay that runs for the subscription by then, and
+    // otherwise a handle that answers false from waitUntilStarted
+    private Subscription takeOverOnceTheCallerReturned(String subscriptionId, Supplier<@Nullable Subscription> takeOver) {
+        Subscription replayStarted = takeOver.get();
+        if (replayStarted != null) {
+            return replayStarted;
+        }
+        CatchupAttempt running = currentAttempt.get(subscriptionId);
+        return running != null && !running.abandoned() ? new CatchupSubscription(subscriptionId, running.replay.result) : keptFromRunning(subscriptionId);
     }
 
     private static long stopsOf(List<AbstractCatchupSubscriptionModel> models) {
@@ -1810,8 +1821,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Thrown in the turn of a resume when what its {@link ResumeRead} read moved before the turn used it, so the resume
      * reads again outside the model lock and runs another turn. {@code beforeReadingAgain} runs first, outside the lock
      * too, and answers the handle of a replay it started, which the next turn returns, or {@code null}. On a thread that
-     * still holds the lock after the turn, both run on a thread of their own once the lock is free, as
-     * {@link #resumeReadingFirst} describes. Has no stack trace, since it is a signal and never reaches a caller.
+     * still holds the lock after the turn, {@code beforeReadingAgain} alone runs, on a thread of its own once the lock is
+     * free, as {@link #resumeReadingFirst} describes. Has no stack trace, since it is a signal and never reaches a caller.
      */
     static final class ReadAgain extends RuntimeException {
         private static final ReadAgain MOVED = new ReadAgain(() -> null);
@@ -2493,14 +2504,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return made != null && made.takingOver().get();
     }
 
+    // Whether takeOverIfAsked starts the takeover that made records. True once the live delegate holds the subscription
+    // paused after this model answered that it takes it over, also before the live delegate has told this model
+    private boolean takeOverIsDue(String subscriptionId, HandedOver made) {
+        return made.takingOver().get() || made.takeOverAsked().get() && getWrappedSubscriptionModel().isPaused(subscriptionId);
+    }
+
     // Whether this model, rather than another child of the same dispatcher, runs or holds a replay for the subscription,
-    // whether a subscribe or a resume started it, or is about to start one for a takeover. A cancelled replay that has
-    // not returned yet doesn't count.
+    // whether a subscribe or a resume started it, or has answered the live delegate that it takes the subscription over.
+    // A cancelled replay that has not returned yet doesn't count.
     boolean runsReplayHere(String subscriptionId) {
         CatchupAttempt running = currentAttempt.get(subscriptionId);
         HandedOver made = handedOver.get(subscriptionId);
         return (running != null && running.owner == this && !running.abandoned()) || parkedReplays.containsKey(subscriptionId)
-                || (made != null && made.owner() == this && made.takingOver().get());
+                || (made != null && made.owner() == this && (made.takeOverAsked().get() || made.takingOver().get()));
     }
 
     /**
@@ -2895,16 +2912,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * replay starts from is stored first, so a restart in between replays as well, unless the live delegate must not
      * run, when it is kept in memory only. A call holding the model lock gets {@link ReadAgain} in place of that write,
      * which runs this again outside the lock, on a thread of its own once the lock is free when the thread still holds
-     * it for another call, see {@link #resumeReadingFirst}. A pause asked for since the live
-     * delegate paused the subscription keeps it paused, and the next resume replays from what is stored then, or,
+     * it for another call, see {@link #resumeReadingFirst}. That thread runs only this, so a pause made since
+     * keeps the subscription paused. A pause asked for since this model
+     * answered the live delegate that it takes the subscription over keeps it paused, and the next resume replays from what is stored then, or,
      * without checkpoint storage, runs this replay. It counts towards the {@value #MAX_REPLAYS_AGAIN} times a replay
      * runs again, as {@link #replayUntilLiveStartHolds} describes.
      */
     private @Nullable Subscription takeOverIfAsked(String subscriptionId) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             HandedOver made = handedOver.get(subscriptionId);
-            if (made == null || made.owner() != this
-                || !(made.takingOver().get() || made.takeOverAsked().get() && getWrappedSubscriptionModel().isPaused(subscriptionId))) {
+            if (made == null || made.owner() != this || !takeOverIsDue(subscriptionId, made)) {
                 return null;
             }
             Subscribed subscription = made.subscribed();
@@ -2981,6 +2998,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private void pauseHoldingTheClaim(String subscriptionId) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             CatchupAttempt running = currentAttempt.get(subscriptionId);
+            HandedOver takeover = handedOver.get(subscriptionId);
             if (running != null && running.backingOff && !running.abandoned()) {
                 hold(subscriptionId, running);
             } else if (parkedReplays.containsKey(subscriptionId)) {
@@ -2992,9 +3010,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // running until the handover since interrupting and resuming it would require persisting the exact
                 // replay cursor, which this class does not do.
                 pauseRequestedDuringCatchup.put(subscriptionId, true);
-            } else if (isTakingOver(subscriptionId)) {
-                // The live delegate holds the subscription paused already, and the takeover keeps it paused once it
-                // finds the pause
+            } else if (takeover != null && takeover.owner() == this && (takeover.takeOverAsked().get() || takeover.takingOver().get())) {
+                // The takeover keeps the subscription paused once it finds the pause. Until the live delegate holds the
+                // subscription paused for the takeover, the pause goes to the live delegate too. The live delegate can
+                // pause it for the takeover in between and then refuse this pause, which counts once the takeover is due
+                if (!takeOverIsDue(subscriptionId, takeover)) {
+                    try {
+                        getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+                    } catch (SubscriptionNotRunningException e) {
+                        if (!takeOverIsDue(subscriptionId, takeover)) {
+                            throw e;
+                        }
+                    }
+                }
                 pauseRequestedDuringCatchup.put(subscriptionId, true);
             } else {
                 getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
@@ -5337,9 +5365,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         AtomicReference<@Nullable Subscription> resumed = new AtomicReference<>();
         runAfterTheHandedCalls("resumeSubscription(" + subscriptionId + ")", subscriptionId, () -> resumed.set(resume.get()));
         Subscription subscription = resumed.get();
-        if (subscription != null) {
-            return subscription;
-        }
+        return subscription != null ? subscription : keptFromRunning(subscriptionId);
+    }
+
+    // The handle of a resume that started nothing, which answers false from waitUntilStarted
+    private static Subscription keptFromRunning(String subscriptionId) {
         CompletableFuture<Subscription> keptFromRunning = new CompletableFuture<>();
         keptFromRunning.cancel(false);
         return new CatchupSubscription(subscriptionId, keptFromRunning);

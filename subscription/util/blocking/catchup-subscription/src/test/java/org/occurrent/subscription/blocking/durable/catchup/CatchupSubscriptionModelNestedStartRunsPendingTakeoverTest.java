@@ -58,7 +58,8 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
  * lock. When the catch-up has a takeover pending for a subscription, after the live delegate lost the history from its
  * live start, that resume has to store the takeover's position, which it must not do under the lock. The takeover then
  * runs once the lock is free, so the outer start must return normally, and the subscription must replay what the live
- * delegate lost exactly once.
+ * delegate lost exactly once. A pause made while the live delegate answers that the catch-up takes the subscription
+ * over, or one the live delegate refuses after it paused the subscription for the takeover, keeps it paused too.
  * <p>
  * Each test asserts with a bounded wait on a start run off the test thread, so a start that never returns, or one that
  * throws, fails on its assertion rather than on a timeout.
@@ -163,6 +164,119 @@ class CatchupSubscriptionModelNestedStartRunsPendingTakeoverTest {
         // Then
         assertThatBothStartsReturnedWithoutThrowing();
         assertThatTheTakeoverRanOnceAndReplayedTheLostHistory(writtenWhilePending);
+    }
+
+    /**
+     * A subscription that the start of the live delegate pauses, after it started the model again, stays paused, and
+     * replays what the live delegate lost once it is resumed.
+     */
+    @Test
+    @Timeout(60)
+    void a_subscription_paused_after_a_nested_start_with_a_pending_takeover_stays_paused_until_it_is_resumed() throws Exception {
+        // Given a takeover that is asked for and pending, and a model that is stopped
+        givenAPendingTakeoverInAStoppedModel(() -> liveModel.beforeTheNextStart(() -> {
+            nestedStart();
+            catchup.pauseSubscription(ID);
+        }));
+        String writtenWhilePending = write();
+
+        // When the model is started without resuming its subscriptions, and the live delegate's start starts it again and then pauses the subscription
+        startOffTheTestThread(false);
+
+        // Then the takeover stores where it replays from, and neither replays nor goes live while the subscription is paused
+        assertThatBothStartsReturnedWithoutThrowing();
+        await().atMost(15, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storage.savedAtTheOriginOfTheReplay()).as("the saves of the position the takeover replays from").hasSize(1));
+        letTheTakeoverThreadGo.countDown();
+        assertThat(waitUpTo(2000, () -> received.size() > history.size())).as("whether the paused subscription replayed the lost history, got " + received.size() + " events").isFalse();
+        assertThat(received).as("the events the paused subscription got").containsExactlyElementsOf(history);
+        assertThat(liveModel.openedAt).as("the live starts the live model opened for the paused subscription").isEmpty();
+
+        // And when it is resumed, it replays the history the live delegate lost
+        catchup.resumeSubscription(ID);
+        assertThatTheTakeoverRanOnceAndReplayedTheLostHistory(writtenWhilePending);
+    }
+
+    /**
+     * A pause made while the live delegate answers that the catch-up takes the subscription over, before it holds the
+     * subscription paused, keeps the subscription paused once the takeover has run, until it is resumed.
+     */
+    @Test
+    @Timeout(60)
+    void a_pause_made_before_the_live_delegate_holds_the_subscription_paused_for_the_takeover_keeps_it_paused_until_it_is_resumed() throws Exception {
+        // Given a subscription that is paused by the thread that finds its live start lost, before the live delegate holds it paused
+        AtomicReference<@Nullable Throwable> pauseThrew = new AtomicReference<>();
+        liveModel.beforeTheFirstTakeOverIsHeldPaused(() -> pauseOffTheLiveThread(pauseThrew));
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        awaitTheTakeoverAsked();
+        String writtenWhilePending = write();
+
+        // When the live delegate lets the takeover go
+        letTheTakeoverThreadGo.countDown();
+
+        // Then the takeover stores where it replays from, and neither replays nor goes live while the subscription is paused
+        assertThat(pauseThrew.get()).as("what the pause threw").isNull();
+        assertThatThePausedSubscriptionStaysPausedAfterTheTakeover();
+
+        // And when it is resumed, it replays the history the live delegate lost
+        catchup.resumeSubscription(ID);
+        assertThatTheTakeoverRanOnceAndReplayedTheLostHistory(writtenWhilePending);
+    }
+
+    /**
+     * A pause that the live delegate refuses, since it paused the subscription for the takeover in between, counts as
+     * the pause, and keeps the subscription paused once the takeover has run, until it is resumed.
+     */
+    @Test
+    @Timeout(60)
+    void a_pause_the_live_delegate_refuses_after_it_paused_the_subscription_for_the_takeover_keeps_it_paused_until_it_is_resumed() throws Exception {
+        // Given a live delegate that refuses a pause of a subscription it holds paused, and holds the thread that found the live start lost
+        CountDownLatch liveThreadHeld = new CountDownLatch(1);
+        CountDownLatch letTheLiveThreadGo = new CountDownLatch(1);
+        liveModel.refusingAPauseOfAHeldSubscription()
+                .beforeTheFirstTakeOverIsHeldPaused(() -> {
+                    liveThreadHeld.countDown();
+                    await().atMost(60, TimeUnit.SECONDS).until(() -> letTheLiveThreadGo.getCount() == 0);
+                })
+                // Runs inside the pause the test thread makes, so the live delegate holds the subscription paused before it answers
+                .beforeTheFirstPause(() -> {
+                    letTheLiveThreadGo.countDown();
+                    await().atMost(15, TimeUnit.SECONDS).until(() -> takeoverAsked.getCount() == 0);
+                });
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(liveThreadHeld.await(15, TimeUnit.SECONDS)).as("whether the live delegate answered that the catch-up takes the subscription over").isTrue();
+        String writtenWhilePending = write();
+
+        // When the subscription is paused, and the live delegate pauses it for the takeover before it answers the pause
+        Throwable pauseThrew = null;
+        try {
+            catchup.pauseSubscription(ID);
+        } catch (Throwable e) {
+            pauseThrew = e;
+        }
+
+        // Then the takeover stores where it replays from, and neither replays nor goes live while the subscription is paused
+        assertThat(pauseThrew).as("what the pause threw").isNull();
+        letTheTakeoverThreadGo.countDown();
+        assertThatThePausedSubscriptionStaysPausedAfterTheTakeover();
+
+        // And when it is resumed, it replays the history the live delegate lost
+        catchup.resumeSubscription(ID);
+        assertThatTheTakeoverRanOnceAndReplayedTheLostHistory(writtenWhilePending);
+    }
+
+    private void pauseOffTheLiveThread(AtomicReference<@Nullable Throwable> pauseThrew) {
+        try {
+            catchup.pauseSubscription(ID);
+        } catch (Throwable e) {
+            pauseThrew.set(e);
+        }
+    }
+
+    private void assertThatThePausedSubscriptionStaysPausedAfterTheTakeover() {
+        await().atMost(15, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storage.savedAtTheOriginOfTheReplay()).as("the saves of the position the takeover replays from").hasSize(1));
+        assertThat(waitUpTo(2000, () -> received.size() > history.size())).as("whether the paused subscription replayed the lost history, got " + received.size() + " events").isFalse();
+        assertThat(received).as("the events the paused subscription got").containsExactlyElementsOf(history);
+        assertThat(liveModel.openedAt).as("the live starts the live model opened for the paused subscription").isEmpty();
     }
 
     private void givenAPendingTakeoverInAStoppedModel(Runnable beforeTheStart) {

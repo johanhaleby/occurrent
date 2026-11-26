@@ -239,8 +239,17 @@ holds, two of the cases listed below that still hold the model lock. A `shutdown
 for the lock behind one of those reads shuts the wrapped model down without the lock, and throws after 10 seconds, as
 described below. When the wrapped model lost the history from the live start of one of those subscriptions and holds
 it paused for a takeover, the takeover stores the position its replay starts from, and that store doesn't run under
-the lock. So the rest of that resume, the takeover and the turn that returns the replay's handle, runs on a thread of
-its own once the thread that holds the lock has let go of it. The `start(true)` returns without waiting for it.
+the lock. So the takeover runs on a thread of its own once the thread that holds the lock has let go of it, and the
+`start(true)` returns without waiting for it. That thread runs the takeover and no other turn of the resume, because
+the `start(true)` has returned by then, and a turn that resumed the subscription there would take effect after it. A
+`pauseSubscription(id)` made after the `start(true)` returned, also from the wrapped model's `start(..)` before the
+lock is free, then keeps the subscription paused, as a pause made while a takeover waits does, and the takeover
+stores the position it would have replayed from. A pause made once the wrapped model holds the subscription paused
+for a takeover counts as one made while the takeover waits, also before the wrapped model has told the catch-up it
+paused it. So does a pause made once the catch-up has answered the wrapped model that it takes the subscription over,
+before the wrapped model has paused it. That pause goes to the wrapped model too, which can pause the subscription for
+the takeover in between and then refuse the pause as one of a paused subscription, and the catch-up takes that refusal
+as the pause. `CatchupSubscriptionModel` sends such a pause to the child that answered.
 
 A call for X that an action handed over, a subscribe, a resume, a positioned resume, a pause or a cancel, runs on a
 thread of its own without the model lock, as the same call made from another thread does. The lifecycle thread waits
