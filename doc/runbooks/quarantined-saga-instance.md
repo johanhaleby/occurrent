@@ -93,8 +93,9 @@ to alert on. It names two durations, how long the event had been failing and the
 Alert on the `ERROR` saying the instance "could not record the failure" too. The runner logs it when the store can't
 write the instance with the failure recorded, even with no failure message, as the section on writes that don't fit
 below describes. Nothing is written, so the instance stays `ACTIVE`, isn't quarantined on that event while the store
-can't take that write, and doesn't appear in step 1. The line repeats at most once per quarantine budget for the instance, however often the event is
-offered again.
+can't take that write, and doesn't appear in step 1. The line names the event, and repeats at most once per quarantine
+budget for that event, however often it's offered again. Another event of the instance that fails the same way gets a
+line of its own.
 
 A release in step 5 logs lines of its own from the same logger. The one to alert on is an `ERROR` saying the instance
 is `QUARANTINED` again, and step 5 lists the others.
@@ -362,8 +363,8 @@ ends, so the instance's document grows by one number per replayed stream event. 
 every write whether it can take it, and for the write that applies an input it asks before it dispatches the input's
 commands. On MongoDB the store refuses a document of more than 16 MiB, and a write of more than 16 MiB and 16 KiB with its compare-and-set filter, which holds the saga id, so a long saga id lowers the limit. When the store can't take the instance with the
 input applied, or with the input's failure recorded, the release doesn't apply that input. An attempt the store
-refuses that way dispatches none of the input's commands, but an earlier attempt whose write lost to an input recorded
-meanwhile has dispatched them already, and the `ERROR` says how many. The instance is quarantined again on that input with its marks trimmed, the release returns
+refuses that way dispatches none of the input's commands, but an earlier attempt can have dispatched them already with
+a write that then lost to another writer, and the `ERROR` says how many. The instance is quarantined again on that input with its marks trimmed, the release returns
 `QUARANTINED_AGAIN`, and an `ERROR` names the instance and the input. That happens with quarantine off too, and on a
 store that doesn't write atomically. The `ERROR` says which of two cases it is:
 
@@ -385,16 +386,22 @@ an `IllegalStateException` that names the instance and says the same.
 
 A live input outside a release asks the store the same way, on every compare-and-set attempt, before that attempt
 dispatches the input's commands. When the store can't take the instance with the input applied, the attempt dispatches
-nothing and the input fails with an `IllegalStateException`. An earlier attempt that lost its compare-and-set to
-another writer has dispatched its commands already, and the exception message says how many the attempts of this
-delivery of the event, or this poll of the timer, dispatched, so check it before you send any of them by hand. An
+nothing and the input fails with an `IllegalStateException`. An earlier attempt can have dispatched its commands
+already and then lost its compare-and-set to another writer, and the exception message says how many the attempts of
+this delivery of the event, or this poll of the timer, dispatched, so check it before you send any of them by hand. An
 earlier delivery or poll can have dispatched them too.
+
+The quarantined record in step 1 holds at most the message of the delivery that quarantined the instance, so it can
+say that no attempt of that delivery dispatched anything when an earlier delivery did. Before you send a command by
+hand, read the `WARN` lines saying the instance failed on the event as well, from the first one on, since each logs
+the exception of the delivery it was written for. A redelivery the runner logs nothing for hands its exception only to
+whatever feeds the subscription, and [How you find out](#how-you-find-out) says which redeliveries those are.
 
 - An event that fails this way gets a failure record and, with quarantine on, is quarantined once its budget runs out,
   like any other failing event. When the store can't take the full failure record, the runner writes it without its failure message,
   so `failure.failureMessage()` reads `null`.
 - When the store can't take even that, the runner writes nothing and logs the `ERROR` saying it "could not record the
-  failure", at most once per quarantine budget for the instance. The event fails on every delivery and the instance
+  failure", at most once per quarantine budget for the event. The event fails on every delivery and the instance
   isn't quarantined on it while the store can't take that write, so delete the instance or handle the event by hand.
 - A timeout that fails this way never quarantines the instance. Its timer stays due, the instance stays `ACTIVE`, and
   later polls try the timer again and log the `WARN` "Failed to fire saga timer" each time the store refuses it.

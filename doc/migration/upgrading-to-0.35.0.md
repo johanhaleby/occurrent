@@ -1210,7 +1210,7 @@ whole instance, and for the write that applies a record before it dispatches the
 the write that applies the input, on every compare-and-set attempt before that attempt dispatches the input's commands.
 When it returns `false` there, that attempt dispatches nothing and the input fails like any other failing input, see
 [a saga input whose instance the store cannot write fails before it dispatches](#a-saga-input-whose-instance-the-store-cannot-write-fails-before-it-dispatches). An
-earlier attempt that lost its compare-and-set has dispatched its commands already. A live input that fails also calls
+earlier attempt can have dispatched its commands already and then lost its compare-and-set. A live input that fails also calls
 it before a failure record that inserts the instance. It returns `false`
 when the store can't write `candidate`, such as an instance whose write would go over a size limit of the store's, and
 `true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a live input or
@@ -1482,7 +1482,8 @@ stored, and every redelivery dispatched them again. The report is
   once the event's budget runs out. A timeout never quarantines the instance. Its timer stays due and later polls try
   it again.
 - When the store can't take the failure record either, the runner writes it without its message, and when it can't
-  take that, it writes nothing and logs an `ERROR` at most once per quarantine budget for the instance, see
+  take that, it writes nothing and logs an `ERROR` that names the event, at most once per quarantine budget for that
+  event, see
   [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md).
 - The runner encodes the instance before it dispatches, on every store, so a codec that throws on encode fails the
   input before any command goes out.

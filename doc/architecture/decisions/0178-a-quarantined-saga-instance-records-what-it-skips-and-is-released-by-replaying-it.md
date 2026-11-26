@@ -747,8 +747,8 @@ The upgrade guide has the procedure for operators, in
   it, replaces the fields that write sets and measures the result, without decoding the state, so a state that no
   longer decodes doesn't fail the answer. The in-memory store answers `true`, as it does for `fits`. When the store can't take the
   instance with the record applied, or with the record's failure recorded, the release doesn't apply the record. An
-  attempt the store refuses that way dispatches none of the record's commands, but an earlier attempt whose write lost
-  to an input recorded meanwhile has dispatched them already, and the ERROR says how many. The instance is quarantined again on that record with its marks trimmed to the reorder window, the release
+  attempt the store refuses that way dispatches none of the record's commands, but an earlier attempt can have dispatched
+  them already with a write that then lost to another writer, and the ERROR says how many. The instance is quarantined again on that record with its marks trimmed to the reorder window, the release
   returns `QUARANTINED_AGAIN`, and an ERROR names the instance. When the record applied to the trimmed instance fits,
   the ERROR says to release the instance again, and a further release goes on from that record. Otherwise the ERROR
   says a further release stops on the record too. When the store can't take the write that quarantines the instance

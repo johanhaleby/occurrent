@@ -236,13 +236,13 @@ public interface SagaStateStoreSkippedInputs {
      * Whether the store can write {@code candidate}, the whole instance as a write the saga is about to make leaves it.
      * A live input asks on every compare-and-set attempt, before that attempt dispatches its commands. When the answer
      * is {@code false}, that attempt dispatches nothing and the input fails like any other failing input, while an
-     * earlier attempt that lost its compare-and-set has dispatched its commands already, see {@code SagaRunner}. A live
+     * earlier attempt can have dispatched its commands already and then lost its compare-and-set, see {@code SagaRunner}. A live
      * input that fails asks it too before a failure record that inserts the instance. A release asks before every write it makes that writes the whole instance, and asks
      * {@link #fitsWithoutState(StoredSaga, long)} before every write that leaves the stored state where it is. For the
      * write that applies a record, the release asks before it dispatches the record's commands. When that write fails after them, the commands went out for an input the
      * instance never applied, and every later attempt sends them again. When the answer is {@code false}, that attempt
-     * dispatches nothing, while an earlier attempt whose write lost to an input recorded meanwhile has dispatched the
-     * record's commands already, and the release quarantines the instance again on the record, with the stream versions it applied trimmed
+     * dispatches nothing, while an earlier attempt can have dispatched the record's commands already with a write
+     * that then lost to another writer, and the release quarantines the instance again on the record, with the stream versions it applied trimmed
      * to the reorder window, or writes nothing when the store cannot take that either, see
      * {@code SagaSubscription.release(sagaId)}.
      * <p>

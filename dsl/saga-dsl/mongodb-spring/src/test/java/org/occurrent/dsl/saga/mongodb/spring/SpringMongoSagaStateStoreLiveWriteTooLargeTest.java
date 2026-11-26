@@ -349,7 +349,7 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
         await().ignoreExceptions().atMost(Duration.ofSeconds(60)).until(() -> failedReactions.get() >= 6);
         assertAll(
                 () -> assertThat(errors()).as("the first delivery said it and the five after it did not").singleElement().asString()
-                        .contains("'" + ORDER + "'").contains("could not record the failure").contains("This is logged at most once per PT5M for the instance."),
+                        .contains("'" + ORDER + "'").contains("could not record the failure").contains("This is logged at most once per PT5M for the event."),
                 () -> assertThat(instance().status()).isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(dispatched).isEmpty()
         );

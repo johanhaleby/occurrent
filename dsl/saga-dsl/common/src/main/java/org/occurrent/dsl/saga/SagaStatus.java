@@ -88,7 +88,7 @@ public enum SagaStatus {
      *   <li>The store can take that write, in full or with no failure message. A store that implements
      *       {@code SagaStateStoreSkippedInputs} is asked before the write, and when it can't take even the smaller one,
      *       nothing is written and the runner logs an ERROR, at most once per {@code quarantineAfter} for the
-     *       instance.</li>
+     *       event.</li>
      *   <li>The compare-and-set write wins within {@code maxCasAttempts} attempts. When another writer changed the
      *       instance first, the runner reads it again and works the decision out again from what it holds now, so
      *       nothing is written when that writer applied the event, completed the instance or quarantined it. When every

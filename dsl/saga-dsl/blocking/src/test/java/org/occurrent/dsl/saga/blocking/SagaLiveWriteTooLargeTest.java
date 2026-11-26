@@ -116,9 +116,12 @@ class SagaLiveWriteTooLargeTest {
     }
 
     private volatile boolean aFails = false;
+    private volatile boolean bFails = false;
     private volatile boolean placedFails = false;
     // How many compare-and-sets of the saga the store loses to another writer, which writes a newer version first
     private final AtomicInteger lostWrites = new AtomicInteger();
+    // What another writer does the first time the store is asked to record a skipped input, which then loses its write
+    private final AtomicReference<@Nullable Runnable> whenTheSkipIsLost = new AtomicReference<>();
     private volatile Predicate<SagaEnvelope<Order>> fits = candidate -> true;
     private final AtomicReference<Instant> now = new AtomicReference<>(START);
     private final InMemoryEventStore eventStore = new InMemoryEventStore();
@@ -172,7 +175,7 @@ class SagaLiveWriteTooLargeTest {
                     return List.of();
                 })
                 .react(ItemAdded.class, (state, e) -> {
-                    if (aFails && e.item().equals("a")) {
+                    if ((aFails && e.item().equals("a")) || (bFails && e.item().equals("b"))) {
                         throw new IllegalStateException("cannot pack " + e.item());
                     }
                     if (e.item().equals("hold")) {
@@ -538,11 +541,11 @@ class SagaLiveWriteTooLargeTest {
         SagaEnvelope<Order> after = instance();
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("cannot apply the event")
-                        .hasMessageContaining("This attempt dispatched none of its commands, but 1 command was dispatched by the earlier attempt of this delivery, which lost its write to another writer.")
+                        .hasMessageContaining("This attempt dispatched none of its commands, but 1 command was dispatched by an earlier attempt of this delivery, which lost its write to another writer.")
                         .hasMessageNotContaining("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(dispatched).as("the first attempt dispatched it, the second dispatched nothing").containsExactly(new Pack(ORDER, "a")),
                 () -> assertThat(after.failure()).isNotNull(),
-                () -> assertThat(after.failure().failureMessage()).contains("1 command was dispatched by the earlier attempt of this delivery")
+                () -> assertThat(after.failure().failureMessage()).contains("1 command was dispatched by an earlier attempt of this delivery")
                         .doesNotContain("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(after.state().items()).as("the input is not applied").isEmpty()
         );
@@ -559,7 +562,7 @@ class SagaLiveWriteTooLargeTest {
 
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(IllegalStateException.class)
-                        .hasMessageContaining("This attempt dispatched none of its commands, but 2 commands were dispatched by the 2 earlier attempts of this delivery, which lost their write to another writer.")
+                        .hasMessageContaining("This attempt dispatched none of its commands, but 2 commands were dispatched by 2 earlier attempts of this delivery, which lost their write to another writer.")
                         .hasMessageNotContaining("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(dispatched).containsExactly(new Pack(ORDER, "a"), new Pack(ORDER, "a"))
         );
@@ -615,7 +618,7 @@ class SagaLiveWriteTooLargeTest {
     }
 
     @Test
-    void the_error_that_a_failure_record_cannot_be_written_is_logged_once_per_interval_for_the_instance_however_often_the_event_is_delivered() {
+    void the_error_that_a_failure_record_cannot_be_written_is_logged_once_per_interval_for_the_event_however_often_the_event_is_delivered() {
         SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
         aFails = true;
         fits = candidate -> !hasFailure(candidate);
@@ -632,14 +635,14 @@ class SagaLiveWriteTooLargeTest {
 
         assertAll(
                 () -> assertThat(withinTheInterval).as("four deliveries inside the interval").singleElement().asString()
-                        .contains("'" + ORDER + "'").contains("could not record the failure").contains("This is logged at most once per PT1M for the instance."),
+                        .contains("'" + ORDER + "'").contains("could not record the failure").contains("This is logged at most once per PT1M for the event."),
                 () -> assertThat(pastTheInterval).as("due again once the interval has passed").hasSize(2),
                 () -> assertThat(dispatched).isEmpty()
         );
     }
 
     @Test
-    void the_error_that_an_input_cannot_be_listed_as_pending_is_logged_once_per_interval_for_the_instance_however_often_the_event_is_delivered() {
+    void the_error_that_an_input_cannot_be_listed_as_pending_is_logged_once_per_interval_for_the_event_however_often_the_event_is_delivered() {
         SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG_WITHOUT_QUARANTINE);
         aFails = true;
         fits = candidate -> !hasPending(candidate);
@@ -657,9 +660,89 @@ class SagaLiveWriteTooLargeTest {
 
         assertAll(
                 () -> assertThat(withinTheInterval).as("four deliveries inside the interval").singleElement().asString()
-                        .contains("'" + ORDER + "'").contains("could not list it as pending").contains("This is logged at most once per PT5M for the instance."),
+                        .contains("'" + ORDER + "'").contains("could not list it as pending").contains("This is logged at most once per PT5M for the event."),
                 () -> assertThat(pastTheInterval).as("due again once the interval has passed").hasSize(2),
                 () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
+    @Test
+    void two_events_of_one_instance_whose_failure_records_the_store_cannot_write_each_log_their_own_error_inside_one_interval_and_a_redelivery_of_the_first_logs_no_third() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        aFails = true;
+        bFails = true;
+        fits = candidate -> !hasFailure(candidate);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+        CloudEvent b = append(new ItemAdded(nextEventId(), ORDER, "b"));
+
+        catchThrowable(() -> execution.onCloudEvent(a));
+        catchThrowable(() -> execution.onCloudEvent(b));
+        List<String> afterBoth = errors();
+        now.set(now.get().plus(BUDGET.dividedBy(10)));
+        catchThrowable(() -> execution.onCloudEvent(a));
+
+        assertAll(
+                () -> assertThat(afterBoth).as("one ERROR for each of the two events").hasSize(2),
+                () -> assertThat(afterBoth.get(0)).contains("failed on the event '" + ORDER + "@2' and could not record the failure").doesNotContain(ORDER + "@3"),
+                () -> assertThat(afterBoth.get(1)).contains("failed on the event '" + ORDER + "@3' and could not record the failure").doesNotContain(ORDER + "@2"),
+                () -> assertThat(errors()).as("the first event offered again inside the interval logs no third").isEqualTo(afterBoth),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
+    @Test
+    void with_quarantine_off_two_events_of_one_instance_that_cannot_be_listed_as_pending_each_log_their_own_error_inside_one_interval_and_a_redelivery_of_the_first_logs_no_third() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG_WITHOUT_QUARANTINE);
+        aFails = true;
+        bFails = true;
+        fits = candidate -> !hasPending(candidate);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+        CloudEvent b = append(new ItemAdded(nextEventId(), ORDER, "b"));
+        Duration interval = SagaExecution.UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE;
+
+        catchThrowable(() -> execution.onCloudEvent(a));
+        catchThrowable(() -> execution.onCloudEvent(b));
+        List<String> afterBoth = errors();
+        now.set(now.get().plus(interval.dividedBy(10)));
+        catchThrowable(() -> execution.onCloudEvent(a));
+
+        assertAll(
+                () -> assertThat(afterBoth).as("one ERROR for each of the two events").hasSize(2),
+                () -> assertThat(afterBoth.get(0)).contains("failed on the event '" + ORDER + "@2' and could not list it as pending").doesNotContain(ORDER + "@3"),
+                () -> assertThat(afterBoth.get(1)).contains("failed on the event '" + ORDER + "@3' and could not list it as pending").doesNotContain(ORDER + "@2"),
+                () -> assertThat(errors()).as("the first event offered again inside the interval logs no third").isEqualTo(afterBoth),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
+    @Test
+    void an_attempt_the_store_refuses_does_not_count_an_earlier_attempt_that_lost_recording_a_skip_among_those_that_dispatched() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        bFails = true;
+        CloudEvent b = append(new ItemAdded(nextEventId(), ORDER, "b"));
+        catchThrowable(() -> execution.onCloudEvent(b));
+        advanceThroughTheBudget();
+        catchThrowable(() -> execution.onCloudEvent(b));
+        assertThat(instance().status()).as("control: quarantined on b").isEqualTo(SagaStatus.QUARANTINED);
+        bFails = false;
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+        // The first attempt reads the instance quarantined and loses the write that records the skip of a. The writer that won
+        // released the instance, so the second attempt reads it active, dispatches a and loses its write to another writer,
+        // and the store refuses the third
+        whenTheSkipIsLost.set(() -> {
+            assertThat(execution.release(ORDER)).as("control: the other writer released the instance").isEqualTo(ReleaseResult.RELEASED);
+            lostWrites.set(1);
+            refuseTheItemAfterAsking(1);
+        });
+
+        Throwable thrown = catchThrowable(() -> execution.onCloudEvent(a));
+
+        assertAll(
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("cannot apply the event")
+                        .hasMessageContaining("This attempt dispatched none of its commands, but 1 command was dispatched by an earlier attempt of this delivery, which lost its write to another writer.")
+                        .hasMessageNotContaining("2 earlier attempts"),
+                () -> assertThat(dispatched).as("the release replayed b, and only the second attempt dispatched a").containsExactly(new Pack(ORDER, "b"), new Pack(ORDER, "a")),
+                () -> assertThat(whenTheSkipIsLost.get()).as("control: the skip record was the write lost").isNull()
         );
     }
 
@@ -742,6 +825,11 @@ class SagaLiveWriteTooLargeTest {
 
         @Override
         public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            Runnable otherWriter = whenTheSkipIsLost.getAndSet(null);
+            if (otherWriter != null) {
+                otherWriter.run();
+                return false;
+            }
             return inMemory.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input);
         }
 
