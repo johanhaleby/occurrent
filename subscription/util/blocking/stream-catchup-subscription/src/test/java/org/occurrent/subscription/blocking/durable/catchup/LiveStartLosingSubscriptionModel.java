@@ -81,7 +81,8 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private final AtomicBoolean firstTakeOverHeld = new AtomicBoolean(true);
     private volatile Runnable beforeTheFirstTakeOverIsHeldPaused = () -> {
     };
-    private final Set<String> losingTheHistory = ConcurrentHashMap.newKeySet();
+    private final Map<String, Held> losingTheHistory = new ConcurrentHashMap<>();
+    private final Set<String> pausedBeforeItHeldTheTakeOverPaused = ConcurrentHashMap.newKeySet();
     private volatile boolean refusesAPauseOfAHeldSubscription;
     private volatile Runnable betweenTheFirstTakeOverPauseAndWhatFollows = () -> {
     };
@@ -127,6 +128,14 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         losesTheNextOpen.set(false);
         losesEveryOpen = false;
         return this;
+    }
+
+    // A model made after the process that ran the other one restarted. The live starts it can't resume from stay lost, since
+    // the history doesn't come back, its live starts go on from where the other one's were, and it keeps every open
+    LiveStartLosingSubscriptionModel afterARestartOf(LiveStartLosingSubscriptionModel before) {
+        lost.addAll(before.lost);
+        liveStartsRead.set(before.liveStartsRead.get());
+        return neverLosingAnOpen();
     }
 
     // From now on an open at a live start it has not lost already keeps it, as once the history reaches back far enough
@@ -306,7 +315,7 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         for (HistoryLossListener listener : listeners) {
             if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver) {
                 if (firstTakeOverHeld.compareAndSet(true, false)) {
-                    losingTheHistory.add(subscriptionId);
+                    losingTheHistory.put(subscriptionId, new Held(filter, action, StartAt.checkpoint(lostFrom)));
                     try {
                         beforeTheFirstTakeOverIsHeldPaused.run();
                     } finally {
@@ -316,6 +325,13 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
                 paused.put(subscriptionId, new Held(filter, action, StartAt.checkpoint(lostFrom)));
                 if (firstTakeOver.compareAndSet(true, false)) {
                     betweenTheFirstTakeOverPauseAndWhatFollows.run();
+                }
+                if (pausedBeforeItHeldTheTakeOverPaused.remove(subscriptionId)) {
+                    // A pause came after the answer and before this pause, so the subscription is held paused, and the
+                    // takeover is dropped without afterPause, as a MongoDB subscription model drops a takeover of a run it
+                    // finds no longer current
+                    takeOversAsked.incrementAndGet();
+                    return;
                 }
                 takeOver.afterPause().run();
                 takeOversAsked.incrementAndGet();
@@ -429,7 +445,12 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
             }
             return;
         }
-        if (losingTheHistory.contains(subscriptionId)) {
+        Held heldWhileLosing = losingTheHistory.get(subscriptionId);
+        if (heldWhileLosing != null) {
+            // Holds the subscription paused from now on, as a MongoDB subscription model does, and the takeover that
+            // finds it paused is dropped without afterPause
+            paused.put(subscriptionId, heldWhileLosing);
+            pausedBeforeItHeldTheTakeOverPaused.add(subscriptionId);
             return;
         }
         Held resumedByAStart = runningWhereItWasHeld.remove(subscriptionId);

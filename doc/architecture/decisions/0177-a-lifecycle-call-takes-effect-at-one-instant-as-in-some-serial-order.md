@@ -249,7 +249,13 @@ for a takeover counts as one made while the takeover waits, also before the wrap
 paused it. So does a pause made once the catch-up has answered the wrapped model that it takes the subscription over,
 before the wrapped model has paused it. That pause goes to the wrapped model too, which can pause the subscription for
 the takeover in between and then refuse the pause as one of a paused subscription, and the catch-up takes that refusal
-as the pause. `CatchupSubscriptionModel` sends such a pause to the child that answered.
+as the pause. When the wrapped model pauses the subscription for that pause instead, it drops the takeover without
+telling the catch-up, as `HistoryLossHandling.takeOver(..)` describes. So the catch-up starts the takeover itself once it
+has recorded the pause, on a thread of its own, and the takeover stores the position its replay starts from and keeps
+the subscription paused. A catch-up made after a restart, over the same checkpoint storage, then replays the lost
+history from that position. When the
+wrapped model also tells the catch-up it paused the subscription, only the first of the two starts the takeover.
+`CatchupSubscriptionModel` sends such a pause to the child that answered.
 
 A call for X that an action handed over, a subscribe, a resume, a positioned resume, a pause or a cancel, runs on a
 thread of its own without the model lock, as the same call made from another thread does. The lifecycle thread waits
@@ -278,13 +284,15 @@ The three cases that still hold the model lock across I/O or code the caller sup
    reads of a `start(true)` made inside the wrapped model's `start(..)`, described above.
 2. The wrapped model's `resumeSubscription(X)`, which the turn calls. A wrapped model that doesn't implement
    `PreparedResumeSubscriptions` reads in it. A wrapped model that isn't part of Occurrent and whose resume blocks holds
-   the lock until it returns. A `shutdown()` that waits for the lock meanwhile shuts the wrapped model down without the
-   lock, as above, so the wrapped model then has a resume and a `shutdown()` running at once, as it would with two
-   threads calling it. After 10 seconds the `shutdown()` throws, as above. The MongoDB subscription models read nothing
-   in the resume that `DurableSubscriptionModel.resumeAsPrepared(..)` calls, but it waits for the MongoDB model's
-   monitor. Their `pauseSubscription(..)` and `cancelSubscription(..)` of another subscription hold that monitor while
-   they close its change stream cursor, and closing one can wait for the server. So the turn can wait under the lock
-   until that close returns, and a `shutdown()` made meanwhile waits for it too.
+   the lock until it returns, also when a `DurableSubscriptionModel` around it prepared the resume. A
+   `shutdown()` that waits for the lock meanwhile shuts the wrapped model down without the lock, as above, so the
+   wrapped model then has a resume and a `shutdown()` running at once, as it would with two threads calling it. After
+   10 seconds the `shutdown()` throws, as above. The MongoDB subscription models read nothing in the resume that
+   `DurableSubscriptionModel.resumeAsPrepared(..)` calls, but it waits for the MongoDB model's monitor. Their
+   `pauseSubscription(..)` and `cancelSubscription(..)` of another subscription hold that monitor while they close its
+   change stream cursor, and closing one can wait for the server. So the turn can wait under the lock until that close
+   returns. A `shutdown()` made meanwhile shuts the MongoDB model down without the lock, and the MongoDB model's
+   `shutdown()` waits for the same monitor, so it returns once the close has.
 3. A `StartAt.dynamic(..)` function that a start's or a resume's turn asks, and a `CatchupListener` that a resume
    relaunching a parked replay tells. Both run under the lock, bounded as follows. So do the checkpoint reads of a
    `start(true)` made inside such a function, described above.

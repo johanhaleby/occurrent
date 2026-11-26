@@ -49,6 +49,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
@@ -220,6 +221,50 @@ class CatchupSubscriptionModelNestedStartRunsPendingTakeoverTest {
         // And when it is resumed, it replays the history the live delegate lost
         catchup.resumeSubscription(ID);
         assertThatTheTakeoverRanOnceAndReplayedTheLostHistory(writtenWhilePending);
+    }
+
+    /**
+     * A pause made before the live delegate holds the subscription paused for the takeover makes the live delegate drop
+     * the takeover without running what follows the pause, as the MongoDB subscription models do, so the catch-up stores
+     * the position its replay starts from itself. Without it, storage keeps the live start the live delegate lost, and a
+     * model made after a restart refuses to subscribe with its default start.
+     */
+    @Test
+    @Timeout(60)
+    void a_pause_made_before_the_live_delegate_holds_the_subscription_paused_stores_the_replay_origin_for_a_model_made_after_a_restart() throws Exception {
+        // Given a subscription that is paused by the thread that finds its live start lost, before the live delegate holds it paused, and a live delegate that then drops the takeover
+        AtomicReference<@Nullable Throwable> pauseThrew = new AtomicReference<>();
+        liveModel.beforeTheFirstTakeOverIsHeldPaused(() -> pauseOffTheLiveThread(pauseThrew));
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        awaitTheTakeoverAsked();
+        String writtenWhilePending = write();
+
+        // When the live delegate holds the subscription paused
+        letTheTakeoverThreadGo.countDown();
+
+        // Then the pause returned, and nothing is delivered while the subscription is paused (it is paused, so there is nothing to replay until a resume), and the replay origin is stored once
+        assertThat(pauseThrew.get()).as("what the pause threw").isNull();
+        assertThatThePausedSubscriptionStaysPausedAfterTheTakeover();
+        assertThat(catchup.isPaused(ID)).as("whether the subscription is paused").isTrue();
+
+        // And a catch-up made over the same storage and event store, as after a restart, subscribes with its default start and replays every event of the lost history
+        shutDownOnADaemonThread(catchup::shutdown);
+        InMemorySubscriptionModel restartedInMemory = new InMemorySubscriptionModel();
+        LiveStartLosingSubscriptionModel restartedLiveModel = new LiveStartLosingSubscriptionModel(restartedInMemory, true, false, () -> {
+        }).afterARestartOf(liveModel);
+        CatchupSubscriptionModel restarted = new CatchupSubscriptionModel(restartedLiveModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        List<String> receivedAfterTheRestart = new CopyOnWriteArrayList<>();
+        try {
+            Throwable subscribeThrew = catchThrowable(() -> restarted.subscribe(ID, StartAt.subscriptionModelDefault(), event -> receivedAfterTheRestart.add(event.getId())));
+            assertThat(subscribeThrew).as("what the default subscribe of the model made after the restart threw, which is CatchupCannotResumeException when storage holds the live start the live delegate lost").isNull();
+            // The replay starts from where the replay that handed over started, so it delivers the history the live delegate lost and what was written meanwhile
+            List<String> everyEvent = Stream.concat(history.stream(), Stream.of(writtenWhilePending)).toList();
+            await().atMost(15, TimeUnit.SECONDS).untilAsserted(() -> assertThat(receivedAfterTheRestart).as("the events the model made after the restart got").containsExactlyElementsOf(everyEvent));
+        } finally {
+            shutDownOnADaemonThread(restarted::shutdown);
+            shutDownOnADaemonThread(restartedInMemory::shutdown);
+        }
     }
 
     /**

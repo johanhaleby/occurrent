@@ -1862,15 +1862,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Resumes the subscription {@code read} was read for in the live delegate, as {@link SubscriptionModel#resumeSubscription(String)}
      * would, without reading storage when the live delegate is a {@link PreparedResumeSubscriptions}. Throws
      * {@link ReadAgain} when the live delegate finds that what it prepared moved, and what preparing it threw. A live
-     * delegate that can't split its resume is resumed here, with what it reads, and a {@code shutdown()} waiting for the
-     * model lock meanwhile shuts it down at once.
+     * delegate that can't split its resume is resumed here, with what it reads. Either way a {@code shutdown()} waiting
+     * for the model lock meanwhile shuts the live delegate down at once, since the resume it calls can wait on the model
+     * the live delegate wraps.
      */
     Subscription resumeTheLiveDelegateAsRead(ResumeRead read) {
         if (read.preparationFailed != null) {
             throw thrownAsItIs(read.preparationFailed);
         }
         if (read.split != null && read.prepared != null) {
-            return read.split.resumeAsPrepared(read.subscriptionId, read.prepared).orElseThrow(() -> ReadAgain.MOVED);
+            PreparedResumeSubscriptions split = read.split;
+            PreparedResumeSubscriptions.PreparedResume prepared = read.prepared;
+            return whileWaitingForOneSubscription(() -> split.resumeAsPrepared(read.subscriptionId, prepared)).orElseThrow(() -> ReadAgain.MOVED);
         }
         return whileWaitingForOneSubscription(() -> read.liveDelegate.resumeSubscription(read.subscriptionId));
     }
@@ -2773,7 +2776,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             made.takeOverAsked().set(true);
             return HistoryLossHandling.takeOver(() -> {
                 if (made.takingOver().compareAndSet(false, true)) {
-                    Thread.ofVirtual().name("occurrent-catchup-takeover-" + subscriptionId).start(() -> takeOver(subscriptionId, made));
+                    startTakeOver(subscriptionId, made);
                 }
             });
         }
@@ -2876,6 +2879,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return;
             }
         }
+    }
+
+    // On a thread of its own, since the caller holds the claim takeOver waits for, or runs on the live delegate's thread
+    private void startTakeOver(String subscriptionId, HandedOver made) {
+        Thread.ofVirtual().name("occurrent-catchup-takeover-" + subscriptionId).start(() -> takeOver(subscriptionId, made));
     }
 
     // Where the subscription is while a takeover keeps it, for a log. A start(true) of the live delegate can resume it
@@ -3024,6 +3032,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     }
                 }
                 pauseRequestedDuringCatchup.put(subscriptionId, true);
+                // A pause that reached the live delegate before it paused the subscription for the takeover has it drop
+                // the takeover without running afterPause, so the takeover starts here, stores the position it replays
+                // from and keeps the subscription paused. Once only, also when the live delegate runs afterPause
+                if (takeOverIsDue(subscriptionId, takeover) && takeover.takingOver().compareAndSet(false, true)) {
+                    startTakeOver(subscriptionId, takeover);
+                }
             } else {
                 getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
             }
