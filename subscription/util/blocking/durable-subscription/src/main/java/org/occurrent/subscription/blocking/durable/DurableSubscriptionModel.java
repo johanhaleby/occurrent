@@ -40,6 +40,7 @@ import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -1278,9 +1279,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * its change stream at, such as the position a catch-up stores while it replays.
      * <p>
      * A subscription subscribed at a {@code StartAt.checkpoint(..)} of its own, such as a replay, also goes on from the
-     * wrapped model's own position until it stores a checkpoint, while the checkpoint and write version stored for the id
-     * are the ones read when it was subscribed, or the version a resume of this subscribe stored with that checkpoint.
-     * That checkpoint can come from an earlier run of the id and lie after the replay's start, so resuming there would
+     * wrapped model's own position until it stores a checkpoint, while the checkpoint stored for the id is the one read
+     * when it was subscribed, with the write version read then or a version this node has written with, or tried to, for
+     * the id since. A write that threw counts too, such as a resume whose acknowledgement was lost or the put-back after a
+     * failed {@link #resumeSubscription(String, StartAt)}, since it may have stored the version and only this node stores
+     * it. That checkpoint can come from an earlier run of the id and lie after the replay's start, so resuming there would
      * skip the events in between. Once it has stored a checkpoint, or a different checkpoint or write version is stored,
      * such as by another node that held the lease, it resumes at the stored checkpoint. When the checkpoint couldn't be
      * read at subscribe, it goes on from the wrapped model's own position until it stores a checkpoint. Going on from there
@@ -1377,6 +1380,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     // can't store a later checkpoint before this node's first save, and a newer version refuses the resume
                     // with the subscription still paused and nothing changed
                     OptionalLong thisNodesVersion = writeVersionOfStoredCheckpoint(subscriptionId);
+                    boolean ownStartStillStored = before != null && before.stillStored(read, writeVersion);
+                    if (ownStartStillStored && thisNodesVersion.isPresent()) {
+                        // Noted before the write, so a later resume doesn't take this version for another holder's
+                        // when the write stores it and then throws, as after a lost acknowledgement
+                        registration.mayStoreThisNodesWriteVersion(thisNodesVersion.getAsLong());
+                    }
                     Stamped stamped = thisNodesVersion.isEmpty()
                             ? new Stamped(read, false)
                             : stampWriteVersion(subscriptionId, thisNodesVersion.getAsLong());
@@ -1385,14 +1394,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                         // Nothing stored any more
                         return;
                     }
-                    if (before != null && before.stillStored(read, writeVersion) && checkpoint.asString().equals(read.asString())) {
+                    if (ownStartStillStored && checkpoint.asString().equals(read.asString())) {
                         // Still the checkpoint stored before the subscription's own start, which can lie after that start,
-                        // so the wrapped model goes on from its own position. What the subscribe noted as stored takes the
-                        // version stored here, so a later resume finds the checkpoint still stored and doesn't take this
-                        // version for a holder that ran in between
-                        if (stamped.versionStored() && before.known()) {
-                            registration.ownStartAfter(new StoredBefore(true, checkpoint.asString(), thisNodesVersion));
-                        }
+                        // so the wrapped model goes on from its own position
                         return;
                     }
                     // A resume at the stored checkpoint, with no checkpoint to write. A handler the pause stopped
@@ -1507,6 +1511,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // that took it before the move is refused, and one that took it after reads what the write left
             try {
                 underLocks(saveLocksOf(writing), () -> {
+                    // Noted before the write, since a put-back after a failed resume stores the checkpoint read here
+                    // with this version, and a later plain resume mustn't take that for another holder's
+                    if (writeCondition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan) {
+                        writing.forEach(registration -> registration.mayStoreThisNodesWriteVersion(notOlderThan.writeVersion()));
+                    }
                     try {
                         storage.save(subscriptionId, position, writeCondition);
                     } catch (Throwable failure) {
@@ -1998,14 +2007,31 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // The checkpoint and write version stored for an id once a subscribe at a checkpoint of the caller's own was
-    // tracked, or that the read failed
-    record StoredBefore(boolean known, @Nullable String checkpoint, OptionalLong writeVersion) {
+    // tracked, or that the read failed, and the versions this node has written with or tried to since, any of which a
+    // write that threw may have stored
+    record StoredBefore(boolean known, @Nullable String checkpoint, OptionalLong writeVersion, Set<Long> thisNodesWriteVersions) {
         static final StoredBefore UNKNOWN = new StoredBefore(false, null, OptionalLong.empty());
 
+        StoredBefore(boolean known, @Nullable String checkpoint, OptionalLong writeVersion) {
+            this(known, checkpoint, writeVersion, Set.of());
+        }
+
         // Compared by asString, since a Checkpoint promises no equals. A failed read counts as still stored, so the
-        // resume can deliver an event twice but never skips one
+        // resume can deliver an event twice but never skips one. This node's own version with that checkpoint counts
+        // as still stored too, since only the holder of a version stores it
         boolean stillStored(Checkpoint stored, OptionalLong storedWriteVersion) {
-            return !known || (stored.asString().equals(checkpoint) && storedWriteVersion.equals(writeVersion));
+            return !known || (stored.asString().equals(checkpoint)
+                              && (storedWriteVersion.equals(writeVersion)
+                                  || storedWriteVersion.isPresent() && thisNodesWriteVersions.contains(storedWriteVersion.getAsLong())));
+        }
+
+        StoredBefore withThisNodesWriteVersion(long thisNodesWriteVersion) {
+            if (!known || thisNodesWriteVersions.contains(thisNodesWriteVersion)) {
+                return this;
+            }
+            Set<Long> versions = new HashSet<>(thisNodesWriteVersions);
+            versions.add(thisNodesWriteVersion);
+            return new StoredBefore(true, checkpoint, writeVersion, Set.copyOf(versions));
         }
     }
 

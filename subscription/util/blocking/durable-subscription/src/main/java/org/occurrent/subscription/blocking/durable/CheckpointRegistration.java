@@ -141,6 +141,16 @@ final class CheckpointRegistration {
         storedBeforeOwnStart = storedBefore;
     }
 
+    // Called holding saveLock and the lock for the id, before a write of this node's that may store writeVersion. Only
+    // the holder of a version stores it, so the checkpoint stored before the own start, found later with this version,
+    // is no change by another holder, whether the write returned or threw
+    void mayStoreThisNodesWriteVersion(long writeVersion) {
+        StoredBefore before = storedBeforeOwnStart;
+        if (before != null) {
+            storedBeforeOwnStart = before.withThisNodesWriteVersion(writeVersion);
+        }
+    }
+
     // A checkpoint stored before a start at a checkpoint of the caller's own may lie after that start, so a resume
     // there could skip events. Once this subscribe has stored one, what is stored is its own or a later one
     @Nullable StoredBefore storedBeforeOwnStartUnlessItStoredOne() {

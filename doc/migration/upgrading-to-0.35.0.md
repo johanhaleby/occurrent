@@ -649,7 +649,9 @@ subscription waits for the lease, as for a first position above.
 
 A plain `resumeSubscription(id)` stores this node's version with the stored checkpoint the same way before it resumes.
 That includes a resume where the wrapped model goes on from its own position, because the stored checkpoint is still
-the one stored before a subscribe at a checkpoint of the caller's own. When the storage holds a newer version, it throws `CheckpointWriteConditionNotFulfilledException`,
+the one stored before a subscribe at a checkpoint of the caller's own. This node's version stored with that checkpoint
+doesn't count as a change by another node, also when the write that stored it threw, so a later resume still goes on
+from the wrapped model's own position. When the storage holds a newer version, it throws `CheckpointWriteConditionNotFulfilledException`,
 nothing is resumed and the subscription stays paused. When `CompetingConsumerSubscriptionModel` resumes the
 subscription because this node got the lease, it gives the lease back and the node stays a candidate for it.
 
