@@ -118,8 +118,9 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *                full one, which lists the version as pending only when it is at or below {@code floor}. A stream
      *                version names exactly one event, so the version is enough to recognise it. It is treated like a
      *                pending version and removed when the version is applied. A version is added when its failure record
-     *                is replaced by another input's, so it holds the record an instance kept from before 0.35.0,
-     *                if any, and one version for every such smaller record replaced since
+     *                is replaced by another input's while the marks don't list the version as pending, so it holds the
+     *                record an instance kept from before 0.35.0, if any, and one version for every such smaller record
+     *                replaced since without its version listed as pending
      * @param pendingSince when each version in {@code pending} or {@code legacyFailed} first failed, by version. The quarantine budget of an input
      *                runs from here, so a failure of one input never moves the clock of another. A pending version
      *                missing from it falls back to the failure record's {@code firstFailedAt} when the record names it,

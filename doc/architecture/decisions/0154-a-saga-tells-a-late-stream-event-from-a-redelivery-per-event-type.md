@@ -102,9 +102,10 @@ record written before pending does not say which type failed, and a stream versi
 version in that list is new however far behind it is, like a pending one. Applying it removes it from the list, and if
 it fails again with its type known it moves to pending. A record written since pending existed is usually pending
 already when it is replaced. The exception is a failure record the store couldn't take in full, which the saga writes
-without its message and lists as pending only when the version is at or below the stream's `floor`. So the list holds
-the record an instance already had when it was upgraded, if any, and one version for every such smaller record replaced
-since. Nothing is dropped from it either.
+without its message and lists as pending only when the version is at or below the stream's `floor`, or when a later
+failure of the same event can write the listing. The saga moves a replaced event to the list only when pending doesn't
+list it. So the list holds the record an instance already had when it was upgraded, if any, and one version for every
+such smaller record replaced since while pending didn't list its version. Nothing is dropped from it either.
 
 **The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
 `mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from

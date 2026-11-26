@@ -152,8 +152,10 @@ public final class SagaExecutionSupport {
      * The result of processing one input. When {@link #processed()} is false the input was not applied (it was a
      * redelivery, the instance is terminal or quarantined, or the event cannot start an instance). The executor then
      * dispatches nothing. When there is a {@link #skipToRecord()}, which is a quarantined instance recording the input
-     * it skips, it records that as {@link SagaExecutionSupport#skipToRecord} says. Otherwise it dispatches {@link #commands()} in order and then saves {@link #envelope()} with
-     * {@code compareAndSave(..., expectedVersion())}.
+     * it skips, it records that as {@link SagaExecutionSupport#skipToRecord} says. Otherwise it dispatches
+     * {@link #commands()} in order and then saves {@link #envelope()} with {@code compareAndSave(..., expectedVersion())},
+     * after asking a store that implements {@code SagaStateStoreSkippedInputs} whether it can write {@link #envelope()}.
+     * When that store can't, the attempt dispatches nothing and the executor records the failure instead.
      */
     public record Outcome<S extends @Nullable Object, C>(boolean processed,
                                                          @Nullable SagaEnvelope<S> envelope,

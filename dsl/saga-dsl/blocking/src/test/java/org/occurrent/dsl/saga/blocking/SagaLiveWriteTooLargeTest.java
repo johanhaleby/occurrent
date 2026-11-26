@@ -153,6 +153,12 @@ class SagaLiveWriteTooLargeTest {
                 .filter(message -> !message.contains("is now QUARANTINED")).toList();
     }
 
+    // The WARNs that say an event failed and the failure was recorded without quarantining the instance
+    private List<String> failedOnTheEventWarnings() {
+        return appender.list.stream().filter(e -> e.getLevel() == Level.WARN).map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains("failed on the event") && message.contains("Whether the event is offered again")).toList();
+    }
+
     private Saga<OrderEvent, Order, Object> saga() {
         return Saga.<OrderEvent, Order, Object>builder(null)
                 .correlateAll(OrderEvent::orderId)
@@ -237,7 +243,7 @@ class SagaLiveWriteTooLargeTest {
 
         assertAll(
                 () -> assertThat(first).isInstanceOf(IllegalStateException.class).hasMessageContaining("'" + ORDER + "'")
-                        .hasMessageContaining("cannot apply the event").hasMessageContaining("No command of it was dispatched."),
+                        .hasMessageContaining("cannot apply the event").hasMessageContaining("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(second).as("the quarantining delivery is acknowledged").isNull(),
                 () -> assertThat(dispatched).as("nothing is dispatched on either delivery").isEmpty(),
                 () -> assertThat(afterTheFirst.status()).isEqualTo(SagaStatus.ACTIVE),
@@ -284,7 +290,7 @@ class SagaLiveWriteTooLargeTest {
 
         SagaEnvelope<Order> after = instance();
         assertAll(
-                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("No command of it was dispatched."),
+                () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(dispatched).isEmpty(),
                 () -> assertThat(after.state().items()).as("the event is not applied").isEmpty(),
                 () -> assertThat(hasPending(after)).as("the event is listed as pending").isTrue(),
@@ -327,6 +333,33 @@ class SagaLiveWriteTooLargeTest {
                 () -> assertThat(quarantined.failure().failureMessage()).isNull(),
                 () -> assertThat(dispatched).isEmpty(),
                 () -> assertThat(errors()).as("a bare record fit, so no ERROR").isEmpty()
+        );
+    }
+
+    @Test
+    void the_same_event_failing_again_inside_its_budget_when_the_store_takes_only_the_bare_record_writes_nothing_and_logs_neither_the_failed_on_the_event_warning_nor_an_error() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG);
+        aFails = true;
+        // Refuses the full record and any record that lists the event as pending, and takes the bare one
+        fits = candidate -> !hasFailureMessage(candidate) && !hasPending(candidate);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+
+        Throwable first = catchThrowable(() -> execution.onCloudEvent(a));
+        SagaEnvelope<Order> afterTheFirst = instance();
+        List<String> warningsAfterTheFirst = failedOnTheEventWarnings();
+        now.set(now.get().plus(BUDGET.dividedBy(10)));
+        Throwable second = catchThrowable(() -> execution.onCloudEvent(a));
+
+        assertAll(
+                () -> assertThat(first).isInstanceOf(IllegalStateException.class).hasMessage("cannot pack a"),
+                () -> assertThat(second).isInstanceOf(IllegalStateException.class).hasMessage("cannot pack a"),
+                () -> assertThat(afterTheFirst.failure()).as("control: the bare record is written").isNotNull(),
+                () -> assertThat(afterTheFirst.failure().failureMessage()).as("control: without a message").isNull(),
+                () -> assertThat(warningsAfterTheFirst).as("the first delivery logs the warning once").singleElement().asString().contains("'" + ORDER + "'").contains("'" + FAILING_INPUT + "'"),
+                () -> assertThat(failedOnTheEventWarnings()).as("the second logs no second warning").isEqualTo(warningsAfterTheFirst),
+                () -> assertThat(instance()).as("the second delivery writes nothing").isEqualTo(afterTheFirst),
+                () -> assertThat(errors()).as("and no ERROR, as the bare record is stored already").isEmpty(),
+                () -> assertThat(dispatched).isEmpty()
         );
     }
 
@@ -445,6 +478,44 @@ class SagaLiveWriteTooLargeTest {
         );
     }
 
+    @Test
+    void with_quarantine_off_the_store_refusing_only_the_write_that_lists_the_event_as_pending_logs_that_one_error_once_per_interval_and_writes_nothing_on_any_delivery() {
+        SagaExecution<OrderEvent, Order, Object> execution = placed(CONFIG_WITHOUT_QUARANTINE);
+        aFails = true;
+        // Every other write of the scenario is accepted, so this refusal is the only thing that can log an ERROR
+        fits = candidate -> !hasPending(candidate);
+        CloudEvent a = append(new ItemAdded(nextEventId(), ORDER, "a"));
+        SagaEnvelope<Order> before = instance();
+        Duration interval = SagaExecution.UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE;
+
+        Throwable first = catchThrowable(() -> execution.onCloudEvent(a));
+        List<String> afterTheFirst = errors();
+        SagaEnvelope<Order> instanceAfterTheFirst = instance();
+        now.set(now.get().plus(interval.dividedBy(10)));
+        Throwable second = catchThrowable(() -> execution.onCloudEvent(a));
+        List<String> afterTheSecond = errors();
+        SagaEnvelope<Order> instanceAfterTheSecond = instance();
+        now.set(START.plus(interval));
+        Throwable third = catchThrowable(() -> execution.onCloudEvent(a));
+        List<String> afterTheInterval = errors();
+
+        assertAll(
+                () -> assertThat(first).isInstanceOf(IllegalStateException.class).hasMessage("cannot pack a"),
+                () -> assertThat(second).isInstanceOf(IllegalStateException.class).hasMessage("cannot pack a"),
+                () -> assertThat(third).isInstanceOf(IllegalStateException.class).hasMessage("cannot pack a"),
+                () -> assertThat(afterTheFirst).singleElement().asString().contains("'" + ORDER + "'")
+                        .contains("failed on the event '" + FAILING_INPUT + "' and could not list it as pending, because its state store")
+                        .contains("cannot write the instance with it listed")
+                        .doesNotContain("kept changing").doesNotContain("the state store failed").doesNotContain("threw"),
+                () -> assertThat(instanceAfterTheFirst).as("nothing is written, the version included").isEqualTo(before),
+                () -> assertThat(afterTheSecond).as("a second delivery inside the interval logs no second ERROR").isEqualTo(afterTheFirst),
+                () -> assertThat(instanceAfterTheSecond).as("and writes nothing").isEqualTo(before),
+                () -> assertThat(afterTheInterval).as("due again once the interval has passed").hasSize(2),
+                () -> assertThat(instance()).isEqualTo(before),
+                () -> assertThat(dispatched).isEmpty()
+        );
+    }
+
     // Allows the first allowed questions about an instance with "a" applied, and refuses every one after
     private void refuseTheItemAfterAsking(int allowed) {
         AtomicInteger asked = new AtomicInteger();
@@ -467,12 +538,12 @@ class SagaLiveWriteTooLargeTest {
         SagaEnvelope<Order> after = instance();
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("cannot apply the event")
-                        .hasMessageContaining("This attempt dispatched none of its commands, but 1 command was dispatched by the earlier attempt, which lost its write to another writer.")
-                        .hasMessageNotContaining("No command of it was dispatched."),
+                        .hasMessageContaining("This attempt dispatched none of its commands, but 1 command was dispatched by the earlier attempt of this delivery, which lost its write to another writer.")
+                        .hasMessageNotContaining("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(dispatched).as("the first attempt dispatched it, the second dispatched nothing").containsExactly(new Pack(ORDER, "a")),
                 () -> assertThat(after.failure()).isNotNull(),
-                () -> assertThat(after.failure().failureMessage()).contains("1 command was dispatched by the earlier attempt")
-                        .doesNotContain("No command of it was dispatched."),
+                () -> assertThat(after.failure().failureMessage()).contains("1 command was dispatched by the earlier attempt of this delivery")
+                        .doesNotContain("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(after.state().items()).as("the input is not applied").isEmpty()
         );
     }
@@ -488,8 +559,8 @@ class SagaLiveWriteTooLargeTest {
 
         assertAll(
                 () -> assertThat(thrown).isInstanceOf(IllegalStateException.class)
-                        .hasMessageContaining("This attempt dispatched none of its commands, but 2 commands were dispatched by the 2 earlier attempts, which lost their write to another writer.")
-                        .hasMessageNotContaining("No command of it was dispatched."),
+                        .hasMessageContaining("This attempt dispatched none of its commands, but 2 commands were dispatched by the 2 earlier attempts of this delivery, which lost their write to another writer.")
+                        .hasMessageNotContaining("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(dispatched).containsExactly(new Pack(ORDER, "a"), new Pack(ORDER, "a"))
         );
     }
@@ -515,7 +586,7 @@ class SagaLiveWriteTooLargeTest {
                 () -> assertThat(after.failure()).as("a timer failure is not an input failure of the instance").isNull(),
                 () -> assertThat(after.state().items()).as("the timeout is not applied").doesNotContain("timed out"),
                 () -> assertThat(warnings).singleElement().satisfies(warning -> assertThat(throwableMessageOf(warning))
-                        .contains("cannot apply the timer 'hold'").contains("No command of it was dispatched.")),
+                        .contains("cannot apply the timer 'hold'").contains("No attempt of this poll dispatched any of its commands.")),
                 () -> assertThat(errors()).isEmpty()
         );
     }
@@ -535,6 +606,8 @@ class SagaLiveWriteTooLargeTest {
                 () -> assertThat(after.failure()).as("the bare record is inserted").isNotNull(),
                 () -> assertThat(after.failure().input()).isEqualTo(ORDER + "@1"),
                 () -> assertThat(after.failure().failureMessage()).as("the full record is not written").isNull(),
+                () -> assertThat(hasPending(after)).as("the bare record has no pending entry").isFalse(),
+                () -> assertThat(after.streamMarks()).as("and no stream marks, as there was no instance to carry them over from").isEmpty(),
                 () -> assertThat(after.status()).isEqualTo(SagaStatus.ACTIVE),
                 () -> assertThat(dispatched).isEmpty(),
                 () -> assertThat(errors()).as("the bare record fit, so no ERROR").isEmpty()

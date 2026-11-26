@@ -238,7 +238,7 @@ class SpringMongoSagaStateStoreLiveWriteTooLargeTest {
         assertAll(
                 () -> assertThat(dispatched).isEmpty(),
                 () -> assertThat(quarantined.failure().input()).isEqualTo(FAILING_INPUT),
-                () -> assertThat(quarantined.failure().failureMessage()).contains("cannot apply the event").contains("No command of it was dispatched."),
+                () -> assertThat(quarantined.failure().failureMessage()).contains("cannot apply the event").contains("No attempt of this delivery dispatched any of its commands."),
                 () -> assertThat(quarantined.state()).as("the event is not applied").hasSize(stateLength),
                 () -> assertThat(storedSize()).isLessThanOrEqualTo(MAX_DOCUMENT_SIZE),
                 () -> assertThat(errors()).as("every failure write fit").isEmpty()

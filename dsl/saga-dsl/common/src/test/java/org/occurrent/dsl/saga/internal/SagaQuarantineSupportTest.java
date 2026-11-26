@@ -442,6 +442,23 @@ class SagaQuarantineSupportTest {
                     () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull()
             );
         }
+
+        @Test
+        void the_record_that_inserts_an_instance_whose_first_input_failed_has_no_message_and_no_stream_marks() {
+            // There is no stored instance, so no marks to carry over, and the input is above the floor of a stream nothing has applied
+            FailureRecord<OrderState> full = SagaExecutionSupport.onFailure(saga(), "o1", null, at(1), new IllegalStateException("boom"), NOW, BUDGET);
+
+            FailureRecord<OrderState> bare = SagaExecutionSupport.onFailureBare(null, at(1), full);
+
+            assertAll(
+                    () -> assertThat(pendingOf(full)).as("control: the full record lists the input").containsExactly(1L),
+                    () -> assertThat(bare).isNotNull(),
+                    () -> assertThat(bare.envelope().failure().input()).isEqualTo("o1@1"),
+                    () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull(),
+                    () -> assertThat(bare.envelope().streamMarks()).as("no stream marks").isEmpty(),
+                    () -> assertThat(bare.expectedVersion()).isEqualTo(full.expectedVersion())
+            );
+        }
     }
 
     @Nested

@@ -127,8 +127,9 @@ public final class SagaSubscription implements AutoCloseable {
      * long backlog can grow the instance past what its store can write. The release asks the store before every write
      * whether it can take it, see {@link org.occurrent.dsl.saga.SagaStateStoreSkippedInputs#fits}, and for the write
      * that applies an input it asks before it dispatches the input's commands. When the store can't take the instance
-     * with the input applied, or with its failure recorded, the release applies and dispatches nothing for that input.
-     * The instance is quarantined again on that input with its marks trimmed, the release returns
+     * with the input applied, or with its failure recorded, the release doesn't apply that input. An attempt the store
+     * refuses that way dispatches none of the input's commands, but an earlier attempt whose write lost to an input
+     * recorded meanwhile has dispatched them already, and the ERROR says how many. The instance is quarantined again on that input with its marks trimmed, the release returns
      * {@link ReleaseResult#QUARANTINED_AGAIN}, and an ERROR names the instance and says which of two cases it is. When
      * the store can write the input applied to the trimmed instance, the ERROR says to release the instance again, and a
      * further release goes on from that input. Otherwise a further release stops on that input too, and the ERROR says

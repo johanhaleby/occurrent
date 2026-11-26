@@ -121,6 +121,8 @@ class SagaReleaseTooLargeTest {
 
     private volatile boolean aFails = false;
     private volatile boolean poisonFails = false;
+    // Runs once, just before the store takes the next write that applies and deletes a record of a release
+    private volatile @Nullable Runnable beforeTheNextReplayedWrite;
     private volatile Predicate<SagaEnvelope<Order>> fits = candidate -> true;
     private final AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
     private final InMemoryEventStore eventStore = new InMemoryEventStore();
@@ -327,6 +329,28 @@ class SagaReleaseTooLargeTest {
     }
 
     @Test
+    void a_record_whose_write_lost_to_a_skip_after_its_commands_went_out_and_is_then_refused_by_the_store_says_in_the_error_that_the_release_dispatched_its_command_already() {
+        SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
+        // The store takes the poison event applied once, which is the write the release dispatches for, and refuses it from then on
+        AtomicInteger askedWithPoisonApplied = new AtomicInteger();
+        fits = candidate -> !appliedItems(candidate, "poison") || askedWithPoisonApplied.incrementAndGet() <= 1;
+        // Another writer skips an event while the release writes the record, so that write loses to a skip only
+        beforeTheNextReplayedWrite = () -> execution.onCloudEvent(append(new ItemAdded(nextEventId(), ORDER, "late")));
+
+        ReleaseResult result = execution.release(ORDER);
+
+        assertAll(
+                () -> assertThat(beforeTheNextReplayedWrite).as("control: the skip was recorded during the release").isNull(),
+                () -> assertThat(result).isEqualTo(ReleaseResult.QUARANTINED_AGAIN),
+                () -> assertThat(dispatched).as("the command went out once, with the write that lost").containsExactly(new Pack(ORDER, "poison")),
+                () -> assertThat(errors()).singleElement().asString().contains("'" + ORDER + "'").contains("is QUARANTINED again on the event")
+                        .contains("cannot write the instance with the event applied")
+                        .contains("This release dispatched 1 command of the event already, with a write that lost to another writer."),
+                () -> assertThat(instance().status()).isEqualTo(SagaStatus.QUARANTINED)
+        );
+    }
+
+    @Test
     void an_input_the_store_cannot_write_even_with_the_marks_trimmed_logs_that_a_further_release_stops_too_stays_quarantined_and_dispatches_nothing_on_every_release() {
         SagaExecution<OrderEvent, Order, Object> execution = quarantinedOnPoisonWithTwoSkipped(predicateStore, CONFIG);
         fits = candidate -> !appliedItems(candidate, "poison");
@@ -497,6 +521,11 @@ class SagaReleaseTooLargeTest {
 
         @Override
         public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            Runnable hook = beforeTheNextReplayedWrite;
+            if (hook != null) {
+                beforeTheNextReplayedWrite = null;
+                hook.run();
+            }
             return delegate.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed);
         }
 
