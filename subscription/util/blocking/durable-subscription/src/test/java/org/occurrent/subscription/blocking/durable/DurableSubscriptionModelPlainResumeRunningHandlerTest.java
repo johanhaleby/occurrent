@@ -170,12 +170,13 @@ class DurableSubscriptionModelPlainResumeRunningHandlerTest {
     }
 
     /**
-     * The wrapped model reports the subscription as running when the resume checks, and a pause on another thread comes
-     * before the wrapped model resumes, so it restarts at the stored checkpoint. The handler read before the resume is
-     * the run that restart replaces, so its checkpoint is not stored over the one the resume went to.
+     * The wrapped model reports the subscription as neither running nor paused when the resume checks, as a model does
+     * that doesn't synchronize its two reads, and a pause on another thread comes before the wrapped model resumes, so it
+     * restarts at the stored checkpoint. The handler read before the resume is the run that restart replaces, so its
+     * checkpoint is not stored over the one the resume went to.
      */
     @Test
-    void a_plain_resume_of_a_subscription_the_wrapped_model_reports_as_running_refuses_the_late_save_of_a_handler_read_before_the_resume() throws Exception {
+    void a_plain_resume_of_a_subscription_the_wrapped_model_reports_as_neither_running_nor_paused_refuses_the_late_save_of_a_handler_read_before_the_resume() throws Exception {
         // Given
         RepositionableQuietPositionReportingModel wrapped = new RepositionableQuietPositionReportingModel();
         RecordingStorage recordingStorage = new RecordingStorage();
@@ -193,6 +194,7 @@ class DurableSubscriptionModelPlainResumeRunningHandlerTest {
         assertThat(awaitQuietly(handlerStarted)).as("handler started").isTrue();
         recordingStorage.save(SUBSCRIPTION_ID, STORED_BY_ANOTHER_NODE);
         recordingStorage.saved.clear();
+        wrapped.reportsNothingRunning = true;
         assertThat(wrapped.isPaused(SUBSCRIPTION_ID)).as("subscription paused when the resume checks").isFalse();
         model.resumeSubscription(SUBSCRIPTION_ID);
 
@@ -210,11 +212,11 @@ class DurableSubscriptionModelPlainResumeRunningHandlerTest {
 
     /**
      * A resume of a subscription that is not paused does not claim that the stored checkpoint covers the deliveries read
-     * before it, since a wrapped model that is running throws instead of restarting there. So a quiet position is not
-     * saved over a checkpoint another node stored, even though the wrapped model answers true to {@code restartsAt}.
+     * before it, since a wrapped model that runs again by then throws instead of restarting there. So a quiet position is
+     * not saved over a checkpoint another node stored, even though the wrapped model answers true to {@code restartsAt}.
      */
     @Test
-    void a_plain_resume_of_a_subscription_the_wrapped_model_reports_as_running_saves_no_quiet_position_over_the_checkpoint_stored_by_another_node() throws Exception {
+    void a_plain_resume_of_a_subscription_the_wrapped_model_reports_as_neither_running_nor_paused_saves_no_quiet_position_over_the_checkpoint_stored_by_another_node() throws Exception {
         // Given
         RepositionableQuietPositionReportingModel wrapped = new RepositionableQuietPositionReportingModel();
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(Duration.ofMillis(1)));
@@ -222,6 +224,7 @@ class DurableSubscriptionModelPlainResumeRunningHandlerTest {
         });
         wrapped.deliver(SUBSCRIPTION_ID, EVENT_BEFORE_THE_PAUSE);
         storage.save(SUBSCRIPTION_ID, STORED_BY_ANOTHER_NODE);
+        wrapped.reportsNothingRunning = true;
         assertThat(wrapped.isPaused(SUBSCRIPTION_ID)).as("subscription paused when the resume checks").isFalse();
         model.resumeSubscription(SUBSCRIPTION_ID);
 
@@ -239,14 +242,15 @@ class DurableSubscriptionModelPlainResumeRunningHandlerTest {
     }
 
     /**
-     * The save of a delivery is in progress, holding the lock of its registration, when a plain resume of the running
-     * subscription and a pause on a third thread are made. The pause takes no lock of the subscription, and the resume
-     * waits for the save, so all three finish once the save is released.
+     * The save of a delivery is in progress, holding the lock of its registration, when a plain resume of a subscription
+     * the wrapped model reports as neither running nor paused and a pause on a third thread are made. The pause takes no
+     * lock of the subscription, and the resume waits for the save, so all three finish once the save is released.
      */
     @Test
     void a_plain_resume_and_a_pause_made_while_a_save_is_in_progress_finish_once_the_save_is_released() {
         // Given
         RepositionableQuietPositionReportingModel wrapped = new RepositionableQuietPositionReportingModel();
+        wrapped.reportsNothingRunning = true;
         BlockingSaveStorage blockingStorage = new BlockingSaveStorage();
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, blockingStorage, new DurableSubscriptionModelConfig(everyEvent()).neverSaveQuietPosition());
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(START), cloudEvent -> {

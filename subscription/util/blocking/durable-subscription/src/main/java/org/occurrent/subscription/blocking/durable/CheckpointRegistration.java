@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
@@ -54,8 +55,19 @@ final class CheckpointRegistration {
     // listener before each read, delivers what the read its thread made last returned
     private final AtomicLong reads = new AtomicLong();
     // The last read this thread made, with the count of resumes at a position when it made it. An event that read
-    // returns belongs to the run that read it, also when it is delivered after a resume
-    private final ThreadLocal<@Nullable Read> lastReadOnThisThread = new ThreadLocal<>();
+    // returns belongs to the run that read it, also when it is delivered after a resume. The first delivery after the
+    // read takes it for its event, a retry of that event takes it again, and any other event finds it taken
+    private final ThreadLocal<@Nullable ReadOnThisThread> lastReadOnThisThread = new ThreadLocal<>();
+
+    private static final class ReadOnThisThread {
+        private final Read read;
+        // Compared by identity, since a retry hands the action the same instance again
+        private @Nullable CloudEvent takenFor;
+
+        private ReadOnThisThread(Read read) {
+            this.read = read;
+        }
+    }
     // A delivery is current unless a current delivery started before it belongs to a later read, or a restart after
     // a lost history was written after it started. One that isn't comes from a run a pause closed after it read, and
     // the run that resumed has read and delivered past it, or restarted past it
@@ -121,7 +133,7 @@ final class CheckpointRegistration {
 
     Read reading() {
         Read read = new Read(reads.incrementAndGet(), repositions);
-        lastReadOnThisThread.set(read);
+        lastReadOnThisThread.set(new ReadOnThisThread(read));
         return read;
     }
 
@@ -157,16 +169,19 @@ final class CheckpointRegistration {
     }
 
     // A delivery by its number, the read its event came from and the count of resumes at a position when that read was
-    // made. A delivery on a thread that made no read takes the latest read and the count when it starts
+    // made. A delivery on a thread that made no read, or whose last read another event took, takes the latest read and
+    // the count when it starts
     record Delivery(long number, long read, long repositions) {
     }
 
     // Called before anything the delivery waits on, so no quiet position is saved until it has finished. A wrapped
     // model that delivers on a thread other than the one it reads on, or numbers no reads, gets the latest read
-    // handed out, taken holding deliveryLock. No quiet position is saved while a delivery is under way, so one saved
-    // before the delivery started has that read or an earlier one and doesn't supersede it
-    Delivery delivering() {
-        Read lastRead = lastReadOnThisThread.get();
+    // handed out, taken holding deliveryLock. So does a thread whose last read another event took, such as a pooled
+    // thread that delivered an earlier event.
+    // No quiet position is saved while a delivery is under way, so one saved before the delivery started has that read
+    // or an earlier one and doesn't supersede it
+    Delivery delivering(CloudEvent event) {
+        Read lastRead = readTakenFor(event);
         deliveryLock.lock();
         try {
             long read = lastRead == null ? reads.get() : lastRead.number();
@@ -182,6 +197,22 @@ final class CheckpointRegistration {
         } finally {
             deliveryLock.unlock();
         }
+    }
+
+    // The read this thread made last, for the first event delivered after it and for every retry of that event. A
+    // retry of an event from a run a resume replaced keeps that run's read, so its save is still refused
+    private @Nullable Read readTakenFor(CloudEvent event) {
+        ReadOnThisThread last = lastReadOnThisThread.get();
+        if (last == null) {
+            return null;
+        }
+        if (last.takenFor == null) {
+            last.takenFor = event;
+        } else if (last.takenFor != event) {
+            lastReadOnThisThread.remove();
+            return null;
+        }
+        return last.read;
     }
 
     // checkpoint is the one the delivery tried to store, null when the persist predicate declined it or the action

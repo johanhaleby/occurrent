@@ -462,8 +462,10 @@ checkpoint, then resumes the wrapped model there.
   call throws `IllegalStateException`, nothing is stored and the subscription stays paused.
 * `StartAt.subscriptionModelDefault()` resumes from the stored checkpoint, as `resumeSubscription(subscriptionId)`
   does.
-* A subscription subscribed without checkpointing, or one the wrapped model doesn't report as paused, is passed on to
-  the wrapped model and nothing is stored.
+* A subscription the wrapped model reports as running throws `SubscriptionAlreadyRunningException`, and nothing is
+  stored or resumed.
+* Any other subscription subscribed without checkpointing, or one the wrapped model doesn't report as paused, is passed
+  on to the wrapped model and nothing is stored.
 * A checkpoint the wrapped model's new `restartsAt(..)` answers `false` for is passed on to the wrapped model and
   nothing is stored. The method answers `false` unless the model overrides it. The MongoDB subscription models answer
   `false` for a `GlobalCheckpoint`, a `CatchupTimeCheckpoint`, a time and every other checkpoint their change stream
@@ -482,10 +484,11 @@ still be running when the resume stores the position. Once it returns, the check
 that position, and neither is a quiet position read before the resume. A restart then resumes from the position you
 asked for. A plain `resumeSubscription(id)` drops those saves the same way when it asks the wrapped model to resume at
 the stored checkpoint. That includes a catch-up's position or a time on the MongoDB models, which go on from their own
-position for those checkpoints. It also includes a subscription the wrapped model doesn't report as paused when the
-resume checks, since `pauseSubscription(id)` on another thread can come between that check and the wrapped model's
-resume. When the subscription really was running, a restart before a later event stores its checkpoint delivers again
-the events whose saves were dropped, and none is skipped. After such a resume, when the wrapped model goes on from its own position, no quiet
+position for those checkpoints. A plain resume of a subscription the wrapped model reports as
+running throws `SubscriptionAlreadyRunningException` and drops nothing. A subscription that runs again by the time the
+resume reads the stored checkpoint, after a resume that didn't go through the durable model, such as the wrapped
+model's own `start()`, has its saves dropped too. A restart before a later event stores its checkpoint then delivers
+again the events whose saves were dropped, and none is skipped. After such a resume, when the wrapped model goes on from its own position, no quiet
 position is saved over a checkpoint another node stored during the pause until the resumed subscription stores the
 checkpoint of an event. An evaluation of the start position that found no checkpoint stored before such a resume, or
 a restart after a lost history, stored a position records no first position over it. It throws `IllegalStateException`, and evaluating again

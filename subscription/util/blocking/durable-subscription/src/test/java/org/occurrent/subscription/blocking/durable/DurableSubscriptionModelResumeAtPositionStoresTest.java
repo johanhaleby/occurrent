@@ -28,6 +28,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
@@ -550,7 +551,7 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
     class When_the_subscription_is_running {
 
         @Test
-        void throws_what_the_wrapped_model_throws_and_stores_nothing() {
+        void throws_subscription_already_running_and_stores_nothing() {
             // Given
             InMemoryCheckpointStorage storage = storageHolding(OLDER);
             RepositionableFake wrapped = new RepositionableFake();
@@ -563,7 +564,7 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
 
             // Then
             assertAll(
-                    () -> assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("is not paused"),
+                    () -> assertThat(thrown).isInstanceOf(SubscriptionAlreadyRunningException.class),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID)).as("stored").isEqualTo(OLDER)
             );
         }

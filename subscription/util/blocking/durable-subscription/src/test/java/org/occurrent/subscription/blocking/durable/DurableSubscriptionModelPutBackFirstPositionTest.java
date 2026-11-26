@@ -138,6 +138,12 @@ class DurableSubscriptionModelPutBackFirstPositionTest {
             paused.add(subscriptionId);
         }
 
+        // A paused subscription is not running, as a MongoDB model reports it
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return super.isRunning(subscriptionId) && !paused.contains(subscriptionId);
+        }
+
         @Override
         public boolean isPaused(String subscriptionId) {
             return paused.contains(subscriptionId);

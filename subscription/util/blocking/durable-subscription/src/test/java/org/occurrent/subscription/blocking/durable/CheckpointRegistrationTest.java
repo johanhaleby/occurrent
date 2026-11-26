@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.blocking.durable;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -30,6 +32,7 @@ import org.occurrent.subscription.blocking.durable.CheckpointRegistration.Delive
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel.Read;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
@@ -84,7 +87,7 @@ class CheckpointRegistrationTest {
         @Test
         void a_quiet_tick_is_allowed_only_once_a_delivery_that_stored_its_checkpoint_has_ended() {
             // Given
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
 
             // When
             boolean whileItWaits = registration.quietTickAllowed();
@@ -102,7 +105,7 @@ class CheckpointRegistrationTest {
         void a_delivery_that_stored_no_checkpoint_keeps_quiet_ticks_off_until_a_later_delivery_stores_its_checkpoint() {
             // Given an event stored and one the persist predicate declined, or whose action threw
             deliverStored("e1");
-            Delivery declined = registration.delivering();
+            Delivery declined = registration.delivering(event());
             end(declined, null);
             boolean afterTheDeclined = registration.quietTickAllowed();
             asked.clear();
@@ -123,7 +126,7 @@ class CheckpointRegistrationTest {
             // Given
             deliverStored("e1");
             asked.clear();
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
             save(delivery, "e2", Write.WRITES_THEN_THROWS);
             end(delivery, "e2");
 
@@ -142,7 +145,7 @@ class CheckpointRegistrationTest {
             // Given
             deliverStored("e1");
             asked.clear();
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
             save(delivery, "e2", Write.THROWS_WITHOUT_WRITING);
             end(delivery, "e2");
 
@@ -163,7 +166,7 @@ class CheckpointRegistrationTest {
             // Given
             deliverStored("e1");
             asked.clear();
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
             save(delivery, "e2", Write.REFUSED);
             end(delivery, "e2");
 
@@ -423,7 +426,7 @@ class CheckpointRegistrationTest {
             // Given
             deliverStored("e1");
             Read read = registration.reading();
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
             asked.clear();
 
             // When
@@ -510,7 +513,7 @@ class CheckpointRegistrationTest {
         @Test
         void a_delivery_that_read_before_a_resume_at_a_position_is_refused_and_the_position_of_the_resume_stays_stored() {
             // Given
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
             resumeAt("x", null, Write.RETURNS);
             asked.clear();
 
@@ -602,7 +605,7 @@ class CheckpointRegistrationTest {
             deliverStored("p");
             resumeAt("x", "p", Write.RETURNS);
             registration.reading();
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
             save(delivery, "e2", Write.RETURNS);
             putBack("p", Write.RETURNS);
             end(delivery, "e2");
@@ -624,7 +627,7 @@ class CheckpointRegistrationTest {
             deliverStored(event);
             resumeAt("x", event, Write.RETURNS);
             registration.reading();
-            Delivery delivery = registration.delivering();
+            Delivery delivery = registration.delivering(event());
             save(delivery, event, Write.RETURNS);
             return delivery;
         }
@@ -788,9 +791,9 @@ class CheckpointRegistrationTest {
         @Test
         void the_save_of_a_closed_run_is_refused_once_a_delivery_of_the_run_that_resumed_has_saved() {
             // Given a closed run whose delivery started before the resumed run read, and a resumed run that stored e2
-            Delivery closedRun = registration.delivering();
+            Delivery closedRun = registration.delivering(event());
             registration.reading();
-            Delivery resumedRun = registration.delivering();
+            Delivery resumedRun = registration.delivering(event());
             save(resumedRun, "e2", Write.RETURNS);
             end(resumedRun, "e2");
             asked.clear();
@@ -808,9 +811,9 @@ class CheckpointRegistrationTest {
         @Test
         void the_stored_checkpoint_stays_the_one_of_the_run_that_resumed_when_the_closed_run_tries_to_store_an_earlier_event() {
             // Given
-            Delivery closedRun = registration.delivering();
+            Delivery closedRun = registration.delivering(event());
             registration.reading();
-            Delivery resumedRun = registration.delivering();
+            Delivery resumedRun = registration.delivering(event());
             save(resumedRun, "e2", Write.RETURNS);
             end(resumedRun, "e2");
 
@@ -825,8 +828,8 @@ class CheckpointRegistrationTest {
         @Test
         void a_delivery_that_started_earlier_in_the_same_read_is_refused_once_a_later_one_has_saved() {
             // Given
-            Delivery earlier = registration.delivering();
-            Delivery later = registration.delivering();
+            Delivery earlier = registration.delivering(event());
+            Delivery later = registration.delivering(event());
             save(later, "e2", Write.RETURNS);
             end(later, "e2");
 
@@ -844,8 +847,8 @@ class CheckpointRegistrationTest {
         void deliveries_in_order_in_one_read_and_in_later_reads_are_all_saved() {
             // Given
             registration.reading();
-            Delivery first = registration.delivering();
-            Delivery second = registration.delivering();
+            Delivery first = registration.delivering(event());
+            Delivery second = registration.delivering(event());
 
             // When
             save(first, "e1", Write.RETURNS);
@@ -853,13 +856,53 @@ class CheckpointRegistrationTest {
             save(second, "e2", Write.RETURNS);
             end(second, "e2");
             registration.reading();
-            Delivery third = registration.delivering();
+            Delivery third = registration.delivering(event());
             save(third, "e3", Write.RETURNS);
             end(third, "e3");
 
             // Then
             assertThat(asked).containsExactly("save e1", "save e2", "save e3");
             assertThat(stored).isEqualTo("e3");
+        }
+
+        @Test
+        void a_retry_of_the_same_event_after_a_resume_at_a_position_is_still_refused_since_it_belongs_to_the_run_that_read_it() {
+            // Given an event whose first attempt ended before a resume at a position, on the thread that read it
+            registration.reading();
+            CloudEvent retried = event();
+            Delivery firstAttempt = registration.delivering(retried);
+            end(firstAttempt, null);
+            resumeAt("x", null, Write.RETURNS);
+            asked.clear();
+
+            // When the same instance is delivered again
+            Delivery retry = registration.delivering(retried);
+            save(retry, "e1", Write.RETURNS);
+            end(retry, "e1");
+
+            // Then
+            assertThat(asked).isEmpty();
+            assertThat(stored).isEqualTo("x");
+        }
+
+        @Test
+        void a_different_event_delivered_on_the_thread_without_a_new_read_takes_the_latest_read_and_is_saved_after_a_resume_at_a_position() {
+            // Given an event of a read made before a resume at a position
+            registration.reading();
+            Delivery first = registration.delivering(event());
+            save(first, "e1", Write.RETURNS);
+            end(first, "e1");
+            resumeAt("x", "e1", Write.RETURNS);
+            asked.clear();
+
+            // When another event is delivered on the thread, which made no read since
+            Delivery other = registration.delivering(event());
+            save(other, "e2", Write.RETURNS);
+            end(other, "e2");
+
+            // Then
+            assertThat(asked).containsExactly("save e2");
+            assertThat(stored).isEqualTo("e2");
         }
     }
 
@@ -964,7 +1007,7 @@ class CheckpointRegistrationTest {
         void a_restart_position_stored_after_a_delivery_started_stops_that_delivery_from_saving_and_the_tick_is_allowed_once_it_ends() {
             // Given a delivery of a run that read before the run that restarts
             registration.reading();
-            Delivery stale = registration.delivering();
+            Delivery stale = registration.delivering(event());
             registration.reading();
             restartPosition("r1", Write.RETURNS);
             boolean whileItWaits = registration.quietTickAllowed();
@@ -989,7 +1032,7 @@ class CheckpointRegistrationTest {
         void a_restart_position_stored_after_a_delivery_saved_and_ended_has_the_tick_allowed_with_the_restart_position_stored() {
             // Given
             registration.reading();
-            Delivery earlier = registration.delivering();
+            Delivery earlier = registration.delivering(event());
             save(earlier, "e5", Write.RETURNS);
             end(earlier, "e5");
             registration.reading();
@@ -1010,7 +1053,7 @@ class CheckpointRegistrationTest {
         void a_delivery_that_saved_before_a_restart_position_was_stored_and_ends_after_it_leaves_the_tick_allowed() {
             // Given
             registration.reading();
-            Delivery stale = registration.delivering();
+            Delivery stale = registration.delivering(event());
             save(stale, "e5", Write.RETURNS);
             registration.reading();
             restartPosition("r1", Write.RETURNS);
@@ -1031,7 +1074,7 @@ class CheckpointRegistrationTest {
         void a_restart_position_that_threw_stops_a_delivery_started_before_it_from_saving_and_the_read_that_finds_it_has_the_quiet_position_saved() {
             // Given
             registration.reading();
-            Delivery stale = registration.delivering();
+            Delivery stale = registration.delivering(event());
             registration.reading();
             restartPosition("r1", Write.WRITES_THEN_THROWS);
             asked.clear();
@@ -1052,11 +1095,11 @@ class CheckpointRegistrationTest {
         void a_delivery_started_on_a_read_made_after_a_restart_position_was_stored_saves_and_is_current() {
             // Given
             registration.reading();
-            Delivery stale = registration.delivering();
+            Delivery stale = registration.delivering(event());
             registration.reading();
             restartPosition("r1", Write.RETURNS);
             registration.reading();
-            Delivery restarted = registration.delivering();
+            Delivery restarted = registration.delivering(event());
 
             // When
             save(restarted, "e6", Write.RETURNS);
@@ -1085,7 +1128,7 @@ class CheckpointRegistrationTest {
             asked.clear();
 
             // When
-            Delivery older = registration.delivering();
+            Delivery older = registration.delivering(event());
             save(older, "e5", Write.RETURNS);
             end(older, "e5");
 
@@ -1103,7 +1146,7 @@ class CheckpointRegistrationTest {
             asked.clear();
 
             // When
-            Delivery older = registration.delivering();
+            Delivery older = registration.delivering(event());
             save(older, "e5", Write.RETURNS);
             end(older, "e5");
 
@@ -1122,7 +1165,7 @@ class CheckpointRegistrationTest {
             asked.clear();
 
             // When
-            Delivery restarted = registration.delivering();
+            Delivery restarted = registration.delivering(event());
             save(restarted, "e6", Write.RETURNS);
             end(restarted, "e6");
 
@@ -1134,7 +1177,7 @@ class CheckpointRegistrationTest {
         @Test
         void with_no_reads_numbered_a_delivery_started_before_a_restart_position_is_stopped_from_saving_and_one_started_after_it_saves() {
             // Given
-            Delivery stale = registration.delivering();
+            Delivery stale = registration.delivering(event());
             restartPosition("r1", Write.RETURNS);
             asked.clear();
 
@@ -1142,7 +1185,7 @@ class CheckpointRegistrationTest {
             save(stale, "e5", Write.RETURNS);
             List<String> askedByStale = new ArrayList<>(asked);
             end(stale, "e5");
-            Delivery restarted = registration.delivering();
+            Delivery restarted = registration.delivering(event());
             save(restarted, "e6", Write.RETURNS);
             end(restarted, "e6");
 
@@ -1306,7 +1349,7 @@ class CheckpointRegistrationTest {
     }
 
     private void deliverStored(String position) {
-        Delivery delivery = registration.delivering();
+        Delivery delivery = registration.delivering(event());
         save(delivery, position, Write.RETURNS);
         end(delivery, position);
     }
@@ -1447,6 +1490,11 @@ class CheckpointRegistrationTest {
             throw new IllegalStateException("The read failed");
         }
         return stored == null ? null : at(stored);
+    }
+
+    // A new instance on each call, since the registration tells events apart by identity
+    private static CloudEvent event() {
+        return CloudEventBuilder.v1().withId("e").withSource(URI.create("urn:occurrent:test")).withType("Created").build();
     }
 
     private static Checkpoint at(String position) {

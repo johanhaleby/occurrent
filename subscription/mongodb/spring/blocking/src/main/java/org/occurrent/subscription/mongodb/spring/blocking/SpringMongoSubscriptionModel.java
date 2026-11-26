@@ -478,13 +478,20 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return subscriptions.subscriptionIds();
     }
 
+    /**
+     * Synchronized as {@link #subscriptionIds()} is, since a pause or a resume moves the subscription between the two
+     * maps in two steps, so an unsynchronized reader between them finds it neither running nor paused.
+     */
     @Override
-    public boolean isRunning(String subscriptionId) {
+    public synchronized boolean isRunning(String subscriptionId) {
         return subscriptions.isRunning(subscriptionId);
     }
 
+    /**
+     * Synchronized for the same reason as {@link #isRunning(String)}.
+     */
     @Override
-    public boolean isPaused(String subscriptionId) {
+    public synchronized boolean isPaused(String subscriptionId) {
         return subscriptions.isPaused(subscriptionId);
     }
 

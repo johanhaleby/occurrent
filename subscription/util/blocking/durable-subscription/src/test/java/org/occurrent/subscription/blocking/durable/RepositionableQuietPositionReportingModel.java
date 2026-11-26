@@ -68,6 +68,16 @@ final class RepositionableQuietPositionReportingModel extends QuietPositionRepor
         paused.add(subscriptionId);
     }
 
+    // Set to answer that nothing runs, as a model does that doesn't synchronize its running and paused reads, or when a
+    // resume that bypasses the durable model comes between the running check and the paused read
+    volatile boolean reportsNothingRunning;
+
+    // A paused subscription is not running, as a MongoDB model reports it
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return !reportsNothingRunning && super.isRunning(subscriptionId) && !paused.contains(subscriptionId);
+    }
+
     @Override
     public boolean isPaused(String subscriptionId) {
         return paused.contains(subscriptionId);

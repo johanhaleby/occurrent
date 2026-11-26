@@ -27,6 +27,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.util.predicate.EveryN;
@@ -704,7 +705,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
-                CheckpointRegistration.Delivery delivery = registration.delivering();
+                CheckpointRegistration.Delivery delivery = registration.delivering(cloudEvent);
                 @Nullable Checkpoint toStore = null;
                 try {
                     // Read before the action runs, so the write uses the token of the lease this event was
@@ -1262,8 +1263,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * doesn't store the checkpoint of its event once it returns, when the resume asked the wrapped model to resume at
      * the stored checkpoint, whatever the wrapped model's {@link RepositionableSubscriptions#restartsAt(Checkpoint)}
      * answers for it. That holds for an action whose event was read before this call when the subscription isn't
-     * paused too, since a pause on another thread can come before the wrapped model resumes. A restart before a later
-     * event stores its checkpoint delivers that event again, and none is skipped. When the resume went on from the wrapped model's own position without a checkpoint, it doesn't
+     * paused at the read of the stored checkpoint too, since a resume that doesn't go through this model, such as the
+     * wrapped model's own start, can come between the check for a running subscription and that read. A restart before
+     * a later event stores its checkpoint delivers that event again, and none is skipped. When the resume went on from
+     * the wrapped model's own position without a checkpoint, it doesn't
      * store it once the resumed subscription has started saving the checkpoint of one of its own events or a quiet
      * position, or has stored the position it restarts from after its history was lost. Neither does a quiet position
      * read before the pause. So the stored checkpoint doesn't move back. A quiet position read after a resume to the
@@ -1274,16 +1277,33 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * yet doesn't save one over a checkpoint another node stored during the pause either, until an event stores its
      * checkpoint.
      * <p>
+     * A subscription the wrapped model reports as running throws {@link SubscriptionAlreadyRunningException} before
+     * anything is read or stored, so the checkpoints of its deliveries are saved as before the call.
+     * <p>
      * A subscribe of the id on another thread whose {@code StartAt.dynamic} function is still being asked is waited
      * for. If that function doesn't return within 10 seconds, this throws {@link IllegalStateException} and changes
      * nothing.
+     *
+     * @throws SubscriptionAlreadyRunningException if the wrapped model reports the subscription as running.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
         // for this id cannot land between the marker check and acting on it.
         waitForAsksOnOtherThreads(subscriptionId);
-        return underLockFor(subscriptionId, () -> resumeFromStoredCheckpoint(subscriptionId));
+        return underLockFor(subscriptionId, () -> {
+            refuseIfRunning(subscriptionId);
+            return resumeFromStoredCheckpoint(subscriptionId);
+        });
+    }
+
+    // Before anything is read or noted on a registration, so a resume of a running subscription changes nothing.
+    // pauseSubscription takes no id lock, so a pause on another thread can come right after the check, and then it
+    // comes after a resume that threw and changed nothing
+    private void refuseIfRunning(String subscriptionId) {
+        if (getWrappedSubscriptionModel().isRunning(subscriptionId)) {
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
+        }
     }
 
     // Callers hold the id lock
@@ -1297,10 +1317,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 StoredBefore before = registration == null ? null : registration.storedBeforeOwnStartUnlessItStoredOne();
                 // Read under the deliveryLocks and saveLocks of every registration of the id, so no save comes between
                 // the read and moving the count, the checkpoint noted as stored is the one the resume goes to, and no
-                // delivery ends before the quiet saves are decided from it. The count moves for a subscription that
-                // isn't paused too, since pauseSubscription takes no id lock and a pause on another thread can come
-                // before the wrapped model resumes. A save read before the count moved is then refused, which delivers
-                // an event again on a restart but skips none
+                // delivery ends before the quiet saves are decided from it. A delivery of the id that starts or ends
+                // meanwhile, such as a handler the pause stopped waiting for, waits for the two storage calls. A running
+                // subscription was refused above, so its deliveries don't. The count moves for a subscription that
+                // isn't paused here too, since a resume that doesn't go through this model, such as the wrapped model's
+                // own start, can come after that check, and a pause on another thread before the wrapped model resumes.
+                // A save read before the count moved is then refused, which delivers an event again on a restart but
+                // skips none
                 boolean paused = getWrappedSubscriptionModel().isPaused(subscriptionId);
                 List<CheckpointRegistration> writing = registrationsWritingFor(subscriptionId);
                 AtomicReference<@Nullable Checkpoint> resumeAt = new AtomicReference<>();
@@ -1315,8 +1338,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                         // this replaces over it, so their saves are refused whatever restartsAt answers. Another
                         // node can have stored the checkpoint while the subscription was paused, so a quiet save
                         // compares with it rather than with what this node stored last. The stored checkpoint covers
-                        // the deliveries read before only when the subscription was paused. The MongoDB models throw
-                        // SubscriptionAlreadyRunningException for one that is running, which then delivers none of
+                        // the deliveries read before only when the subscription was paused. One that runs again by
+                        // now, after a resume that didn't go through this model, gets
+                        // SubscriptionAlreadyRunningException from the MongoDB models, which then deliver none of
                         // them again
                         boolean restartsThere = paused && repositionable.get().restartsAt(checkpoint);
                         writing.forEach(writer -> writer.resumedAtStored(checkpoint, restartsThere));
@@ -1372,13 +1396,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * stored checkpoint is read to find out which one is stored. When that read throws too, every quiet position save
      * reads it before it writes, until a read returns.
      * <p>
-     * A subscription subscribed without checkpointing (see {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}),
-     * or one the wrapped model doesn't report as paused, is passed on to the wrapped model as it is and nothing is
-     * stored. The wrapped model then throws for a subscription it doesn't hold paused.
+     * A subscription the wrapped model reports as running throws {@link SubscriptionAlreadyRunningException}, and
+     * nothing is stored or resumed. Any other subscription subscribed without checkpointing (see
+     * {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}), or one the wrapped model doesn't report as
+     * paused, is passed on to the wrapped model as it is and nothing is stored. The wrapped model then throws for a
+     * subscription it doesn't hold paused.
      * <p>
      * Holds the same lock per subscription id as {@link #resumeSubscription(String)} for the whole call, and waits for a
      * subscribe of the id on another thread as that method does.
      *
+     * @throws SubscriptionAlreadyRunningException if the wrapped model reports the subscription as running.
      * @throws UnsupportedOperationException if the wrapped model is not repositionable, in which case
      *                                       {@link RepositionableSubscriptions#findIn} doesn't find this model either.
      */
@@ -1390,6 +1417,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"));
         waitForAsksOnOtherThreads(subscriptionId);
         return underLockFor(subscriptionId, () -> {
+            refuseIfRunning(subscriptionId);
             if (notCheckpointedSubscriptions.contains(subscriptionId) || !getWrappedSubscriptionModel().isPaused(subscriptionId)) {
                 return repositionable.resumeSubscription(subscriptionId, startAt);
             }
