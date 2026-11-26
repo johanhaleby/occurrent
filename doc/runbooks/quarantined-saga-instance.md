@@ -391,7 +391,7 @@ already and then lost its compare-and-set to another writer, and the exception m
 this delivery of the event, or this poll of the timer, dispatched, so check it before you send any of them by hand. An
 earlier delivery or poll can have dispatched them too.
 
-The quarantined record in step 1 holds at most the message of the delivery that quarantined the instance, so it can
+The quarantined record in step 2 holds at most the message of the delivery that quarantined the instance, so it can
 say that no attempt of that delivery dispatched anything when an earlier delivery did. Before you send a command by
 hand, read the `WARN` lines saying the instance failed on the event as well, from the first one on, since each logs
 the exception of the delivery it was written for. A redelivery the runner logs nothing for hands its exception only to
