@@ -4874,6 +4874,8 @@ nothing, and a live event that arrives meanwhile waits behind the held ones.
 
 There is nothing to change for most applications. A listener that calls `acceptOrDefer(..)` gets `DEFERRED` for a
 little longer after a catch-up and has the broker deliver the event again, as it already does during the replay.
+`isReadyForLiveDelivery(..)` on the model or the feed answers `false` for that time too, so a RabbitMQ or Kafka source
+wired with `readinessSource(..)` stays paused until the catch-up holds nothing.
 A projection that calls `acceptAndWait(..)` on its own feed while it applies an event gets an `IllegalStateException`
 for a held event, as it already did during the replay. Feed that event from another thread instead.
 

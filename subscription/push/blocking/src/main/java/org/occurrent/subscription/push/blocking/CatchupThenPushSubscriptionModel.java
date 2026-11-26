@@ -354,7 +354,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * projection, rather than only being buffered against a replay still in flight or not yet started. Delegates
      * straight to the {@link BlockingHandover} this subscription's catch-up owns. See
      * {@link BlockingHandover#isReadyForLiveDelivery()} for exactly what that answers and why. In short, {@code true}
-     * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
+     * only once the catch-up has reached live, {@code false} while replaying or delivering the events it held, and
      * {@code false} forever after a catch-up failure on a thread that was not interrupted.
      * <p>
      * A CloudEvent-level broker source that feeds the live {@link PushSubscriptionModel} this model wraps through

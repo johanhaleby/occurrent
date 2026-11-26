@@ -205,7 +205,7 @@ public final class DomainEventFeed<E> {
      * consumption on more than just {@link #hasProjection()}. Delegates to the underlying catch-up-then-live
      * handover rather than tracking this separately, so it is {@code true} only once
      * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually reached live,
-     * {@code false} while either is still replaying or buffering ahead of its own drain, and {@code false} forever
+     * {@code false} while either is still replaying or delivering the events it held, and {@code false} forever
      * once either has thrown, since that failure is permanent and a later call reaching live does not clear it. A
      * live event fed through {@link #acceptOrDefer(Object)} or {@link #acceptOrDeferCloudEvent(CloudEvent)} while this
      * answers {@code false} is never buffered. It is refused outright, and
@@ -371,8 +371,8 @@ public final class DomainEventFeed<E> {
      * check and the accept together, under the same lock the underlying handover already holds for that decision, so
      * there is no window between "is it live" and "hand it over" for a concurrent {@link #goLive(String)} to land
      * in. That covers an event fed before {@link #catchUpAll()}/{@link #catchUp(String)} or
-     * {@link #goLive(String)} has been called at all, one fed while a replay is still running and buffering ahead
-     * of its own drain, one fed after {@link #stopCatchUp()} interrupted a replay before the projection went live,
+     * {@link #goLive(String)} has been called at all, one fed while a replay is still running or the catch-up
+     * delivers the events it held, one fed after {@link #stopCatchUp()} interrupted a replay before the projection went live,
      * and one fed while another thread is still folding the same event. Redelivering a
      * {@link RoutingOutcome#DEFERRED} event is always safe. This feed's own de-dup key absorbs a repeat that
      * already landed, and a caller with nowhere else to redeliver from, {@link #goLive(String)} exists precisely
