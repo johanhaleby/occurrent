@@ -389,11 +389,12 @@ class CatchupThenPushSubscriptionModelTest {
 
     /**
      * A full live buffer is also decided before any dispatch was attempted, the payload never reaches the handler,
-     * so it must report {@link RoutingOutcome#NOT_DELIVERABLE} for an observer configured on the write path, the
-     * same as a permanently failed catch-up, not {@link RoutingOutcome#DELIVERED}.
+     * so it must report {@link RoutingOutcome#REFUSED} for an observer configured on the write path, the same as a
+     * permanently failed catch-up, since the overflow fails the catch-up and the handover refuses from then on, not
+     * {@link RoutingOutcome#DELIVERED}.
      */
     @Test
-    void overflowing_the_live_buffer_during_replay_reports_not_deliverable_rather_than_delivered_with_an_observer() {
+    void overflowing_the_live_buffer_during_replay_reports_refused_rather_than_delivered_with_an_observer() {
         List<RoutingOutcome> observed = new ArrayList<>();
         PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
@@ -412,7 +413,7 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed");
         // l1 and l2 buffer normally on the write path, reported DELIVERED same as always, l3 overflows the
         // two-slot buffer and must not be reported DELIVERED for a handler that never ran.
-        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED, RoutingOutcome.DELIVERED, RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED, RoutingOutcome.DELIVERED, RoutingOutcome.REFUSED);
     }
 
     @Test

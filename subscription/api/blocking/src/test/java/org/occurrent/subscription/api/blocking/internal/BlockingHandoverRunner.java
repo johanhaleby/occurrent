@@ -9,7 +9,10 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -22,7 +25,9 @@ final class BlockingHandoverRunner {
     static final List<String> HISTORY = List.of("h1", "h2");
 
     enum Action {
-        CATCH_UP, STEP, CANCEL, STOP, ACCEPT, ACCEPT_REPORTING, ACCEPT_IF_LIVE, ACCEPT_COPY_OF_HISTORY, FAIL_FOLD, FAIL_CALLBACK, INTERRUPT
+        CATCH_UP, STEP, CANCEL, STOP, ACCEPT, ACCEPT_REPORTING, ACCEPT_IF_LIVE, ACCEPT_COPY_OF_HISTORY, FAIL_FOLD, FAIL_CALLBACK, INTERRUPT,
+        /** The next payload a drain delivers parks inside deliver, so a payload offered next is offered while that drain runs. Released when the script ends. */
+        HOLD_DRAIN
     }
 
     record Script(boolean startsLive, List<Action> actions) {
@@ -40,7 +45,7 @@ final class BlockingHandoverRunner {
      * after it in a catch-up that ended after it, up to and including the first of those, in start order, that did
      * not return false. A stopped catch-up leaves the buffer to the next one, but the stop path can drain it too.
      */
-    private record Helper(Thread thread, String payload, String call, AtomicReference<String> answer, AtomicLong offeredAt) {
+    private record Helper(Thread thread, String payload, String call, AtomicReference<String> answer, AtomicLong offeredAt, AtomicLong startedAt) {
     }
 
     private record Replay(ControllableSource source, Thread thread, AtomicReference<String> result) {
@@ -53,12 +58,37 @@ final class BlockingHandoverRunner {
         List<String> markerFindings = new CopyOnWriteArrayList<>();
         AtomicLong clock = new AtomicLong();
         List<ControllableSource> catchUps = new CopyOnWriteArrayList<>();
+        List<String> overlaps = new CopyOnWriteArrayList<>();
+        AtomicInteger catchUpsDelivering = new AtomicInteger();
+        AtomicBoolean holdNextDrainDelivery = new AtomicBoolean();
+        Semaphore drainHold = new Semaphore(0);
         BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
-            if (failNextFold.getAndSet(false)) {
-                catchUps.stream().filter(source -> source.catchUpThread == Thread.currentThread()).forEach(ControllableSource::failureFired);
-                throw new IllegalStateException("fold failed for " + payload);
+            boolean ofACatchUp = catchUps.stream().anyMatch(source -> source.catchUpThread == Thread.currentThread());
+            if (ofACatchUp && !HISTORY.contains(payload) && holdNextDrainDelivery.compareAndSet(true, false)) {
+                catchUps.stream().filter(source -> source.catchUpThread == Thread.currentThread()).forEach(source -> source.toScheduler.release());
+                try {
+                    drainHold.tryAcquire(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
-            delivered.add(payload);
+            if (ofACatchUp && catchUpsDelivering.incrementAndGet() > 1) {
+                overlaps.add("two catch-ups were delivering at once, the second delivering " + payload);
+            }
+            try {
+                if (failNextFold.getAndSet(false)) {
+                    catchUps.stream().filter(source -> source.catchUpThread == Thread.currentThread()).forEach(ControllableSource::failureFired);
+                    throw new IllegalStateException("fold failed for " + payload);
+                }
+                delivered.add(payload);
+                if (ofACatchUp) {
+                    Thread.yield();
+                }
+            } finally {
+                if (ofACatchUp) {
+                    catchUpsDelivering.decrementAndGet();
+                }
+            }
         }, payload -> payload, CatchupThenLiveOptions.defaults(), "thing");
         if (script.startsLive()) {
             ControllableSource alreadyCaughtUp = new ControllableSource(List.of(), new AtomicBoolean(true), clock);
@@ -108,6 +138,7 @@ final class BlockingHandoverRunner {
                     }
                 }
                 case FAIL_FOLD -> failNextFold.set(true);
+                case HOLD_DRAIN -> holdNextDrainDelivery.set(true);
                 case FAIL_CALLBACK -> {
                     failCallback = true;
                     replays.forEach(replay -> replay.source().failCallback = true);
@@ -123,21 +154,25 @@ final class BlockingHandoverRunner {
                     String call = action == Action.ACCEPT_REPORTING ? "acceptReportingDelivery" : action == Action.ACCEPT_IF_LIVE ? "acceptIfLive" : "accept";
                     AtomicReference<String> answer = new AtomicReference<>();
                     AtomicLong offeredAt = new AtomicLong(Long.MAX_VALUE);
+                    AtomicLong startedAt = new AtomicLong(Long.MAX_VALUE);
+                    startedAt.set(clock.incrementAndGet());
                     Thread thread = Thread.ofPlatform().name("handover-accept-" + payload).unstarted(() -> {
                         answer.set(offer(handover, call, payload));
                         offeredAt.set(clock.incrementAndGet());
                     });
-                    helpers.add(new Helper(thread, payload, call, answer, offeredAt));
+                    helpers.add(new Helper(thread, payload, call, answer, offeredAt, startedAt));
                     thread.start();
                     settle(thread);
                 }
             }
         }
         List<String> replayed = new ArrayList<>();
+        drainHold.release(1_000);
         finish(replays, helpers, handover, marker, notes, markerFindings, replayed, clock, catchUps);
-        List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get(), failureFiredAfter(helper.offeredAt().get(), catchUps))).toList();
+        List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get(), failureFiredAfter(helper.offeredAt().get(), catchUps), helper.startedAt().get())).toList();
         List<CatchUp> started = replays.stream().map(replay -> new CatchUp(String.valueOf(replay.result().get()), replay.source().cancelledBeforeItReturned)).toList();
-        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed, started);
+        List<Long> drainStarts = catchUps.stream().flatMap(source -> source.drainStartedAt.stream()).toList();
+        return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed, started, drainStarts, List.copyOf(overlaps));
     }
 
     /** A catch-up that throws is expected only when an injected failure fired in its own replay or drain */

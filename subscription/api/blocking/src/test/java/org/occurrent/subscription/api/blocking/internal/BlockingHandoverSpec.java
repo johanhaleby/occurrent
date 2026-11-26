@@ -16,14 +16,25 @@ final class BlockingHandoverSpec {
      * and including the first of those that did not return false. It is the only failure that can explain a reported
      * payload being lost.
      */
-    record Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp) {
+    record Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp, long startedAt) {
+        Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp) {
+            this(payload, call, answer, failureFiredAfterInItsCatchUp, Long.MAX_VALUE);
+        }
     }
 
     /** What a catch-up the script started returned, and whether the script cancelled it before it returned */
     record CatchUp(String result, boolean cancelledBeforeItReturned) {
     }
 
-    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed, List<CatchUp> catchUps) {
+    /**
+     * drainStarts is when each drain began, on the run's clock, taken when the source was told the history is done,
+     * which is after the drain has been claimed. overlaps names every moment two catch-ups were delivering at once.
+     */
+    record Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed, List<CatchUp> catchUps,
+                 List<Long> drainStarts, List<String> overlaps) {
+        Trace(List<String> history, List<String> delivered, List<Offer> offers, List<String> markerFindings, List<String> notes, List<String> replayed, List<CatchUp> catchUps) {
+            this(history, delivered, offers, markerFindings, notes, replayed, catchUps, List.of(), List.of());
+        }
     }
 
     private BlockingHandoverSpec() {
@@ -40,6 +51,28 @@ final class BlockingHandoverSpec {
                 .filter(catchUp -> catchUp.cancelledBeforeItReturned() && catchUp.result().equals("true"))
                 .map(catchUp -> "a catch-up that was cancelled before it returned returned true")
                 .toList();
+    }
+
+    /**
+     * A payload offered after a drain started reaches deliver after every payload offered before it started, and no
+     * two drains deliver at once. Only payloads that were delivered count, since a refused one is the caller's to offer again.
+     */
+    static List<String> orderViolations(Trace trace) {
+        List<String> violations = new ArrayList<>(trace.overlaps());
+        for (long drainStart : trace.drainStarts()) {
+            for (Offer before : trace.offers()) {
+                for (Offer after : trace.offers()) {
+                    int beforeAt = trace.delivered().indexOf(before.payload());
+                    int afterAt = trace.delivered().indexOf(after.payload());
+                    if (before.startedAt() < drainStart && drainStart < after.startedAt() && beforeAt >= 0 && afterAt >= 0 && afterAt < beforeAt
+                            && !trace.history().contains(before.payload()) && !trace.history().contains(after.payload())) {
+                        violations.add(after.payload() + " was offered after a drain started and reached deliver before " + before.payload()
+                                + ", which was offered before it, in " + trace.delivered());
+                    }
+                }
+            }
+        }
+        return violations;
     }
 
     /**
