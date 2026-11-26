@@ -522,8 +522,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * It runs alone against the {@link #start(boolean)}, {@link #stop()} and {@code shutdown()} calls of this model, so
      * none of them takes effect between the moment it finds the model stopped or running and the moment it starts the
      * model or the live delegate resumes the subscription. It reads the positions stored for the subscription before
-     * that, without the model lock, and reads them again when a stop or a write of the subscription's position came in
-     * between, so a checkpoint storage that doesn't answer holds up this resume alone. It waits with no deadline for one
+     * that, without the model lock unless the calling thread holds it, such as in code a start runs, and reads them
+     * again when a stop, or a write of the subscription's position by this model, came in between, so a checkpoint
+     * storage that doesn't answer holds up this resume alone. A write by another node, or by another model instance
+     * over the same storage, isn't seen, and the resume goes on from what it read. It waits with no deadline for one
      * of them under way, and one of them made while it runs waits for it the same way. It also waits with no deadline for the calls that actions
      * handed over before it, so a resume made after an action's {@code stop()} takes effect after that stop. When it
      * waited for such calls and a {@code shutdown()} began meanwhile, it changes nothing, and the
@@ -549,9 +551,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * described above, after every call the action handed over before it. So {@code stop()} and then
      * {@code resumeSubscription(id)} from one action leave the model running and the subscription resumed. A
      * {@link #pauseSubscription(String)}, {@link #resumeSubscription(String, StartAt)}, {@link #cancelSubscription(String)}
-     * or subscribe the action makes afterwards takes effect after it too. The handle it
-     * returns starts once the lifecycle thread has resumed the subscription, so waiting for it inside the action doesn't
-     * see it start. Its {@code waitUntilStarted} answers {@code false} when a {@code shutdown()} has begun by then, and
+     * or subscribe the action makes afterwards takes effect after it too, unless the resume has entered its turn and
+     * not finished within ten seconds, such as when it reads again from a checkpoint storage that doesn't answer. The
+     * lifecycle thread then goes on with those calls, and the resume takes effect once it finishes. The handle it
+     * returns starts once the lifecycle thread has resumed the subscription, so don't wait for it inside the action. A
+     * wait there never sees it start, since the resume runs only once the action has returned. Its
+     * {@code waitUntilStarted} answers {@code false} when a {@code shutdown()} has begun by then, and
      * throws what the resume threw there, which is also logged at {@code ERROR}. In 0.34.0 the resume ran on the
      * action's thread before the action returned.
      */
@@ -568,8 +573,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // shutdown completes between the reads of stopped below and the start or the live delegate's resume they decide.
     // Reads no storage, see AbstractCatchupSubscriptionModel.ResumeRead
     private Subscription resumeAlone(String subscriptionId, AbstractCatchupSubscriptionModel.ResumeRead read) {
+        return resumeAlone(subscriptionId, read, true);
+    }
+
+    // With mayStart false a stopped child stays stopped, so a replay this starts parks itself
+    private Subscription resumeAlone(String subscriptionId, AbstractCatchupSubscriptionModel.ResumeRead read, boolean mayStart) {
         // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims
-        boolean started = presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId);
+        boolean started = mayStart && presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId);
         if (started) {
             start(false);
         }

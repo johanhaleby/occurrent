@@ -150,6 +150,14 @@ import static java.util.Objects.requireNonNull;
  * removal succeeds, or at the latest once the lease has expired.
  * <br>
  * <br>
+ * A {@code stop()} made from the action of a catch-up replay keeps that subscription's lease on this node until the
+ * catch-up has applied the pause {@code stop()} asked for there, so no other node delivers the subscription while
+ * this node is still in the action. That has no time limit of its own, and lasts at least while the action runs. Each
+ * try that finds the pause not yet applied tries again after a backoff that starts at 100 milliseconds and doubles up
+ * to 2 seconds, and a {@code WARN} is logged every fifth failed try. The first try that finds the pause applied gives
+ * the lease up.
+ * <br>
+ * <br>
  * While this model is started, a competing subscription that is neither cancelled nor paused by the user is registered
  * with the lease strategy, and runs in the wrapped model only while this node holds its lease. A call to the lease
  * strategy or the wrapped model that throws delays that, and never needs a call from the user to recover. The
@@ -1635,9 +1643,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             if (cc.isRunning() && isRunningInTheWrappedModel(subscriptionId)) {
                 pauseInTheWrappedModel(subscriptionId);
-                // A catch-up model whose replay still runs for the subscription reads as running and paused, since it
-                // holds the subscription paused once the replay hands over or parks. A stop() called from the replay's
-                // action parks it once the action has returned.
+                // A wrapped model that took the pause and hasn't applied it yet reads as running and paused, as a
+                // catch-up model does while a replay runs for the subscription, since it holds the subscription paused
+                // once the replay hands over or parks. One whose action handed a call over before reads as running and
+                // not paused until the pause handed over after that call has run
                 if (isRunningInTheWrappedModel(subscriptionId) && !isPausedInTheWrappedModel(subscriptionId)) {
                     throw new IllegalStateException("Subscription " + subscriptionId + " still runs in the wrapped subscription model after it was paused there, so this node keeps its lease");
                 }

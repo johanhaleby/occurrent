@@ -218,6 +218,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // is kept for an id that is gone
     private final AtomicLong storageWrites = new AtomicLong();
     private final ConcurrentMap<String, Long> lastStorageWriteOf = new ConcurrentHashMap<>();
+    // Whether this model answers PreparedResumeSubscriptions, see capability
+    private final boolean splitsItsResume = splitsItsResume(getClass());
 
     // The subscribes that ask their function before they take the lock for their id, kept until they hold it
     private final Set<Asked> asking = ConcurrentHashMap.newKeySet();
@@ -989,8 +991,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     /**
      * Resume a paused subscription where {@link #resumeSubscription(String)} would have, from what {@link #prepareResume(String)}
-     * read, without reading storage. Empty when this model wrote or deleted the id's checkpoint since the read began,
-     * when the id was subscribed or cancelled since, or when another call holds this model's lock for the id.
+     * read, without reading storage. Empty when a write or delete of the id's checkpoint by this model has returned
+     * since the read began, when the id was subscribed or cancelled since, or when another call holds this model's lock
+     * for the id. A write still under way for an event delivered before the pause isn't seen, as
+     * {@link #resumeSubscription(String)} wouldn't see it either.
      */
     @Override
     public Optional<Subscription> resumeAsPrepared(String subscriptionId, PreparedResume prepared) {
@@ -1338,14 +1342,33 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     /**
      * Answers {@link RepositionableSubscriptions} and {@link RedeliveringSubscriptions} only when the wrapped model has
      * it, since {@link #resumeSubscription(String, StartAt)} resumes the subscription there, and an event is delivered
-     * again only when the wrapped model delivers it again. Answers every other capability as any model does.
+     * again only when the wrapped model delivers it again. Doesn't answer {@link PreparedResumeSubscriptions} when a
+     * subclass overrides {@link #resumeSubscription(String)} in a class below the one that declares the
+     * {@link #resumeAsPrepared(String, PreparedResume)} it inherits, so a model that wraps this model, such as a catch-up
+     * subscription model, calls that {@code resumeSubscription(String)} override as it did in 0.34.0. Answers every
+     * other capability as any model does.
      */
     @Override
     public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
         if ((type == RepositionableSubscriptions.class || type == RedeliveringSubscriptions.class) && !subscriptionModel.hasCapability(type)) {
             return Optional.empty();
         }
+        if (type == PreparedResumeSubscriptions.class && !splitsItsResume) {
+            return Optional.empty();
+        }
         return CheckpointAwareSubscriptionModel.super.capability(type);
+    }
+
+    // False for a subclass whose resumeSubscription(String) override a resume from what was prepared would go around,
+    // one declared below the class that declares the resumeAsPrepared it inherits
+    private static boolean splitsItsResume(Class<?> type) {
+        try {
+            Class<?> resumeDeclaredIn = type.getMethod("resumeSubscription", String.class).getDeclaringClass();
+            Class<?> preparedResumeDeclaredIn = type.getMethod("resumeAsPrepared", String.class, PreparedResume.class).getDeclaringClass();
+            return resumeDeclaredIn.isAssignableFrom(preparedResumeDeclaredIn);
+        } catch (NoSuchMethodException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Override

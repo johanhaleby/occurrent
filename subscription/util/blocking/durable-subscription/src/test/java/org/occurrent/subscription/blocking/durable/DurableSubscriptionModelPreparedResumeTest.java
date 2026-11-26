@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -43,7 +44,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -164,9 +167,94 @@ class DurableSubscriptionModelPreparedResumeTest {
         return new CheckpointAwareCloudEvent(event, new StringBasedCheckpoint(checkpoint));
     }
 
+    @Test
+    void a_resume_as_prepared_is_empty_when_the_subscription_was_resumed_at_a_position_since_the_preparation() {
+        // Given a resume prepared for an id this model has no registration for
+        PreparedResume prepared = model.prepareResume(ID);
+
+        // When the subscription is resumed at a position, which stores it
+        model.resumeSubscription(ID, StartAt.checkpoint(new StringBasedCheckpoint("repositioned")));
+
+        // Then the resume as prepared is refused, so the caller prepares again
+        assertThat(resumedAsPrepared(prepared)).as("the answer of the resume as prepared made after a resume at a position stored").isEqualTo(Optional.empty());
+    }
+
+    @Test
+    void a_resume_as_prepared_is_empty_when_the_put_back_of_a_failed_resume_at_a_position_wrote_the_checkpoint_after_the_preparation() {
+        // Given a checkpoint stored, a delegate whose resume at a position fails, and a resume prepared while the put-back of the stored checkpoint is being written
+        storage.save(ID, STORED);
+        delegate.failRepositioning = new IllegalStateException("the resume at a position failed on purpose");
+        AtomicReference<PreparedResume> preparedDuringThePutBack = new AtomicReference<>();
+        storage.saves.set(0);
+        storage.beforeSave = savesBefore -> {
+            if (savesBefore == 1) {
+                preparedDuringThePutBack.set(model.prepareResume(ID));
+            }
+        };
+
+        // When the resume at a position fails and puts back what was stored
+        assertThatThrownBy(() -> model.resumeSubscription(ID, StartAt.checkpoint(new StringBasedCheckpoint("repositioned")))).as("what the resume at a position threw").isSameAs(delegate.failRepositioning);
+
+        // Then the resume as prepared is refused, since the put-back wrote after the preparation
+        assertThat(preparedDuringThePutBack.get()).as("whether a resume was prepared during the put-back").isNotNull();
+        assertThat(resumedAsPrepared(preparedDuringThePutBack.get())).as("the answer of the resume as prepared made after the put-back").isEqualTo(Optional.empty());
+    }
+
+    @Test
+    void a_resume_as_prepared_is_empty_when_the_checkpoint_of_the_subscription_was_deleted_since_the_preparation() {
+        // Given a position stored by a resume at a position, which this model has no registration for, and a resume prepared after that
+        model.resumeSubscription(ID, StartAt.checkpoint(new StringBasedCheckpoint("repositioned")));
+        PreparedResume prepared = model.prepareResume(ID);
+
+        // When the subscription is cancelled, which deletes its checkpoint
+        model.cancelSubscription(ID);
+
+        // Then the resume as prepared is refused, so the caller prepares again
+        assertThat(resumedAsPrepared(prepared)).as("the answer of the resume as prepared made after the checkpoint was deleted").isEqualTo(Optional.empty());
+    }
+
+    @Test
+    void a_resume_as_prepared_is_empty_when_the_first_position_of_a_subscribe_was_written_after_the_preparation() {
+        // Given a delegate that can record a first position, and a resume prepared while the first position is being written
+        delegate.global = new StringBasedCheckpoint("global");
+        AtomicReference<PreparedResume> preparedWhileTheFirstPositionIsWritten = new AtomicReference<>();
+        storage.beforeSave = savesBefore -> preparedWhileTheFirstPositionIsWritten.compareAndSet(null, model.prepareResume(ID));
+
+        // When the subscription is subscribed
+        model.subscribe(ID, null, StartAt.subscriptionModelDefault(), event -> {
+        });
+
+        // Then the resume as prepared is refused, since the first position was written after the preparation
+        assertThat(preparedWhileTheFirstPositionIsWritten.get()).as("whether a resume was prepared while the first position was written").isNotNull();
+        assertThat(resumedAsPrepared(preparedWhileTheFirstPositionIsWritten.get())).as("the answer of the resume as prepared made after the first position was written").isEqualTo(Optional.empty());
+    }
+
+    // The answer, or what the resume as prepared threw, so a resume that wasn't refused fails on the assertion
+    private Object resumedAsPrepared(PreparedResume prepared) {
+        try {
+            return model.resumeAsPrepared(ID, prepared);
+        } catch (Throwable e) {
+            return e;
+        }
+    }
+
     // A storage that counts the reads and can hold the next one
     private static final class CountingStorage extends InMemoryCheckpointStorage {
         final AtomicInteger reads = new AtomicInteger();
+        final AtomicInteger saves = new AtomicInteger();
+        // Told how many saves came before this one, before it is made
+        volatile @Nullable IntConsumer beforeSave;
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            IntConsumer before = beforeSave;
+            int savesBefore = saves.getAndIncrement();
+            if (before != null) {
+                before.accept(savesBefore);
+            }
+            return super.save(subscriptionId, checkpoint, condition);
+        }
+
         private volatile @Nullable CountDownLatch entered;
         private volatile @Nullable CountDownLatch release;
 
@@ -197,6 +285,8 @@ class DurableSubscriptionModelPreparedResumeTest {
     private static final class RepositionableDelegate implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
         final AtomicInteger plainResumes = new AtomicInteger();
         volatile @Nullable StartAt repositionedTo;
+        volatile @Nullable RuntimeException failRepositioning;
+        volatile @Nullable Checkpoint global;
         private volatile @Nullable Consumer<CloudEvent> action;
 
         void deliver(CloudEvent event) {
@@ -214,8 +304,17 @@ class DurableSubscriptionModelPreparedResumeTest {
         }
 
         @Override
+        public boolean restartsAt(Checkpoint checkpoint) {
+            return true;
+        }
+
+        @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
             repositionedTo = startAt;
+            RuntimeException failure = failRepositioning;
+            if (failure != null) {
+                throw failure;
+            }
             return subscription(subscriptionId);
         }
 
@@ -227,7 +326,7 @@ class DurableSubscriptionModelPreparedResumeTest {
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
-            return null;
+            return global;
         }
 
         @Override

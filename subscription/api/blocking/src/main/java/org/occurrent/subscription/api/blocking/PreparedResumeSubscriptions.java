@@ -25,9 +25,10 @@ import java.util.Optional;
 /**
  * A subscription model whose resume reads storage, and which can do that reading apart from the resume.
  * {@link #prepareResume(String)} does the reading, and {@link #resumeAsPrepared(String, PreparedResume)} resumes from what
- * was read without reading anything. A model that wraps such a model, such as a catch-up subscription model, prepares
- * outside its own locks and resumes under them, so a storage that is slow to answer, or never answers, holds up only the
- * subscription it reads for.
+ * was read without reading anything. A model that wraps such a model, such as a catch-up subscription model, can
+ * prepare outside its own locks and resume under them, so a storage that is slow to answer, or never answers, holds up
+ * only the subscription it reads for. A catch-up subscription model prepares under its lock when the resume is made on
+ * a thread that already holds it, such as from code a start runs.
  * <p>
  * Not every subscription model implements this, so reach it with {@link #findIn(SubscriptionModelCapability)}.
  */
@@ -45,10 +46,14 @@ public interface PreparedResumeSubscriptions extends SubscriptionModelCapability
     PreparedResume prepareResume(String subscriptionId);
 
     /**
-     * Resume a paused subscription as {@code prepared} says, without reading storage. If what the preparation read has
-     * changed since, or a call that can change it is under way for this subscription, nothing is resumed and the result
-     * is empty, and the caller prepares again. Otherwise this resumes the subscription where
-     * {@link SubscriptionModelLifeCycle#resumeSubscription(String)} would have.
+     * Resume a paused subscription as {@code prepared} says, without reading storage, where
+     * {@link SubscriptionModelLifeCycle#resumeSubscription(String)} would have resumed it when the preparation read. If
+     * a change by this model to what the preparation read has returned since, or a call for this subscription that can
+     * change it is under way on this model, nothing is resumed, the result is empty, and the caller prepares again. A
+     * change made since by another node, or by another model instance over the same storage, isn't seen, so the
+     * subscription resumes from what was read. Neither is a write this model still makes for an event it delivered
+     * before the subscription was paused, as {@link SubscriptionModelLifeCycle#resumeSubscription(String)} wouldn't see
+     * one either.
      *
      * @param subscriptionId The id of the subscription to resume.
      * @param prepared       What {@link #prepareResume(String)} returned for {@code subscriptionId} on this model.

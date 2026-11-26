@@ -432,6 +432,7 @@ class CatchupSubscriptionModelStopAndStartTest {
         GatedHistory history = history();
         SubscriptionModel model = modelOver.apply(live, history);
         AtomicReference<Thread> failingStart = new AtomicReference<>();
+        CountDownLatch resumeReturned = new CountDownLatch(1);
         CountDownLatch delivering = new CountDownLatch(1);
         assertThat(model.subscribe("a", StartAtTime.beginningOfTime(), e -> {
             if (e.getId().equals("3")) {
@@ -440,7 +441,7 @@ class CatchupSubscriptionModelStopAndStartTest {
                 model.stop();
             }
         }).waitUntilStarted(STARTED_WITHIN)).as("a handed over").isTrue();
-        Runnable startTheReplayOfC = resumeFromTheReplayOfCWhenItHasReadTheHistory(model, "a", new AtomicReference<>(), new CountDownLatch(1));
+        Runnable startTheReplayOfC = resumeFromTheReplayOfCWhenItHasReadTheHistory(model, "a", new AtomicReference<>(), resumeReturned);
         model.stop();
         live.publish(cloudEvent("3"));
         live.isRunningTakesTheMonitor = true;
@@ -460,6 +461,7 @@ class CatchupSubscriptionModelStopAndStartTest {
 
         failing.join(STARTED_WITHIN.toMillis());
         assertThat(failing.isAlive()).as("failing start still waiting").isFalse();
+        assertThat(resumeReturned.await(STARTED_WITHIN.toMillis(), TimeUnit.MILLISECONDS)).as("whether the resume from the listener returned").isTrue();
     }
 
     @ParameterizedTest

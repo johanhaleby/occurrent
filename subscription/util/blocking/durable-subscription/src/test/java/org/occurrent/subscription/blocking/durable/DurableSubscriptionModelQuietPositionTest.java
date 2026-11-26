@@ -82,6 +82,28 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_resume_as_prepared_is_empty_when_a_quiet_position_was_saved_since_the_preparation() throws InterruptedException {
+        // Given a subscription whose quiet position is saved after an interval, and a resume prepared for it
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
+        subscribeFromTheStoredStart(model, storage, __ -> {
+        });
+        org.occurrent.subscription.api.blocking.PreparedResumeSubscriptions.PreparedResume prepared = model.prepareResume("id");
+
+        // When the quiet position is saved
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        assertThat(wrapped.readNothing("id", QUIET)).as("wanted the quiet position after the interval").isTrue();
+
+        // Then the resume as prepared is refused, so the caller prepares again
+        Object answer;
+        try {
+            answer = model.resumeAsPrepared("id", prepared);
+        } catch (Throwable e) {
+            answer = e;
+        }
+        assertThat(answer).as("the answer of the resume as prepared made after the quiet position was saved").isEqualTo(java.util.Optional.empty());
+    }
+
+    @Test
     void the_quiet_position_is_saved_at_most_once_per_interval() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));

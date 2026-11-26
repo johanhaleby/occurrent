@@ -118,6 +118,23 @@ class CatchupSubscriptionModelHandedCallsOfAnActionTest {
     }
 
     @Test
+    @Timeout(60)
+    void a_resume_of_the_subscription_whose_action_handed_a_call_over_waits_for_that_action_and_gives_up_with_nothing_changed() throws Exception {
+        // Given the action of a has handed a resume of a over and blocks
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        assertThat(aHandedACallOver.await(5, TimeUnit.SECONDS)).as("whether the action of a handed its resume over").isTrue();
+
+        // When the test thread resumes a while that action still runs
+        CompletableFuture<Subscription> resumeWhileABlocks = CompletableFuture.supplyAsync(() -> model.resumeSubscription("A"));
+
+        // Then the resume waits for the action, since the call it handed over concerns a, and gives up with nothing changed
+        assertThat(resumeWhileABlocks).as("the resume of a made while the action of a that handed a call over blocks")
+                .failsWithin(A_CALL_THAT_GIVES_UP)
+                .withThrowableOfType(ExecutionException.class)
+                .havingCause().isInstanceOf(IllegalStateException.class).withMessageContaining("Nothing was changed.");
+    }
+
+    @Test
     @Timeout(90)
     void a_stop_from_another_thread_while_an_action_that_handed_a_call_over_blocks_gives_up_and_changes_nothing_and_a_stop_after_the_action_returned_runs() throws Exception {
         // Given the action of a has handed a resume over and blocks
