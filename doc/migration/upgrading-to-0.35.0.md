@@ -4883,7 +4883,8 @@ A blocking `CatchupThenPushSubscriptionModel` over an event store that pushes it
 event store, holds up to `maxBufferedEvents` live events while it replays, 100,000 by default. In 0.34.0 an event
 written once that buffer was full was refused to the writer, the catch-up went on and wrote its marker, and the
 subscription never got the event. The catch-up now fails instead, writes no marker, and the subscription refuses every
-later event.
+later event. A `PushObserver` is told `REFUSED` for the event that found the buffer full, where 0.34.0 told it
+`NOT_DELIVERABLE`.
 
 There is no code to change. A subscription that fails this way stays failed until you cancel it and subscribe again,
 and that replay delivers the event from the store. A history too large to replay while the writers fill the buffer
