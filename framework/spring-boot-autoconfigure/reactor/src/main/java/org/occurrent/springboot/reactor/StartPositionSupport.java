@@ -303,15 +303,20 @@ class StartPositionSupport {
     // A first start at NOW, or at DEFAULT with nothing stored, goes straight to live, so it begins at the start
     // boundary instead of wherever the feed has reached when the model subscribes (issue 979). NOW under
     // SAME_AS_START_AT starts at the boundary on every start. Every other one pins the boundary as the first
-    // checkpoint and starts at the model default, which resumes from it. Without a boundary the start is the one it
-    // was before.
+    // checkpoint and starts at the checkpoint the pin settled. A later read of storage could find the checkpoint of
+    // another node that delivers from a later position, and starting there would skip the events in between. The
+    // model default resumes when the pin kept a stored checkpoint it can't order. Without a boundary the start is the
+    // one it was before.
     private StartAt liveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
         @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
         if (boundary != null) {
             if (now && resumeBehavior == ResumeBehavior.SAME_AS_START_AT) {
                 return StartAt.checkpoint(boundary);
             }
-            pinAsFirstCheckpoint(subscriptionId, boundary);
+            @Nullable Checkpoint settled = pinAsFirstCheckpoint(subscriptionId, boundary);
+            if (settled != null) {
+                return StartAt.checkpoint(settled);
+            }
         }
         return now ? nowThenResume(resumeBehavior) : StartAt.subscriptionModelDefault();
     }
@@ -322,7 +327,10 @@ class StartPositionSupport {
             if (now && resumeBehavior == ResumeBehavior.SAME_AS_START_AT) {
                 return DcbStartAt.checkpoint(boundary.asString());
             }
-            pinAsFirstCheckpoint(subscriptionId, boundary);
+            @Nullable Checkpoint settled = pinAsFirstCheckpoint(subscriptionId, boundary);
+            if (settled != null) {
+                return DcbStartAt.checkpoint(settled.asString());
+            }
         }
         return now ? dcbNowThenResume(resumeBehavior) : DcbStartAt.subscriptionModelDefault();
     }
@@ -351,18 +359,18 @@ class StartPositionSupport {
     }
 
     // Pinned whether or not something is stored, since another node may have pinned its own later boundary, and
-    // StartPositionPin settles that race by order. Every start that pins starts at the model default, which resumes
-    // from whatever governs.
-    private void pinAsFirstCheckpoint(String subscriptionId, Checkpoint boundary) {
+    // StartPositionPin settles that race by order. Null when there is no storage to pin in, and when the pin kept a
+    // stored checkpoint it can't order against the boundary.
+    private @Nullable Checkpoint pinAsFirstCheckpoint(String subscriptionId, Checkpoint boundary) {
         @Nullable CheckpointStorage checkpointStorage = applicationContext.getBeanProvider(CheckpointStorage.class).getIfUnique();
         if (checkpointStorage == null) {
-            return;
+            return null;
         }
         boolean checkpointAlreadyExisted = checkpointStorage.read(subscriptionId).blockOptional().isPresent();
         if (!checkpointAlreadyExisted && !checkpointStorage.evaluatesWriteConditionsFor(subscriptionId) && !startWhenFirstPositionCanBeOverwritten()) {
             throw firstPositionCanBeOverwritten(checkpointStorage, subscriptionId);
         }
-        StartPositionPin.pin(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary).block();
+        return StartPositionPin.pin(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary).block();
     }
 
     // Refused before the pin writes anything, where the first checkpoint could only be written unconditionally. The
