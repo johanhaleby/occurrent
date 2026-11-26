@@ -960,6 +960,8 @@ public final class BlockingHandover<T, K> {
                 // No drain, no going live, and no marker. Recording completion here is the one thing that would make
                 // the next start skip a history it never finished folding.
                 abandonReplayWithoutMasking(source);
+                // Closed here, so a failure of the drain below does not tell the view a second time.
+                replayOpen = false;
                 boolean goLive;
                 synchronized (lock) {
                     replayRunning = false;
