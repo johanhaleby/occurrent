@@ -238,8 +238,13 @@ turn it reads again and resumes the subscription without starting the model agai
 once, as the replay the turn would have started was parked by that `stopReplay()`. It parks also after a
 `resumeReplay()` or `start(false)` that came since, and runs once a `start(true)` or a `resumeSubscription(X)` runs
 it again. A pause, a cancel or a new subscribe of X after the turn takes the resume of X off, and it changes nothing
-then. A pause of X while that resume is still owed returns, as a pause made once the resume had run would, and after
-a `stop()` since the turn it throws `SubscriptionNotRunningException`, as a pause of X in a stopped model does. Each of those resumes runs on a thread of its own, at the same time as the others, so a checkpoint storage that never answers for X holds up the
+then. A pause or a cancel of X made on the resuming thread, from a `StartAt.dynamic(..)` function or a
+`CatchupListener` the resume calls, keeps the resume from resuming X too, since the resume asks again after each of
+them, before it resumes X. A pause or a cancel of X that throws changed nothing, so the resume stays owed. A pause of X while that resume is still owed
+returns, as a pause made once the resume had run would, and after a `stop()` since the turn it throws
+`SubscriptionNotRunningException`, as a pause of X in a stopped model does. A `resumeSubscription(X)` while that
+resume is still owed throws `SubscriptionAlreadyRunningException` and changes nothing, as a resume of a running X
+does, and after a `stop()` since the turn it resumes X. Each of those resumes runs on a thread of its own, at the same time as the others, so a checkpoint storage that never answers for X holds up the
 resume of X and no other. A resume whose read didn't come in time waits for that read and resumes from it. It reads
 again when that read failed, or when its subscription's registration or stored position changed after the read
 began. So the `start(true)` returns only once those resumes have returned or thrown, but it holds the lock for none

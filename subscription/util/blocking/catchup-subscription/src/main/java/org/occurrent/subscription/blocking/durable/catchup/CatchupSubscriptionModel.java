@@ -541,6 +541,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@code @PreDestroy} of this model or of a model wrapping it, and nothing calls it again. While that code never
      * returns, the wrapped model goes on running.
      * <p>
+     * A paused subscription that a {@code start(true)} still has to resume, because the start's read of its stored
+     * position hadn't answered by the end of the start's turn, counts as resumed by that start, as
+     * {@link #pauseSubscription(String)} describes. Resuming it throws {@link SubscriptionAlreadyRunningException} and
+     * changes nothing, and the start then resumes it. After a {@link #stop()} that began since that start's turn, it is
+     * resumed as any other paused subscription is.
+     * <p>
      * On a thread that runs a replay of this model outside the action, such as in a {@link CatchupListener}, or that is
      * in the middle of a call for one of its subscriptions, it neither waits nor runs alone, so it takes effect before
      * the calls actions handed over, and a {@link #stop()} from another thread can take effect while it runs. When the
@@ -575,6 +581,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // shutdown completes between the reads of stopped below and the start or the live delegate's resume they decide.
     // Reads no storage, see AbstractCatchupSubscriptionModel.ResumeRead
     private @Nullable Subscription resumeAlone(String subscriptionId, AbstractCatchupSubscriptionModel.ResumeRead read) {
+        anyCatchupModel().refuseWhileAStartOwesTheResume(subscriptionId);
         return resumeAlone(subscriptionId, read, true, null);
     }
 
@@ -612,7 +619,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 if (parks.test(parkedIn)) {
                     return null;
                 }
-                Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
+                Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId, owed);
                 if (relaunched != null) {
                     return relaunched;
                 }
@@ -623,9 +630,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
             try (AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().lockHandover(subscriptionId)) {
                 presentCatchupModels().forEach(model -> model.pauseRequestedDuringCatchup.remove(subscriptionId));
                 for (AbstractCatchupSubscriptionModel model : presentCatchupModels().toList()) {
-                    Subscription replaying = model.replayToResume(subscriptionId, whatChanged, read, parks.test(model));
+                    Subscription replaying = model.replayToResume(subscriptionId, whatChanged, read, parks.test(model), owed);
                     if (replaying != null) {
                         return replaying;
+                    }
+                    // Asked again after the StartAt.dynamic(..) function the child asked, which can pause or cancel the
+                    // subscription on this thread, since the claim is reentrant
+                    if (owed != null && !owed.stillOwed(anyCatchupModel())) {
+                        return null;
                     }
                 }
             }
