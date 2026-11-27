@@ -51,6 +51,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class BlockingHandoverTest {
@@ -5166,11 +5167,13 @@ class BlockingHandoverTest {
         FakeSource replaying = source(List.of("L1", "L2", "L3"), false);
         Throwable caughtUp = catchThrowable(() -> handover.catchUp(replaying));
 
-        assertThat(fed).as("what feeding L3 to the full buffer threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class).hasMessage(HandoverMessages.bufferOverflow(2));
-        assertThat(caughtUp).as("what the replay of the whole history threw").isNotNull().hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
-        assertThat(replaying.markCaughtUpCallCount()).as("marker writes").isZero();
-        assertThat(handover.isReadyForLiveDelivery()).isFalse();
-        assertThat(catchThrowable(() -> handover.acceptReportingDelivery("L4"))).as("what feeding a later payload threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+        assertSoftly(softly -> {
+            softly.assertThat(fed).as("what feeding L3 to the full buffer threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class).hasMessage(HandoverMessages.bufferOverflow(2));
+            softly.assertThat(caughtUp).as("what the replay of the whole history threw").isNotNull().hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
+            softly.assertThat(replaying.markCaughtUpCallCount()).as("marker writes").isZero();
+            softly.assertThat(handover.isReadyForLiveDelivery()).isFalse();
+            softly.assertThat(catchThrowable(() -> handover.acceptReportingDelivery("L4"))).as("what feeding a later payload threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+        });
     }
 
     @Test
@@ -5185,11 +5188,13 @@ class BlockingHandoverTest {
 
         Throwable thrown = catchThrowable(() -> handover.catchUp(caughtUp));
 
-        assertThat(fed).as("what feeding L3 to the full buffer threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class).hasMessage(HandoverMessages.bufferOverflow(2));
-        assertThat(thrown).as("what the catch-up that reads no history threw, since L3 is in nobody's buffer").isNotNull().hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
-        assertThat(caughtUp.markCaughtUpCallCount()).as("marker writes").isZero();
-        assertThat(handover.isReadyForLiveDelivery()).isFalse();
-        assertThat(catchThrowable(() -> handover.acceptReportingDelivery("L4"))).as("what feeding a later payload threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+        assertSoftly(softly -> {
+            softly.assertThat(fed).as("what feeding L3 to the full buffer threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class).hasMessage(HandoverMessages.bufferOverflow(2));
+            softly.assertThat(thrown).as("what the catch-up that reads no history threw, since L3 is in nobody's buffer").isNotNull().hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
+            softly.assertThat(caughtUp.markCaughtUpCallCount()).as("marker writes").isZero();
+            softly.assertThat(handover.isReadyForLiveDelivery()).isFalse();
+            softly.assertThat(catchThrowable(() -> handover.acceptReportingDelivery("L4"))).as("what feeding a later payload threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+        });
     }
 
     @Test
@@ -5234,13 +5239,15 @@ class BlockingHandoverTest {
             Throwable overflow = catchThrowable(() -> handover.acceptReportingDelivery("L3"));
             releaseR1.countDown();
 
-            assertThat(overflow).as("what the payload that found the buffer full threw").isInstanceOf(IllegalStateException.class).hasMessage(HandoverMessages.bufferOverflow(2));
-            assertThatThrownBy(() -> catchUp.get(5, TimeUnit.SECONDS)).as("the catch-up that overflowed").isInstanceOf(ExecutionException.class)
-                    .hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
-            assertThat(delivered).as("folded before the replay noticed the overflow").containsExactly("R1");
-            assertThat(replaying.replayAbandonedCallCount).as("replayAbandoned() calls").isEqualTo(1);
-            assertThat(replaying.replayCompletedCallCount).as("replayCompleted() calls").isZero();
-            assertThat(replaying.markCaughtUpCallCount()).as("marker writes").isZero();
+            Throwable caughtUp = catchThrowable(() -> catchUp.get(5, TimeUnit.SECONDS));
+            assertSoftly(softly -> {
+                softly.assertThat(overflow).as("what the payload that found the buffer full threw").isInstanceOf(IllegalStateException.class).hasMessage(HandoverMessages.bufferOverflow(2));
+                softly.assertThat(caughtUp).as("the catch-up that overflowed").isInstanceOf(ExecutionException.class).hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
+                softly.assertThat(delivered).as("folded before the replay noticed the overflow").containsExactly("R1");
+                softly.assertThat(replaying.replayAbandonedCallCount).as("replayAbandoned() calls").isEqualTo(1);
+                softly.assertThat(replaying.replayCompletedCallCount).as("replayCompleted() calls").isZero();
+                softly.assertThat(replaying.markCaughtUpCallCount()).as("marker writes").isZero();
+            });
         } finally {
             releaseR1.countDown();
             executor.shutdownNow();
@@ -5266,11 +5273,16 @@ class BlockingHandoverTest {
         FakeSource stopped = source(List.of(), true);
         stopped.stopAfter(1);
 
-        assertThat(handover.catchUp(stopped)).as("the stopped catch-up").isFalse();
+        boolean stoppedCatchUp = handover.catchUp(stopped);
+        List<String> deliveredBeforeStop = List.copyOf(delivered);
+        boolean nextCatchUp = handover.catchUp(source(List.of(), true));
 
-        assertThat(delivered).as("only what it delivered before it was stopped").containsExactly("B1");
-        assertThat(handover.catchUp(source(List.of(), true))).isTrue();
-        assertThat(delivered).as("the next catch-up delivers what was kept in feed order, once").containsExactly("B1", "B2", "B3", "F1");
+        assertSoftly(softly -> {
+            softly.assertThat(stoppedCatchUp).as("the stopped catch-up").isFalse();
+            softly.assertThat(deliveredBeforeStop).as("only what it delivered before it was stopped").containsExactly("B1");
+            softly.assertThat(nextCatchUp).as("the next catch-up").isTrue();
+            softly.assertThat(delivered).as("the next catch-up delivers what was kept in feed order, once").containsExactly("B1", "B2", "B3", "F1");
+        });
     }
 
     @Test
@@ -5281,12 +5293,16 @@ class BlockingHandoverTest {
         FakeSource stopped = source(List.of(), true);
         stopped.stopAfter(0);
 
-        assertThat(handover.catchUp(stopped)).as("the stopped catch-up").isFalse();
+        boolean stoppedCatchUp = handover.catchUp(stopped);
+        boolean liveAccepted = handover.acceptIfLive("L1");
 
-        assertThat(stopped.markCaughtUpCallCount()).as("marker writes").isZero();
-        assertThat(handover.isReadyForLiveDelivery()).as("live").isTrue();
-        assertThat(handover.acceptIfLive("L1")).isTrue();
-        assertThat(delivered).containsExactly("L1");
+        assertSoftly(softly -> {
+            softly.assertThat(stoppedCatchUp).as("the stopped catch-up").isFalse();
+            softly.assertThat(stopped.markCaughtUpCallCount()).as("marker writes").isZero();
+            softly.assertThat(handover.isReadyForLiveDelivery()).as("live").isTrue();
+            softly.assertThat(liveAccepted).as("a live payload accepted after it").isTrue();
+            softly.assertThat(delivered).containsExactly("L1");
+        });
     }
 
     // When the delivery of the payload and the start of the thread a catch-up it asked for runs on both fail, the
@@ -5310,6 +5326,169 @@ class BlockingHandoverTest {
 
         assertThat(thrown).as("what the acceptIfLive whose delivery and thread start failed threw").isSameAs(deliveryFailure);
         assertThat(thrown.getSuppressed()).as("what was suppressed on it").containsExactly(startFailure);
+    }
+
+    // A caught-up catch-up from another handover's code that is made right after a stop ended the drain finds no drain
+    // left to leave going live to. So when it returns true the handover is live, rather than stopped behind its answer.
+    @Test
+    void a_catch_up_from_another_handovers_code_after_a_stop_in_the_middle_of_a_round_leaves_the_handover_live_when_it_returns_true() {
+        assertThatACatchUpFromAnotherHandoversCodeAfterAStopLeavesTheHandoverLiveWhenItReturnsTrue(List.of("B1", "B2"));
+    }
+
+    @Test
+    void a_catch_up_from_another_handovers_code_after_a_stop_at_the_empty_buffer_leaves_the_handover_live_when_it_returns_true() {
+        assertThatACatchUpFromAnotherHandoversCodeAfterAStopLeavesTheHandoverLiveWhenItReturnsTrue(List.of());
+    }
+
+    private static void assertThatACatchUpFromAnotherHandoversCodeAfterAStopLeavesTheHandoverLiveWhenItReturnsTrue(List<String> buffered) {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(delivered);
+        buffered.forEach(handover::acceptReportingDelivery);
+        AtomicReference<Boolean> returnedFromOtherCode = new AtomicReference<>();
+        AtomicReference<Throwable> thrownFromOtherCode = new AtomicReference<>();
+        AtomicBoolean hookRan = new AtomicBoolean();
+        AtomicBoolean callEnded = new AtomicBoolean();
+        BlockingHandover<String, String> other = BlockingHandover.create(
+                payload -> returnedFromOtherCode.set(handover.catchUp(source(List.of(), true))), payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        other.catchUp(source(List.of(), true));
+        handover.runAfterDrainStopped(() -> {
+            hookRan.set(true);
+            Thread caller = new Thread(() -> thrownFromOtherCode.set(catchThrowable(() -> other.acceptIfLive("trigger"))), "catch-up-from-another-handover");
+            caller.setDaemon(true);
+            caller.start();
+            try {
+                caller.join(5_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            callEnded.set(!caller.isAlive());
+        });
+        FakeSource stopping = source(List.of(), true);
+        stopping.stopAfter(0);
+
+        handover.catchUp(stopping);
+
+        assertSoftly(softly -> {
+            softly.assertThat(hookRan).as("the drain was stopped").isTrue();
+            softly.assertThat(callEnded).as("the catch-up from another handover's code ended within the bound").isTrue();
+            softly.assertThat(thrownFromOtherCode.get()).as("what the catch-up from another handover's code threw").isNull();
+            softly.assertThat(returnedFromOtherCode.get() == Boolean.TRUE && !handover.isReadyForLiveDelivery())
+                    .as("the catch-up from another handover's code returned true and left the handover not live").isFalse();
+            if (returnedFromOtherCode.get() == Boolean.TRUE) {
+                softly.assertThat(delivered).as("every payload the stop put back, delivered once").containsExactlyElementsOf(buffered);
+            }
+        });
+    }
+
+    // A drain that fails records the failure in the lock section that ends it, so a caught-up catch-up from outside
+    // every handover that waited for it is refused rather than claiming a drain of its own and returning true. The
+    // catch-up that failed records it as the latest failure in a later section, so a waiter that wakes in between
+    // sees only the first. Waiters and repetitions make that wake likely, since nothing outside can hold the drain there.
+    @Test
+    void a_catch_up_that_waited_for_a_drain_that_failed_is_refused_and_the_handover_is_failed() throws Exception {
+        for (int repetition = 0; repetition < 50; repetition++) {
+            assertThatCatchUpsThatWaitedForADrainThatFailedAreRefused(4);
+        }
+    }
+
+    private static void assertThatCatchUpsThatWaitedForADrainThatFailedAreRefused(int waiters) throws Exception {
+        CountDownLatch deliveringB1 = new CountDownLatch(1);
+        CountDownLatch releaseB1 = new CountDownLatch(1);
+        IllegalStateException deliveryFailure = new IllegalStateException("the delivery failed");
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            deliveringB1.countDown();
+            awaitLatch(releaseB1);
+            throw deliveryFailure;
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.acceptReportingDelivery("B1");
+        List<Boolean> returned = new CopyOnWriteArrayList<>();
+        List<Throwable> thrown = new CopyOnWriteArrayList<>();
+        List<Thread> waiting = new ArrayList<>();
+        for (int i = 0; i < waiters; i++) {
+            Thread thread = new Thread(() -> {
+                try {
+                    returned.add(handover.catchUp(source(List.of(), true)));
+                } catch (Throwable e) {
+                    thrown.add(e);
+                }
+            }, "catch-up-waiting-for-the-drain-" + i);
+            thread.setDaemon(true);
+            waiting.add(thread);
+        }
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> drain = executor.submit(() -> handover.catchUp(source(List.of(), true)));
+            awaitLatch(deliveringB1);
+            for (Thread thread : waiting) {
+                thread.start();
+            }
+            for (Thread thread : waiting) {
+                awaitParked(thread);
+            }
+
+            releaseB1.countDown();
+            for (Thread thread : waiting) {
+                thread.join(5_000);
+            }
+            Throwable drainThrew = catchThrowable(() -> drain.get(5, TimeUnit.SECONDS));
+
+            assertSoftly(softly -> {
+                softly.assertThat(waiting).as("catch-ups still waiting for the drain").noneMatch(Thread::isAlive);
+                softly.assertThat(returned).as("what the catch-ups that waited for the failed drain returned").isEmpty();
+                softly.assertThat(thrown).as("what the catch-ups that waited for the failed drain threw").hasSize(waiters)
+                        .allSatisfy(refused -> assertThat(refused).isInstanceOf(BlockingHandover.PreDispatchRefusalException.class));
+                softly.assertThat(drainThrew).as("what the drain threw").isInstanceOf(ExecutionException.class).hasCause(deliveryFailure);
+                softly.assertThat(handover.refusesPermanently()).as("refuses permanently").isTrue();
+                softly.assertThat(handover.isReadyForLiveDelivery()).as("live").isFalse();
+            });
+        } finally {
+            releaseB1.countDown();
+            waiting.forEach(Thread::interrupt);
+            executor.shutdownNow();
+        }
+    }
+
+    private static void awaitParked(Thread thread) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (thread.getState() != Thread.State.WAITING && thread.getState() != Thread.State.TIMED_WAITING) {
+            if (!thread.isAlive()) {
+                fail(thread.getName() + " ended without waiting");
+            }
+            if (System.nanoTime() > deadline) {
+                fail(thread.getName() + " did not start waiting within 5 seconds, it is " + thread.getState());
+            }
+            Thread.onSpinWait();
+        }
+    }
+
+    // A waiting accept(..) parked in the buffer is answered by the overflow a payload fed without waiting causes, since
+    // that overflow fails the catch-up the parked payload would have been delivered by.
+    @Test
+    void a_waiting_accept_parked_in_the_buffer_is_refused_with_the_overflow_a_payload_fed_without_waiting_causes() throws Exception {
+        BlockingHandover<String, String> handover = BlockingHandover.create(
+                payload -> { }, payload -> payload, new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread parked = new Thread(() -> thrown.set(catchThrowable(() -> handover.accept("L1"))), "waiting-accept");
+        parked.setDaemon(true);
+        try {
+            parked.start();
+            awaitParked(parked);
+            handover.acceptReportingDelivery("L2");
+
+            Throwable overflow = catchThrowable(() -> handover.acceptReportingDelivery("L3"));
+            parked.join(5_000);
+
+            assertSoftly(softly -> {
+                softly.assertThat(overflow).as("what feeding L3 to the full buffer threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class).hasMessage(HandoverMessages.bufferOverflow(2));
+                softly.assertThat(parked.isAlive()).as("the waiting accept is still parked").isFalse();
+                softly.assertThat(thrown.get()).as("what the parked accept threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                        .satisfiesAnyOf(
+                                refused -> assertThat(refused).hasMessage(HandoverMessages.bufferOverflow(2)),
+                                refused -> assertThat(refused).hasRootCauseMessage(HandoverMessages.bufferOverflow(2)));
+            });
+        } finally {
+            parked.interrupt();
+        }
     }
 
     private static void assertThatAFoldFailureIsRecordedAndALaterLivePayloadRefused(Exception foldFailure) {
@@ -5377,6 +5556,42 @@ class BlockingHandoverTest {
                 .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
                 .hasCauseReference(replayFailure);
         assertThat(thrownByCatchUp).isSameAs(replayFailure);
+    }
+
+    // The drain reports a held payload the replay already applied to the source. A report that fails on an interrupted
+    // thread is the interrupt's, so the payload goes back with the rest and the drain of the next catch-up reports it again.
+    @Test
+    void a_report_of_an_applied_held_payload_that_fails_on_an_interrupt_is_made_again_by_the_drain_of_the_next_catch_up() {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.acceptReportingDelivery("1");
+        handover.acceptReportingDelivery("L2");
+        FakeSource replayed = source(List.of("1"), false);
+        AtomicBoolean failOnce = new AtomicBoolean(true);
+        IllegalStateException reportFailure = new IllegalStateException("report on an interrupted thread");
+        replayed.onAlreadyDeliveredByReplay = () -> {
+            if (failOnce.getAndSet(false)) {
+                Thread.currentThread().interrupt();
+                throw reportFailure;
+            }
+        };
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(replayed));
+        boolean interruptedAfter = Thread.interrupted();
+        boolean liveAfterInterrupt = handover.isReadyForLiveDelivery();
+        boolean refusesAfterInterrupt = handover.refusesPermanently();
+        boolean nextCatchUp = handover.catchUp(source(List.of(), true));
+
+        assertSoftly(softly -> {
+            softly.assertThat(thrown).as("what the catch-up whose report failed on the interrupt threw").isSameAs(reportFailure);
+            softly.assertThat(interruptedAfter).as("the interrupt stays on the thread").isTrue();
+            softly.assertThat(liveAfterInterrupt).as("live after the interrupted drain").isFalse();
+            softly.assertThat(refusesAfterInterrupt).as("refuses permanently after the interrupted drain").isFalse();
+            softly.assertThat(nextCatchUp).as("the next catch-up").isTrue();
+            softly.assertThat(replayed.alreadyDeliveredByReplay).as("reports of the applied payload, the second by the next drain").containsExactly("1", "1");
+            softly.assertThat(delivered).as("every payload delivered once").containsExactly("1", "L2");
+            softly.assertThat(handover.isReadyForLiveDelivery()).as("live after the next catch-up").isTrue();
+        });
     }
 
     private static void assertThatAThrowingAlreadyDeliveredByReplayReleasesTheDrain(Exception listenerFailure) throws Exception {
