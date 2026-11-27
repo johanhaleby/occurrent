@@ -564,6 +564,11 @@ public final class DomainEventFeed<E> {
      * calling it, from its fold or from a callback such as {@code replayStarted()}, returns without waiting for the
      * replay, since that replay cannot end before the call returns. During a replay, a call the view hands to another
      * thread waits for that replay, which cannot end while the view waits for the call.
+     * <p>
+     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription waits only while
+     * the replay runs, and returns at once while this feed delivers the events it held during the replay. So
+     * {@link #acceptOrDeferCloudEvent(CloudEvent)} can still return {@link RoutingOutcome#DEFERRED} right after it.
+     * {@link CatchupProjectionFeed#goLive()} has the details.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */

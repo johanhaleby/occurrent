@@ -328,7 +328,8 @@ public final class CatchupProjectionFeed<E> {
 
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
-     * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
+     * the buffered live events and go live. Skipped if the catch-up marker already records completion, and then the
+     * call waits as {@link #goLive()} describes. Call this once,
      * after wiring the live feed, so events arriving during the replay are captured.
      * <p>
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
@@ -451,6 +452,11 @@ public final class CatchupProjectionFeed<E> {
      * this feed is calling it, from its fold or from a callback such as {@code replayStarted()}, returns without
      * waiting for the replay, since that replay cannot end before the call returns. During a replay, a call the view
      * hands to another thread waits for that replay, which cannot end while the view waits for the call.
+     * <p>
+     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription waits only while
+     * the replay runs. While this feed delivers the events it held during the replay or writes its marker, that call
+     * returns at once, and this feed goes live once the delivery ends. So {@link #acceptOrDefer(Object)} can still return
+     * {@link RoutingOutcome#DEFERRED} right after it, and a failure of that catch-up is not thrown to it.
      * <p>
      * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. A redelivery
      * of an event this feed already delivered to the view is skipped only while its id is among the latest
