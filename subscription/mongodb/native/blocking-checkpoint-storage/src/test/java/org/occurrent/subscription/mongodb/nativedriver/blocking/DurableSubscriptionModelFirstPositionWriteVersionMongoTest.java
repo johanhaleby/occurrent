@@ -257,8 +257,11 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             }));
 
             assertAll(
-                    () -> assertThat(thrown).as("thrown by subscribe").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
-                            .isSameAs(storage.refused.get()),
+                    () -> assertThat(thrown).as("refusal thrown by subscribe, naming the subscription, the version the other node stored and the condition this node wrote with")
+                            .isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class, e -> assertAll(
+                                    () -> assertThat(e.subscriptionId).as("refused subscription").isEqualTo(SUBSCRIPTION_ID),
+                                    () -> assertThat(e.storedVersion).as("version stored by the other node").hasValue(3L),
+                                    () -> assertThat(e.condition).as("condition this node wrote with").isEqualTo(CheckpointWriteCondition.notOlderThan(2)))),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(deliveredEvent.asString()),
                     () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(3L),
                     () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from").isEmpty()
@@ -314,8 +317,11 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             }));
 
             assertAll(
-                    () -> assertThat(thrown).as("thrown by subscribe").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
-                            .isSameAs(storage.refused.get()),
+                    () -> assertThat(thrown).as("refusal thrown by subscribe, naming the subscription, the version the other node stored and the condition this node wrote with")
+                            .isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class, e -> assertAll(
+                                    () -> assertThat(e.subscriptionId).as("refused subscription").isEqualTo(SUBSCRIPTION_ID),
+                                    () -> assertThat(e.storedVersion).as("version stored by the other node").hasValue(2L),
+                                    () -> assertThat(e.condition).as("condition this node wrote with").isEqualTo(CheckpointWriteCondition.notOlderThan(1)))),
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(laterFirstPosition.asString()),
                     () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
                     () -> assertThat(nativeModel.positionsStartedFrom).as("positions the feed started from").isEmpty()
