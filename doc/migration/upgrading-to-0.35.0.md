@@ -2948,7 +2948,7 @@ the catch-up is not affected.
   seconds for, such as one whose checkpoint storage doesn't answer, is withdrawn and changes nothing, unless it has
   entered its turn under the model's lock or taken the subscription's claim by then. Either way the calls handed over
   after it go on, and that is logged at `ERROR` too. One that isn't withdrawn takes effect once it finishes, after
-  those calls. A resume that a handed `start(true)` left until after its turn is never withdrawn. Made before the action hands a call over, these calls run at once as in 0.34.0.
+  those calls. A resume that a handed `start(true)` left until after its turn is never withdrawn, and a `stop()`, or a pause, a cancel or a new subscribe of that subscription, made after the start's turn keeps it from changing anything. Made before the action hands a call over, these calls run at once as in 0.34.0.
 * After a `stop()` from a replay's action, the replay goes on to its next event until the lifecycle thread runs the
   `stop()`, which then parks it. After a `stop()` from a live call's action, the wrapped model can go on delivering live
   events to the action until then. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. The tests of

@@ -43,6 +43,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
@@ -548,7 +549,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * <p>
      * Called from inside the action of a live call or a replay of this model, it returns at once and changes nothing
      * yet, also when the model runs. Once the action has returned, the lifecycle thread resumes the subscription as
-     * described above, after every call the action handed over before it. So {@code stop()} and then
+     * described above, after every call the action handed over before it, apart from a call for a single subscription
+     * that hasn't begun or finished within ten seconds, which it doesn't wait for any longer. So {@code stop()} and then
      * {@code resumeSubscription(id)} from one action leave the model running and the subscription resumed. A
      * {@link #pauseSubscription(String)}, {@link #resumeSubscription(String, StartAt)}, {@link #cancelSubscription(String)}
      * or subscribe the action makes afterwards takes effect after it too, unless the resume has entered its turn and
@@ -572,12 +574,20 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // Run in turn with the lifecycle calls, see AbstractCatchupSubscriptionModel.resumeInTurn, so no start, stop or
     // shutdown completes between the reads of stopped below and the start or the live delegate's resume they decide.
     // Reads no storage, see AbstractCatchupSubscriptionModel.ResumeRead
-    private Subscription resumeAlone(String subscriptionId, AbstractCatchupSubscriptionModel.ResumeRead read) {
-        return resumeAlone(subscriptionId, read, true);
+    private @Nullable Subscription resumeAlone(String subscriptionId, AbstractCatchupSubscriptionModel.ResumeRead read) {
+        return resumeAlone(subscriptionId, read, true, null);
     }
 
-    // With mayStart false a stopped child stays stopped, so a replay this starts parks itself
-    private Subscription resumeAlone(String subscriptionId, AbstractCatchupSubscriptionModel.ResumeRead read, boolean mayStart) {
+    // With mayStart false a stopped child stays stopped, so a replay this starts parks itself. With owed set, see
+    // AbstractCatchupSubscriptionModel.ResumeAlone. Changes nothing when, by the time it holds the claim, a shutdown() is
+    // under way or has begun since this resume began, since the wait for the claim counts as a wait for one subscription,
+    // and a shutdown() can shut the delegate down meanwhile without the lock
+    private @Nullable Subscription resumeAlone(String subscriptionId, AbstractCatchupSubscriptionModel.ResumeRead read, boolean mayStart,
+                                               AbstractCatchupSubscriptionModel.@Nullable OwedResume owed) {
+        if (owed != null && !owed.stillOwed(anyCatchupModel())) {
+            return null;
+        }
+        long shutdownsBegunBefore = anyCatchupModel().shutdownsBegun(this);
         // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims
         boolean started = mayStart && presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId);
         if (started) {
@@ -585,12 +595,23 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         }
         String whatChanged = started ? AbstractCatchupSubscriptionModel.STARTED_BUT_NOT_RESUMED : AbstractCatchupSubscriptionModel.NOTHING_CHANGED;
         try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claim(subscriptionId, whatChanged)) {
-            // A replay a stop gave up on goes on once this resume is asked, as one it runs again does
+            // Asked again under the claim, which a pause or a cancel that takes the resume off holds
+            if (anyCatchupModel().shutDownSince(this, shutdownsBegunBefore) || owed != null && !owed.stillOwed(anyCatchupModel())) {
+                return null;
+            }
+            // A child a stopReplay() came after leaves a replay parked or owing its park as it is, as that stopReplay()
+            // would have left the replay the resume started
+            Predicate<AbstractCatchupSubscriptionModel> parks = model -> owed != null && owed.parksOn(model);
+            // On every child parks answers false for, a replay a stop gave up on goes on once this resume is asked, as one
+            // it runs again does
             try (AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().lockHandover(subscriptionId)) {
-                presentCatchupModels().forEach(model -> model.clearTheParkOwedBy(subscriptionId));
+                presentCatchupModels().filter(parks.negate()).forEach(model -> model.clearTheParkOwedBy(subscriptionId));
             }
             AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
             if (parkedIn != null) {
+                if (parks.test(parkedIn)) {
+                    return null;
+                }
                 Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
                 if (relaunched != null) {
                     return relaunched;
@@ -602,7 +623,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
             try (AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().lockHandover(subscriptionId)) {
                 presentCatchupModels().forEach(model -> model.pauseRequestedDuringCatchup.remove(subscriptionId));
                 for (AbstractCatchupSubscriptionModel model : presentCatchupModels().toList()) {
-                    Subscription replaying = model.replayToResume(subscriptionId, whatChanged, read);
+                    Subscription replaying = model.replayToResume(subscriptionId, whatChanged, read, parks.test(model));
                     if (replaying != null) {
                         return replaying;
                     }
@@ -624,7 +645,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * <p>
      * Called from inside the action of a live call or a replay of this model after that action handed a call over, such
      * as a {@link #stop()} or a {@link #resumeSubscription(String)}, it returns at once a handle and resumes the
-     * subscription on the lifecycle thread, once the action has returned and that call has run. The handle's
+     * subscription on the lifecycle thread, once the action has returned and that call has run.
+     * When that call is one for a single subscription, such as a resume, that hasn't begun or finished within ten
+     * seconds, this runs without waiting for it any longer. The handle's
      * {@code waitUntilStarted} throws what the resume threw there, which is also logged at {@code ERROR}.
      * <p>
      * {@link RepositionableSubscriptions#findIn} finds this model only when the wrapped model is repositionable.
@@ -723,9 +746,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * wrapped model that it takes the subscription over after the wrapped model lost its history, or in the wrapped
      * model otherwise.
      * <p>
+     * A paused subscription that a {@code start(true)} still has to resume, because the start's read of its stored
+     * position hadn't answered by the end of the start's turn, counts as resumed by that start. Pausing it returns, and
+     * the start then leaves it paused. After a {@link #stop()} that began since that start's turn, pausing it throws
+     * {@link org.occurrent.subscription.SubscriptionNotRunningException}.
+     * <p>
      * Called from inside the action of a live call or a replay of this model after that action handed a call over, such
      * as a {@link #stop()} or a {@link #resumeSubscription(String)}, it returns at once and pauses the subscription on
-     * the lifecycle thread, once the action has returned and that call has run. What it throws there is logged at
+     * the lifecycle thread, once the action has returned and that call has run.
+     * When that call is one for a single subscription, such as a resume, that hasn't begun or finished within ten
+     * seconds, this runs without waiting for it any longer. What it throws there is logged at
      * {@code ERROR}.
      */
     @Override
@@ -741,22 +771,27 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         // counting as one this model runs before the live delegate has the subscription.
         try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId);
              AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().lockHandover(subscriptionId)) {
-            AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.runsReplayHere(subscriptionId)).findFirst().orElse(null);
-            if (replaying != null) {
-                replaying.pauseSubscription(subscriptionId);
-            } else {
-                getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
-            }
+            anyCatchupModel().pauseTakingOffTheOwedResume(subscriptionId, () -> {
+                AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.runsReplayHere(subscriptionId)).findFirst().orElse(null);
+                if (replaying != null) {
+                    replaying.pauseSubscription(subscriptionId);
+                } else {
+                    getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+                }
+            });
         }
     }
 
     /**
      * Cancels the subscription in the catch-up of this model that runs or holds its replay and in the wrapped model, and
-     * deletes its stored position.
+     * deletes its stored position. A cancel that throws keeps the stored position, and so does one during which a
+     * subscribe of the same id made on this thread is kept.
      * <p>
      * Called from inside the action of a live call or a replay of this model after that action handed a call over, such
      * as a {@link #stop()} or a {@link #resumeSubscription(String)}, it returns at once and cancels the subscription on
-     * the lifecycle thread, once the action has returned and that call has run. What it throws there is logged at
+     * the lifecycle thread, once the action has returned and that call has run.
+     * When that call is one for a single subscription, such as a resume, that hasn't begun or finished within ten
+     * seconds, this runs without waiting for it any longer. What it throws there is logged at
      * {@code ERROR}. A subscribe made there waits the same way, in the catch-up of this model it is routed to.
      */
     @Override

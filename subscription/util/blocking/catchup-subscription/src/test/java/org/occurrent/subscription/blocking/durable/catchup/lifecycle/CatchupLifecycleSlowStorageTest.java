@@ -54,6 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
+import static org.occurrent.subscription.blocking.durable.catchup.CatchupModelMessages.STOPPED_ALL_THE_SAME;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 import static org.occurrent.subscription.blocking.durable.catchup.lifecycle.GatedHistory.cloudEvent;
 
@@ -72,7 +73,6 @@ class CatchupLifecycleSlowStorageTest {
     private static final String Y = "y";
     private static final String W = "w";
     private static final String Z = "z";
-    private static final String STOPPED_ALL_THE_SAME_MESSAGE = "The model is stopped all the same, and a catch-up replay for the subscription delivers no further event until start(true) or resumeSubscription runs it again.";
     private static final Duration BOUND = Duration.ofSeconds(15);
 
     private final HoldableStorage storage = new HoldableStorage();
@@ -249,7 +249,7 @@ class CatchupLifecycleSlowStorageTest {
         Throwable stopThrew = catchThrowable(() -> CompletableFuture.runAsync(model::stop, daemonExecutor("stop-of-the-model")).get(BOUND.toSeconds(), TimeUnit.SECONDS));
         assertThat(stopThrew).as("what the stop made while the store of the replay of x waited threw").satisfiesAnyOf(
                 thrown -> assertThat(thrown).isNull(),
-                thrown -> assertThat(thrown).isInstanceOf(ExecutionException.class).hasRootCauseInstanceOf(IllegalStateException.class).rootCause().hasMessageEndingWith(STOPPED_ALL_THE_SAME_MESSAGE));
+                thrown -> assertThat(thrown).isInstanceOf(ExecutionException.class).hasRootCauseInstanceOf(IllegalStateException.class).rootCause().hasMessageEndingWith(STOPPED_ALL_THE_SAME));
         assertThat(CompletableFuture.runAsync(model::shutdown, daemonExecutor("shutdown-of-the-model"))).as("the shutdown made while the store of the replay of x waited").succeedsWithin(BOUND);
         assertThat(live.shutdowns.get()).as("the shutdowns the live delegate got before the store returned").isEqualTo(1);
 
@@ -271,7 +271,7 @@ class CatchupLifecycleSlowStorageTest {
 
             // Then it gives up within the bound, saying the model is stopped all the same, though the storage hasn't answered
             assertThat(catchThrowable(() -> stop.get(BOUND.toSeconds(), TimeUnit.SECONDS))).as("what the stop made while the handover of x waited for the storage threw")
-                    .isInstanceOf(ExecutionException.class).hasRootCauseInstanceOf(IllegalStateException.class).rootCause().hasMessageEndingWith(STOPPED_ALL_THE_SAME_MESSAGE);
+                    .isInstanceOf(ExecutionException.class).hasRootCauseInstanceOf(IllegalStateException.class).rootCause().hasMessageEndingWith(STOPPED_ALL_THE_SAME);
             assertThat(held.hold.release.getCount()).as("whether the storage still waited when the stop returned").isEqualTo(1);
 
             // And once the storage answers, x delivers nothing more
