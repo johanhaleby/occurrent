@@ -525,6 +525,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     /**
      * Synchronized as {@link #subscriptionIds()} is, since a pause or a resume moves the subscription between the two
      * maps in two steps, so an unsynchronized reader between them finds it neither running nor paused.
+     * <p>
+     * A call waits for every holder of this model's lock, not only for a pause or a resume of this subscription. That
+     * is {@code subscribe}, {@code subscribePaused}, {@code cancelSubscription}, both {@code resumeSubscription}
+     * methods, the part of {@code pauseSubscription} that closes the change stream, and the whole loops of
+     * {@link #start(boolean)}, {@link #stop()} and {@link #shutdown()}, which resume, pause or cancel one subscription
+     * after another. A subclass that overrides one of those methods and, inside it, waits for another thread's call to
+     * this method deadlocks, because that call waits for the lock the override holds.
      */
     @Override
     public synchronized boolean isRunning(String subscriptionId) {
@@ -532,7 +539,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     /**
-     * Synchronized for the same reason as {@link #isRunning(String)}.
+     * Synchronized for the same reason as {@link #isRunning(String)}, so a call waits for the same holders of this
+     * model's lock, and a subclass override that waits for another thread's call to this method deadlocks the same way.
      */
     @Override
     public synchronized boolean isPaused(String subscriptionId) {
