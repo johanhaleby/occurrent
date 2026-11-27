@@ -105,8 +105,8 @@ public interface CheckpointStorageFixture {
      * The node that stored the later position, with its version, may already deliver from it, and its next save would
      * otherwise skip the events between the two positions. Occurrent's MongoDB storage refuses that save and answers
      * two operation times here. The empty list, the default, means the storage doesn't move a stored position earlier
-     * that way, and the suite skips the cases that need it. This is data rather than a flag because the suite can't
-     * build a position that the storage ranks without naming its types.
+     * that way, and the suite asserts that a save from a later position is accepted instead of refused. This is data
+     * rather than a flag because the suite can't build a position that the storage ranks without naming its types.
      */
     default List<Checkpoint> startPositionsEarlierFirst() {
         return List.of();

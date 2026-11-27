@@ -279,7 +279,7 @@ class SuiteNeverSkipsTest {
                     return true;
                 }
 
-                // Claims the capability the storage honours nothing of, which is what keeps all 22 tests running and
+                // Claims the capability the storage honours nothing of, which is what keeps every test running and
                 // failing. Delegating to the storage would let it answer false and pass the refusal tests honestly.
                 @Override
                 public boolean evaluatesWriteConditions() {

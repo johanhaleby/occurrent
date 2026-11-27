@@ -61,8 +61,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * }</pre>
  * <p>
  * Not extending this suite is how an implementation declines to be conformance tested. That is a visible, greppable
- * absence rather than a runtime skip, and the only cases that call {@code Assumptions} are the ones about a refusal that
- * only some storages owe, see {@link CheckpointStorageFixture#startPositionsEarlierFirst()}.
+ * absence rather than a runtime skip, and nothing here calls {@code Assumptions}.
  * <p>
  * What this suite deliberately does not assert:
  * <ul>
@@ -500,32 +499,56 @@ public abstract class CheckpointStorageConformance {
 
         private Checkpoint earlier;
         private Checkpoint later;
+        private boolean refusesASaveFromTheLaterPosition;
 
         @BeforeEach
-        void aStorageThatRefusesASaveOnceAStartPositionMovedItEarlier() {
-            Assumptions.assumeTrue(fixture().evaluatesWriteConditions(), "the storage doesn't evaluate write conditions");
+        void theStartPositionsTheFixtureDeclares() {
             List<Checkpoint> positions = requireNonNull(fixture().startPositionsEarlierFirst(), "startPositionsEarlierFirst() returned null");
-            Assumptions.assumeTrue(!positions.isEmpty(), "the storage doesn't refuse a save once a start position moved the stored position earlier");
-            assertThat(positions).as("startPositionsEarlierFirst() answers two positions or none").hasSize(2);
-            earlier = positions.get(0);
-            later = positions.get(1);
+            refusesASaveFromTheLaterPosition = !positions.isEmpty();
+            if (refusesASaveFromTheLaterPosition) {
+                assertThat(positions).as("startPositionsEarlierFirst() answers two positions or none").hasSize(2);
+                earlier = positions.get(0);
+                later = positions.get(1);
+            } else {
+                earlier = new StringBasedCheckpoint("earlier-start-position");
+                later = new StringBasedCheckpoint("later-start-position");
+            }
         }
 
-        private String storedLaterPositionThatAnotherStartMovedEarlier() {
+        private void assertNotOlderThanIsUnsupported() {
+            assertThatThrownBy(() -> checkpointStorage().save(subscriptionId(), later, CheckpointWriteCondition.notOlderThan(VERSION)).block())
+                    .as("a storage that declares it does not evaluate write conditions refuses anything but any()")
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        private String storedLaterPositionThatAnotherStartWasOffered() {
             String id = subscriptionId();
             checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)).block();
-            assertThat(requireNonNull(checkpointStorage().resolveFirstCheckpointRace(id, earlier).block()).asString())
-                    .as("the earlier start position replaces the later stored one")
-                    .isEqualTo(earlier.asString());
+            Checkpoint resolved = checkpointStorage().resolveFirstCheckpointRace(id, earlier).block();
+            if (refusesASaveFromTheLaterPosition) {
+                assertThat(requireNonNull(resolved).asString())
+                        .as("the earlier start position replaces the later stored one")
+                        .isEqualTo(earlier.asString());
+            }
             return id;
         }
 
         @Test
         void a_save_from_a_later_position_with_the_version_stored_with_it_is_refused() {
-            String id = storedLaterPositionThatAnotherStartMovedEarlier();
+            if (!fixture().evaluatesWriteConditions()) {
+                assertNotOlderThanIsUnsupported();
+                return;
+            }
+            String id = storedLaterPositionThatAnotherStartWasOffered();
 
             Throwable thrown = catchThrowable(() -> checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)).block());
 
+            if (!refusesASaveFromTheLaterPosition) {
+                assertThat(thrown).as("thrown by a storage that doesn't move a stored position earlier, so nothing was skipped").isNull();
+                assertThat(requireNonNull(checkpointStorage().read(id).block()).asString()).as("stored checkpoint").isEqualTo(later.asString());
+                assertThat(storedVersion(id)).as("stored version").isEqualTo(VERSION);
+                return;
+            }
             assertThat(thrown)
                     .as("the node that stored the later position would skip what lies between the two positions")
                     .isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class,
@@ -539,7 +562,11 @@ public abstract class CheckpointStorageConformance {
 
         @Test
         void a_save_of_a_checkpoint_that_does_not_go_on_from_a_change_stream_position_is_not_refused() {
-            String id = storedLaterPositionThatAnotherStartMovedEarlier();
+            if (!fixture().evaluatesWriteConditions()) {
+                assertNotOlderThanIsUnsupported();
+                return;
+            }
+            String id = storedLaterPositionThatAnotherStartWasOffered();
 
             checkpointStorage().save(id, new StringBasedCheckpoint("a-generic-position"), CheckpointWriteCondition.notOlderThan(VERSION)).block();
 
@@ -548,7 +575,11 @@ public abstract class CheckpointStorageConformance {
 
         @Test
         void a_write_that_goes_through_takes_the_refusal_away() {
-            String id = storedLaterPositionThatAnotherStartMovedEarlier();
+            if (!fixture().evaluatesWriteConditions()) {
+                assertNotOlderThanIsUnsupported();
+                return;
+            }
+            String id = storedLaterPositionThatAnotherStartWasOffered();
 
             checkpointStorage().save(id, earlier, CheckpointWriteCondition.any()).block();
             Throwable thrown = catchThrowable(() -> checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)).block());
