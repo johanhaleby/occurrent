@@ -4890,21 +4890,21 @@ for a held event, as it already did during the replay. Feed that event from anot
 ## A full live buffer fails a blocking catch-up push subscription
 
 A blocking `CatchupThenPushSubscriptionModel` over an event store that pushes its writes to it, such as the in-memory
-event store, holds up to `maxBufferedEvents` live events while it replays, 100,000 by default. In 0.34.0 an event
-written once that buffer was full was refused to the writer, the catch-up went on and wrote its marker, and the
-subscription never got the event. The catch-up now fails instead, writes no marker, and the subscription refuses every
-later event. A `PushObserver` is told `REFUSED` for the event that found the buffer full, where 0.34.0 told it
-`NOT_DELIVERABLE`.
+event store, holds up to `maxBufferedEvents` live events until its catch-up has delivered them, 100,000 by default.
+In 0.34.0 an event written once that buffer was full was refused to the writer, the catch-up went on and wrote its
+marker, and the subscription never got the event. The catch-up now fails instead, writes no marker, and the
+subscription refuses every later event. A `PushObserver` is told `REFUSED` for the event that found the buffer full,
+where 0.34.0 told it `NOT_DELIVERABLE`.
 
 The write that found the buffer full, and every write to the in-memory event store after it, throws once the store
 has committed the event. So a writer that retries such a write stores the event twice. The live events the
 subscription held before the buffer filled up were reported `DELIVERED` to a `PushObserver` when they were held, and
 the failed subscription never delivers them.
 
-An event that finds the buffer full while no replay runs, before the first replay has started for example, fails
-nothing, since the next replay reads it from the store. Only a catch-up that finds its marker and skips the replay
-fails for it. Once the replay has ended, a write waits for the catch-up to deliver what it held instead of adding to
-the buffer, unless a handler makes it, as [the section above](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held)
+An event that finds the buffer full before the replay has started fails the catch-up too. The replay reads that event
+from the store, but a projection that records its appends never records that event's append, so `waitUntilApplied`
+would time out for it. Once the replay has ended, a write waits for the catch-up to deliver what it held instead of
+adding to the buffer, unless a handler makes it, as [the section above](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held)
 describes.
 
 There is no code to change, unless a writer retries a write that threw. A subscription that fails this way stays

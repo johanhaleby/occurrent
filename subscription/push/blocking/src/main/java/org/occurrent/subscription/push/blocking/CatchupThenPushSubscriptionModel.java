@@ -68,8 +68,8 @@ import java.util.stream.Stream;
  *       however fast events are written, and a handler must not wait for a lock that the writing thread holds. An
  *       event that commits during a replay that runs to the end, while the buffer has room, is delivered either by the
  *       replay or by the buffered feed. One that finds the buffer full fails the catch-up, which writes no marker,
- *       and the write that found it full throws once the store has committed the event. One that finds it full while no
- *       replay runs is left to the next replay, which reads it from the store. The overlap between the replay and the
+ *       and the write that found it full throws once the store has committed the event. The same goes for one that
+ *       finds it full before the replay has started. The overlap between the replay and the
  *       buffered feed is de-duplicated by the
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no

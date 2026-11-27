@@ -4521,14 +4521,65 @@ class BlockingHandoverTest {
             releaseB1.countDown();
             assertThatThrownBy(() -> catchUp.get(5, TimeUnit.SECONDS)).as("the failed catch-up").isInstanceOf(ExecutionException.class).hasCause(replayFailure);
             assertThat(log).as("the drain delivered what the replay buffered before it failed").containsExactly("R1", "B1");
-            // Whether L1 is refused for the failure or buffered depends on whether the failure was recorded when the wait ended.
-            try {
-                fed.get(5, TimeUnit.SECONDS);
-            } catch (ExecutionException refused) {
-                assertThat(refused).as("how the wait of L1 ended").hasCauseInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
-            }
+            assertThatThrownBy(() -> fed.get(5, TimeUnit.SECONDS)).as("how the wait of L1 ended").isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+            assertThat(log).as("nothing delivered after the drain of the failed replay").containsExactly("R1", "B1");
         } finally {
             releaseB1.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void an_outside_offer_that_waited_for_the_drain_after_a_failed_replay_is_refused_before_the_failed_catch_up_handles_its_failure() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch deliveringB1 = new CountDownLatch(1);
+        CountDownLatch releaseB1 = new CountDownLatch(1);
+        CountDownLatch drainEnded = new CountDownLatch(1);
+        CountDownLatch releaseCatchUp = new CountDownLatch(1);
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        IllegalStateException replayFailure = new IllegalStateException("the replay failed");
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("R1")) {
+                self.get().acceptReportingDelivery("B1");
+            }
+            if (payload.equals("R2")) {
+                throw replayFailure;
+            }
+            if (payload.equals("B1")) {
+                deliveringB1.countDown();
+                awaitLatch(releaseB1);
+            }
+            log.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.runAfterDrainOfFailedReplay(() -> {
+            drainEnded.countDown();
+            awaitLatch(releaseCatchUp);
+        });
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> catchUp = executor.submit(() -> handover.catchUp(source(List.of("R1", "R2"), false)));
+            awaitLatch(deliveringB1);
+            Future<Boolean> fed = executor.submit(() -> handover.acceptReportingDelivery("L1"));
+            assertStillWaiting(fed, "L1 fed from outside while the drain after the failed replay delivers B1");
+
+            releaseB1.countDown();
+            awaitLatch(drainEnded);
+
+            assertThatThrownBy(() -> fed.get(5, TimeUnit.SECONDS)).as("how the wait of L1 ended while the failed catch-up is held").isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+            assertThatThrownBy(() -> handover.acceptIfLive("L2")).as("a live-only offer while the failed catch-up is held").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+            assertThat(handover.isReadyForLiveDelivery()).as("ready for live delivery while the failed catch-up is held").isFalse();
+            assertThat(log).as("nothing delivered after the drain of the failed replay").containsExactly("R1", "B1");
+
+            releaseCatchUp.countDown();
+            assertThatThrownBy(() -> catchUp.get(5, TimeUnit.SECONDS)).as("the failed catch-up").isInstanceOf(ExecutionException.class).hasCause(replayFailure);
+            assertThat(log).as("nothing delivered once the failed catch-up ended").containsExactly("R1", "B1");
+        } finally {
+            releaseB1.countDown();
+            releaseCatchUp.countDown();
             executor.shutdownNow();
         }
     }
@@ -4783,12 +4834,13 @@ class BlockingHandoverTest {
         }
     }
 
-    // Every case below fills the buffer (cap 2) of a handover that has no replay and no drain yet. Only the write path of
-    // an in-memory store feeds a payload without waiting, and that payload is in the store, so a replay that reads the
-    // whole history reads it. Refusing it and failing the catch-up for good would lose nothing the replay would not find.
+    // Every case below fills the buffer (cap 2) of a handover that has no replay and no drain yet. A payload fed without
+    // waiting that finds it full is in nobody's buffer. The replay that follows reads its event from the store, but a
+    // recording source learns of that append only from the drain, so dropping the payload leaves its append unrecorded.
+    // The catch-up fails instead, before a replay as during one.
 
     @Test
-    void a_payload_fed_without_waiting_that_finds_the_buffer_full_before_any_replay_is_read_by_the_replay_that_follows() {
+    void a_payload_fed_without_waiting_that_finds_the_buffer_full_before_any_replay_is_refused_and_fails_the_replay_that_follows() {
         List<String> delivered = new ArrayList<>();
         BlockingHandover<String, String> handover = BlockingHandover.create(
                 delivered::add, payload -> payload, new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
@@ -4799,26 +4851,26 @@ class BlockingHandoverTest {
         FakeSource replaying = source(List.of("L1", "L2", "L3"), false);
         Throwable caughtUp = catchThrowable(() -> handover.catchUp(replaying));
 
-        assertThat(fed).as("what feeding L3 to the full buffer threw").isNull();
-        assertThat(caughtUp).as("what the replay of the whole history threw").isNull();
-        assertThat(delivered).as("every payload once, L3 by the replay").containsExactly("L1", "L2", "L3");
-        assertThat(replaying.markCaughtUpCallCount()).as("marker writes").isOne();
-        assertThat(handover.isReadyForLiveDelivery()).isTrue();
-        assertThat(handover.acceptIfLive("L4")).isTrue();
+        assertThat(fed).as("what feeding L3 to the full buffer threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class).hasMessage(HandoverMessages.bufferOverflow(2));
+        assertThat(caughtUp).as("what the replay of the whole history threw").isNotNull().hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
+        assertThat(replaying.markCaughtUpCallCount()).as("marker writes").isZero();
+        assertThat(handover.isReadyForLiveDelivery()).isFalse();
+        assertThat(catchThrowable(() -> handover.acceptReportingDelivery("L4"))).as("what feeding a later payload threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
     }
 
     @Test
-    void a_payload_fed_without_waiting_that_finds_the_buffer_full_before_any_replay_fails_a_catch_up_that_goes_live_without_replaying() {
+    void a_payload_fed_without_waiting_that_finds_the_buffer_full_before_any_replay_is_refused_and_fails_a_catch_up_that_goes_live_without_replaying() {
         List<String> delivered = new ArrayList<>();
         BlockingHandover<String, String> handover = BlockingHandover.create(
                 delivered::add, payload -> payload, new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
         handover.acceptReportingDelivery("L1");
         handover.acceptReportingDelivery("L2");
-        handover.acceptReportingDelivery("L3");
+        Throwable fed = catchThrowable(() -> handover.acceptReportingDelivery("L3"));
         FakeSource caughtUp = source(List.of(), true);
 
         Throwable thrown = catchThrowable(() -> handover.catchUp(caughtUp));
 
+        assertThat(fed).as("what feeding L3 to the full buffer threw").isInstanceOf(BlockingHandover.PreDispatchRefusalException.class).hasMessage(HandoverMessages.bufferOverflow(2));
         assertThat(thrown).as("what the catch-up that reads no history threw, since L3 is in nobody's buffer").isNotNull().hasRootCauseMessage(HandoverMessages.bufferOverflow(2));
         assertThat(caughtUp.markCaughtUpCallCount()).as("marker writes").isZero();
         assertThat(handover.isReadyForLiveDelivery()).isFalse();

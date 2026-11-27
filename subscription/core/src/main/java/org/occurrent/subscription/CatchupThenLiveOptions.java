@@ -53,8 +53,8 @@ package org.occurrent.subscription;
  * write path. There the write call throws although the store has kept the event, and the catch-up fails, writes no
  * marker and refuses every later event until the subscription is cancelled and subscribed again. The push model's
  * {@code accept(Iterable)} stops at that event, so it routes none of the write's later events either, and the replay
- * of the new subscription delivers them from the store. A write that reaches the cap while no replay runs does not
- * throw, since the next replay reads its events from the store, and only a catch-up that skips its replay fails for it.
+ * of the new subscription delivers them from the store. A write that reaches the cap before the replay has started
+ * fails the catch-up the same way.
  *
  * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap, per
  *                          cache, of which a handover keeps two.
