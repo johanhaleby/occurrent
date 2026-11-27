@@ -63,7 +63,9 @@ P_H either.
     field item 1 stores would refuse B's own first save. The model then starts from the checkpoint that call answers.
     When another node's two-argument resolve wrote an earlier checkpoint between the model's read and the call, the
     call keeps that earlier one, and a start from the checkpoint the model read would let B's saves move the stored
-    checkpoint past the events between the two.
+    checkpoint past the events between the two. A subscribe of an id the model already runs or holds paused stores no
+    version, since the wrapped model refuses it as a duplicate, and the version would remove the field while the running
+    subscription saves from a later position.
 
 A version bump, a compare-and-set of the stored position, and never moving a position stored with a version earlier were
 considered and rejected.

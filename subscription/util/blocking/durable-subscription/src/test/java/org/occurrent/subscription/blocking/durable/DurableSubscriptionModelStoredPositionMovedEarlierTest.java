@@ -31,6 +31,7 @@ import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnsupportedStartAtException;
@@ -193,6 +194,96 @@ class DurableSubscriptionModelStoredPositionMovedEarlierTest {
                 () -> assertThat(saveOfThisNode).as("thrown by the save of an event delivered after the resume").isNull(),
                 () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(POSITION_OF_A_DELIVERED_EVENT.asString()),
                 () -> assertThat(wrapped.resumedAt).as("positions the wrapped model resumed at").containsExactly(EARLIER_POSITION)
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_duplicate_subscribe_of_a_running_subscription_at_the_checkpoint_a_start_position_moved_earlier_is_refused_and_leaves_the_mark_so_the_next_event_save_of_the_running_subscription_is_refused() {
+        // Given a running subscription, and another node's start position that moved the stored position earlier
+        wrapped.refusesAnIdItAlreadyHolds = true;
+        DurableSubscriptionModel durable = subscribedWithAListener();
+        storage.aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier();
+
+        // When
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(EARLIER_POSITION), cloudEvent -> {
+        }));
+        boolean markedAfterTheDuplicate = storage.movedEarlier;
+        Throwable saveOfTheRunningSubscription = catchThrowable(() -> wrapped.deliver(SUBSCRIPTION_ID, POSITION_OF_A_DELIVERED_EVENT));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the duplicate subscribe").isInstanceOf(DuplicateSubscriptionIdException.class),
+                () -> assertThat(markedAfterTheDuplicate).as("stored position marked as moved earlier after the duplicate subscribe").isTrue(),
+                () -> assertThat(saveOfTheRunningSubscription).as("thrown by the save of the running subscription").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(reported).as("refusals told to the listener").hasSize(1),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(EARLIER_POSITION.asString())
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_duplicate_subscribe_of_a_paused_subscription_at_the_checkpoint_a_start_position_moved_earlier_is_refused_and_leaves_the_mark() {
+        // Given a paused subscription, and another node's start position that moved the stored position earlier
+        wrapped.refusesAnIdItAlreadyHolds = true;
+        DurableSubscriptionModel durable = subscribedWithAListener();
+        durable.pauseSubscription(SUBSCRIPTION_ID);
+        storage.aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier();
+
+        // When
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(EARLIER_POSITION), cloudEvent -> {
+        }));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the duplicate subscribe").isInstanceOf(DuplicateSubscriptionIdException.class),
+                () -> assertThat(storage.movedEarlier).as("stored position marked as moved earlier").isTrue(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(EARLIER_POSITION.asString())
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_duplicate_subscribe_of_a_subscription_only_the_wrapped_model_holds_at_the_checkpoint_a_start_position_moved_earlier_is_refused_and_leaves_the_mark() {
+        // Given a subscription subscribed straight on the wrapped model, and a stored position a start position moved earlier
+        wrapped.refusesAnIdItAlreadyHolds = true;
+        wrapped.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(START), cloudEvent -> {
+        });
+        storage.anEarlierPositionStoredWithAnOlderVersionThatThisNodesStartMovedEarlier();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, id -> OptionalLong.of(VERSION));
+
+        // When
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(EARLIER_POSITION), cloudEvent -> {
+        }));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the duplicate subscribe").isInstanceOf(DuplicateSubscriptionIdException.class),
+                () -> assertThat(storage.movedEarlier).as("stored position marked as moved earlier").isTrue(),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").isNotEqualTo(OptionalLong.of(VERSION))
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_duplicate_subscribe_after_the_wrapped_model_stopped_answering_running_and_paused_is_refused_and_leaves_the_mark() {
+        // Given a subscription this model tracks whose wrapped model answers neither running nor paused but still refuses the id
+        wrapped.refusesAnIdItAlreadyHolds = true;
+        DurableSubscriptionModel durable = subscribedWithAListener();
+        wrapped.reportsNothingRunning = true;
+        storage.aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier();
+
+        // When
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(EARLIER_POSITION), cloudEvent -> {
+        }));
+
+        // Then
+        assertAll(
+                () -> assertThat(wrapped.isRunning(SUBSCRIPTION_ID)).as("running in the wrapped model").isFalse(),
+                () -> assertThat(wrapped.isPaused(SUBSCRIPTION_ID)).as("paused in the wrapped model").isFalse(),
+                () -> assertThat(thrown).as("thrown by the duplicate subscribe").isInstanceOf(DuplicateSubscriptionIdException.class),
+                () -> assertThat(storage.movedEarlier).as("stored position marked as moved earlier").isTrue(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(EARLIER_POSITION.asString())
         );
         durable.shutdown();
     }

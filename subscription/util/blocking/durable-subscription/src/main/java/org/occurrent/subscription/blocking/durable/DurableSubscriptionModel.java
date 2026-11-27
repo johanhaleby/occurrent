@@ -149,7 +149,8 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * model logs it and starts from that checkpoint anyway. When another node moved the stored checkpoint earlier between
  * this model's read and the call, the storage keeps that earlier one and removes the mark, and this model starts from
  * the checkpoint the storage answers instead. Starting at the caller's checkpoint then would let this node's saves move
- * storage past the events the other node replays.
+ * storage past the events the other node replays. A subscribe of an id this model already runs or holds paused stores
+ * no version, and the wrapped model refuses it with {@link DuplicateSubscriptionIdException}.
  * <p>
  * Without a version, or for a storage whose three-argument {@code resolveFirstCheckpointRace} answers empty, the first
  * position is written with
@@ -172,7 +173,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * The position is recorded once the wrapped model's {@code subscribe(..)} has returned, or earlier if the wrapped model
  * evaluates the start position before then, and the wrapped model gets no start position before it is stored. So with
  * the MongoDB subscription models Occurrent ships, a subscribe that the wrapped model refuses with
- * {@link DuplicateSubscriptionIdException}, because it already holds the id, stores no position.
+ * {@link DuplicateSubscriptionIdException}, because it already holds the id, stores no position and no version.
  * <p>
  * An evaluation of the start position never waits for {@code subscribe(..)} to return. When {@code subscribe(..)} or
  * another evaluation of the same subscribe has decided the position or is writing it to storage, the evaluation takes
@@ -1300,7 +1301,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 return StartAt.checkpoint(checkpoint);
             });
         } else {
-            if (originalStartAt instanceof StartAt.StartAtCheckpoint startAtCheckpoint) {
+            if (originalStartAt instanceof StartAt.StartAtCheckpoint startAtCheckpoint && !heldOnThisNode(subscriptionId)) {
                 Checkpoint startsFrom = storeThisNodesWriteVersionWithTheStoredCheckpointAt(subscriptionId, startAtCheckpoint.checkpoint);
                 startAtToUse = startsFrom == startAtCheckpoint.checkpoint ? originalStartAt : StartAt.checkpoint(startsFrom);
             } else {
@@ -1308,6 +1309,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
         return startAtToUse;
+    }
+
+    // The wrapped model refuses a subscribe of such an id as a duplicate, so it stores no version. Storing one would
+    // remove the mark a first-position race stores, and the next save of the subscription that already runs would write
+    // a later position over the earlier one without being refused. A wrapped model that was shut down answers neither
+    // running nor paused and still refuses the id, which the tracked ids catch
+    private boolean heldOnThisNode(String subscriptionId) {
+        SubscriptionModel wrapped = getWrappedSubscriptionModel();
+        return checkpointedSubscriptions.contains(subscriptionId) || wrapped.isRunning(subscriptionId) || wrapped.isPaused(subscriptionId);
     }
 
     // A start at the checkpoint stored goes on from it, so this node's version is stored with it, as for a start at the
