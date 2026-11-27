@@ -132,6 +132,8 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
         MongoEventStore eventStore = new MongoEventStore(mongoClient, database, eventCollection, new EventStoreConfig(RFC_3339_STRING));
         ExecutorService executor = Executors.newCachedThreadPool();
         EarlierPositionModel nativeModel = new EarlierPositionModel(eventCollection.getNamespace().getCollectionName(), executor);
+        // Holds the delivery of the event written after earlier, whose checkpointing would replace the position read
+        CountDownLatch assertionsRead = new CountDownLatch(1);
         try {
             Checkpoint earlier = nativeModel.globalCheckpoint();
             eventStore.write("stream", List.of(event("moves-the-clock-on", "SomethingHappened")));
@@ -141,8 +143,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
             RaceHookStorage storage = new RaceHookStorage(checkpointCollection(), other -> other.save(SUBSCRIPTION_ID, later, CheckpointWriteCondition.ifAbsent()));
             DurableSubscriptionModel durable = new DurableSubscriptionModel(nativeModel, storage, id -> OptionalLong.of(2));
 
-            durable.subscribe(SUBSCRIPTION_ID, __ -> {
-            }).waitUntilStarted();
+            durable.subscribe(SUBSCRIPTION_ID, __ -> holdUntilReleased(assertionsRead)).waitUntilStarted();
 
             assertAll(
                     () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo(earlier.asString()),
@@ -152,6 +153,7 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
                             .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class)
             );
         } finally {
+            assertionsRead.countDown();
             nativeModel.shutdown();
             executor.shutdown();
         }
@@ -329,6 +331,17 @@ class DurableSubscriptionModelFirstPositionWriteVersionMongoTest {
         } finally {
             nativeModel.shutdown();
             executor.shutdown();
+        }
+    }
+
+    private static void holdUntilReleased(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("The delivery was never let continue.");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while the delivery was held.", e);
         }
     }
 
