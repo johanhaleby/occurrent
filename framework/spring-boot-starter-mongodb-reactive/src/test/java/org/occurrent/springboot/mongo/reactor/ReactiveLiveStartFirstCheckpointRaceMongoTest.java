@@ -37,6 +37,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.BeansException;
@@ -61,6 +62,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -247,6 +249,65 @@ class ReactiveLiveStartFirstCheckpointRaceMongoTest {
     }
 
     @Test
+    void the_node_whose_pin_moved_a_stored_resume_token_back_to_its_live_start_receives_an_event_written_before_a_later_position_is_stored_by_the_other_node() throws Exception {
+        Race race = new Race();
+        race.theEarlierNodesExistenceReadFollowsTheLaterNodesFirstSave = true;
+        race.holdTheEarlierNodesStartUntilThePositionMovedOn = true;
+        Node earlier = new Node(true, race);
+        Node later = new Node(false, race);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        @Nullable ConfigurableApplicationContext earlierContext = null;
+        @Nullable ConfigurableApplicationContext laterContext = null;
+        try {
+            // The earlier node has read its live start and is held before it reads whether a checkpoint is stored
+            Future<ConfigurableApplicationContext> earlierBoot = pool.submit(() -> boot(earlier));
+            assertThat(race.earlierNodeIsAtTheFirstCheckpoint.await(WAIT_SECONDS, TimeUnit.SECONDS))
+                    .as("the earlier node read its live start and reached its read of the stored checkpoint").isTrue();
+            write(earlier, "between-the-two-live-starts");
+            writeUnrelatedDocument(race);
+            Future<ConfigurableApplicationContext> laterBoot = pool.submit(() -> boot(later));
+            laterContext = laterBoot.get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            assertThat(operationTimeOf(earlier.liveStart)).as("the earlier node's live start")
+                    .isLessThan(operationTimeOf(later.liveStart));
+
+            // The later node delivers an event and stores a resume token, before the earlier node reads what is stored
+            write(later, "delivered-by-the-later-node");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(later.received).as("events the later node received").contains("delivered-by-the-later-node"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(later.savesLanded.get())
+                    .as("checkpoint saves the later node completed").isGreaterThan(later.savesLandedWhenDelivered.get("delivered-by-the-later-node")));
+            race.laterNodeHasSavedItsCheckpoint.countDown();
+
+            // The earlier node finds the token and its pin moves it back to its live start. The node is then held, before its
+            // subscription starts, while the other node stores a position later than the event between the live starts
+            Checkpoint earlierBoundary = Objects.requireNonNull(earlier.liveStartCheckpoint, "the checkpoint the starter made of the earlier node's live start");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storedFirstCheckpoint(earlier))
+                    .as("the stored checkpoint once the earlier node's pin moved it back").isEqualTo(earlierBoundary.asString()));
+            Checkpoint laterPosition = new MongoOperationTimeCheckpoint(operationTimeOf(later.liveStart));
+            Objects.requireNonNull(earlier.checkpointStorage, "the checkpoint storage of the earlier node").save(SUBSCRIPTION_ID, laterPosition).block();
+            race.theStoredPositionHasMovedOn.countDown();
+
+            earlierContext = earlierBoot.get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            write(later, "after-both-are-live");
+            // The earlier node saves over the position stored for it, which can stop its delivery once it has received the
+            // event it started at, so it is enough that it has received that one or one written after it
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(earlier.received).as("events the earlier node received")
+                    .containsAnyOf("between-the-two-live-starts", "after-both-are-live"));
+
+            assertThat(earlier.received).as("events the earlier node received").contains("between-the-two-live-starts");
+        } finally {
+            race.laterNodeHasSavedItsCheckpoint.countDown();
+            race.theStoredPositionHasMovedOn.countDown();
+            pool.shutdownNow();
+            if (earlierContext != null) {
+                earlierContext.close();
+            }
+            if (laterContext != null) {
+                laterContext.close();
+            }
+        }
+    }
+
+    @Test
     void a_restart_with_a_resume_token_stored_since_before_its_live_start_goes_on_from_the_token() throws Exception {
         Race race = new Race();
         race.nothingIsHeld = true;
@@ -363,6 +424,10 @@ class ReactiveLiveStartFirstCheckpointRaceMongoTest {
         volatile boolean theEarlierNodesExistenceReadFollowsTheLaterNodesFirstSave;
         // Neither node is held, as for nodes that boot one after the other
         volatile boolean nothingIsHeld;
+        // The earlier node's start waits, once its pin moved the stored checkpoint back to its live start, until a
+        // position later than the event between the live starts is stored
+        final CountDownLatch theStoredPositionHasMovedOn = new CountDownLatch(1);
+        volatile boolean holdTheEarlierNodesStartUntilThePositionMovedOn;
     }
 
     static final class Node {
@@ -439,6 +504,19 @@ class ReactiveLiveStartFirstCheckpointRaceMongoTest {
                 }
                 return ((Mono<Checkpoint>) invocation.callRealMethod()).doFinally(__ -> race.laterNodeHasWritten.countDown());
             }
+            if (method.equals("resolveFirstCheckpointRace") && earlierLiveStart && race.holdTheEarlierNodesStartUntilThePositionMovedOn) {
+                Mono<Checkpoint> resolved = (Mono<Checkpoint>) invocation.callRealMethod();
+                return resolved.delayUntil(__ -> Mono.<Void>fromRunnable(() -> {
+                    try {
+                        if (!race.theStoredPositionHasMovedOn.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("The stored position never moved on, so the earlier node was held for nothing");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                }).subscribeOn(Schedulers.boundedElastic()));
+            }
             if (method.equals("read") && earlierLiveStart && race.holdTheEarlierNodesSecondRead && heldAtTheSecondRead.compareAndSet(false, true)) {
                 Mono<Checkpoint> read = (Mono<Checkpoint>) invocation.callRealMethod();
                 return Mono.<Void>fromRunnable(() -> {
@@ -479,11 +557,19 @@ class ReactiveLiveStartFirstCheckpointRaceMongoTest {
         public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
             if (bean instanceof LiveStartCheckpoints starter) {
                 Node node = node();
-                return (LiveStartCheckpoints) liveStart -> {
-                    @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
-                    node.liveStart = liveStart;
-                    node.liveStartCheckpoint = checkpoint;
-                    return checkpoint;
+                return new LiveStartCheckpoints() {
+                    @Override
+                    public @Nullable Checkpoint checkpointOf(String liveStart) {
+                        @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
+                        node.liveStart = liveStart;
+                        node.liveStartCheckpoint = checkpoint;
+                        return checkpoint;
+                    }
+
+                    @Override
+                    public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                        return starter.ordersCheckpointsIn(checkpointStorage);
+                    }
                 };
             }
             if (bean instanceof EventStore eventStore) {

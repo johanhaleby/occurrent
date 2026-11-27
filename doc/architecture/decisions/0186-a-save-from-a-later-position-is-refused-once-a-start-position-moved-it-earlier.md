@@ -60,7 +60,10 @@ P_H either.
 10. A subscribe of the blocking `DurableSubscriptionModel` at `StartAt.checkpoint(..)` of the stored checkpoint stores
     this node's version with it through the three-argument `resolveFirstCheckpointRace`, as a subscribe at the model
     default does. The starter subscribes that way without `CompetingConsumerSubscriptionModel`, and without it the
-    field item 1 stores would refuse B's own first save.
+    field item 1 stores would refuse B's own first save. The model then starts from the checkpoint that call answers.
+    When another node's two-argument resolve wrote an earlier checkpoint between the model's read and the call, the
+    call keeps that earlier one, and a start from the checkpoint the model read would let B's saves move the stored
+    checkpoint past the events between the two.
 
 A version bump, a compare-and-set of the stored position, and never moving a position stored with a version earlier were
 considered and rejected.
@@ -90,11 +93,16 @@ is earlier than the live start the restart reads. A `lineageOrigin` that is late
 only deliver events again. One that is earlier would keep a checkpoint that skips events, so no write sets it from
 anything other than an operation time it writes.
 
-The race in the second paragraph of the context stays open in three cases. A node on 0.34.0 rewrites the whole
+The race in the second paragraph of the context stays open in two cases. A node on 0.34.0 rewrites the whole
 document without `lineageOrigin`, so the next race compares as in 0.34.0. A node that stores a resume token as its
-first position, such as one that reads no operation time from MongoDB, stores no `lineageOrigin` either. And a
-checkpoint storage that can't compare positions, such as `SpringRedisCheckpointStorage`, keeps the stored checkpoint
-as in 0.34.0.
+first position, such as one that reads no operation time from MongoDB, stores no `lineageOrigin` either.
+
+A checkpoint storage that can't compare positions, such as `SpringRedisCheckpointStorage`, would keep the stored
+checkpoint. So the Spring Boot starters store a live start only over the MongoDB storage of the starter, as
+[ADR 172](0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md) records, and a subscription over any
+other storage starts as in 0.34.0. A write a `@PostConstruct` method
+makes directly to the event store before the subscription registers is then missed on a first start, as in 0.34.0, on
+a single node as much as on several.
 
 The `notOlderThan` contract of the MongoDB storages, released in 0.33.0, refuses a write it allowed before. The
 two-argument `resolveFirstCheckpointRace`, released in 0.34.0, now writes over a stored resume token or generic

@@ -4269,10 +4269,17 @@ is when it subscribes, which is once the startup scan is done, in these cases:
 - It would store that position as its first checkpoint, which every live start but `NOW` with
   `resumeBehavior = SAME_AS_START_AT` does, and Spring can't pick one `CheckpointStorage` bean, as it does with a
   single one or a `@Primary` one among several.
+- It would store that position as its first checkpoint, and the `CheckpointStorage` Spring picks isn't the MongoDB
+  storage of the starter, `SpringMongoCheckpointStorage` on the blocking starter or `ReactorCheckpointStorage` on the
+  reactive one, a subclass included. Another storage, such as `SpringRedisCheckpointStorage`, would keep a checkpoint
+  another node stored after this node read where the event store was, and the handler would skip the events between
+  the two.
 
 Such a handler misses an event written directly to the event store while the scan runs, for example from the
 `@PostConstruct` method of a bean the scan creates. In 0.34.0 it subscribed as the scan registered it, so it got that
-event when the bean was created after it had subscribed.
+event when the bean was created after it had subscribed. Over a checkpoint storage other than the MongoDB storage of
+the starter, a write a `@PostConstruct` method makes directly to the event store before the handler registers is missed
+on a first start, as in 0.34.0, on a single node as much as on several.
 
 The starter writes that first checkpoint with `CheckpointWriteCondition.ifAbsent()`. A `CheckpointStorage` of your own
 that answers `false` from `evaluatesWriteConditionsFor` fails startup instead, unless

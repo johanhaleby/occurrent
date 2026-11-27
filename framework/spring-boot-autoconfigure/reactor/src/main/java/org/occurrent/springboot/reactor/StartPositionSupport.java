@@ -69,6 +69,8 @@ import java.util.function.UnaryOperator;
  * is created. A first start that goes straight to live begins there, so an event written while the application starts
  * reaches it. A bean built after startup begins at a boundary read when it is created. Reading and pinning the
  * boundary block, so neither happens on a Reactor non-blocking thread, and a start there is the one it was before.
+ * Over a checkpoint storage the store starter doesn't know to compare with the boundary, the start is the one it was
+ * in 0.34.0, except NOW under SAME_AS_START_AT, which stores nothing and still begins at the boundary.
  */
 class StartPositionSupport {
 
@@ -360,10 +362,14 @@ class StartPositionSupport {
 
     // Pinned whether or not something is stored, since another node may have pinned its own later boundary, and
     // StartPositionPin settles that race by order. Null when there is no storage to pin in, and when the pin kept a
-    // stored checkpoint it can't order against the boundary.
+    // stored checkpoint it can't order against the boundary. Null as well, before anything is read or written, over a
+    // storage the store starter doesn't know to compare with the boundary, since it would keep a checkpoint another
+    // node stored after the boundary was read. The subscription then starts as in 0.34.0, and its durable model reads
+    // storage before it reads the position it records.
     private @Nullable Checkpoint pinAsFirstCheckpoint(String subscriptionId, Checkpoint boundary) {
         @Nullable CheckpointStorage checkpointStorage = applicationContext.getBeanProvider(CheckpointStorage.class).getIfUnique();
-        if (checkpointStorage == null) {
+        @Nullable LiveStartCheckpoints checkpoints = applicationContext.getBeanProvider(LiveStartCheckpoints.class).getIfUnique();
+        if (checkpointStorage == null || checkpoints == null || !checkpoints.ordersCheckpointsIn(checkpointStorage)) {
             return null;
         }
         boolean checkpointAlreadyExisted = checkpointStorage.read(subscriptionId).blockOptional().isPresent();

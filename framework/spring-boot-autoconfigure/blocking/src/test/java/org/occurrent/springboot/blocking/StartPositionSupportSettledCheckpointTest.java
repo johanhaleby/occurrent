@@ -209,8 +209,28 @@ class StartPositionSupportSettledCheckpointTest {
         assertThat(checkpointOf(answeredToTheOtherStart)).isEqualTo(BOUNDARY.asString());
     }
 
+    @ParameterizedTest
+    @CsvSource({"STREAM,NOW", "STREAM,DEFAULT", "AGNOSTIC,NOW", "AGNOSTIC,DEFAULT", "DCB,NOW", "DCB,DEFAULT"})
+    void starts_as_before_and_pins_nothing_when_the_live_start_checkpoints_cannot_order_the_storage(Api api, StartPosition startPosition) {
+        // Given a storage the store starter does not know to order the boundary. A pin over it would keep a checkpoint
+        // another node stored after the boundary was read, so the start is the 0.34.0 one and nothing is read or written
+        StubStorage storage = new StubStorage();
+        storage.storedByAnotherNodeAfterTheRead = LATER;
+
+        // When
+        StartAt start = startOf(api, startPosition, storage, false);
+
+        // Then
+        assertThat(startPosition == StartPosition.NOW ? start.isNow() : start.isDefault()).as("start is the one it was in 0.34.0").isTrue();
+        assertThat(storage.stored).as("nothing is stored by a pin, and the existence of a checkpoint is not asked").isNull();
+    }
+
     private static StartAt startOf(Api api, StartPosition startPosition, StubStorage storage) {
-        StartPositionSupport support = support(storage);
+        return startOf(api, startPosition, storage, true);
+    }
+
+    private static StartAt startOf(Api api, StartPosition startPosition, StubStorage storage, boolean liveStartCheckpointsOrderThem) {
+        StartPositionSupport support = support(storage, liveStartCheckpointsOrderThem);
         support.startAtLateBoundary(ID, LIVE_START);
         return switch (api) {
             case STREAM -> support.generateStartAt(ID, new StartAtStartPosition(switch (startPosition) {
@@ -228,13 +248,23 @@ class StartPositionSupportSettledCheckpointTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static StartPositionSupport support(CheckpointStorage storage) {
+    private static StartPositionSupport support(CheckpointStorage storage, boolean liveStartCheckpointsOrderThem) {
         ApplicationContext applicationContext = ContextWithoutBoundaryStore.mocked();
         ObjectProvider<CheckpointStorage> storages = mock(ObjectProvider.class);
         when(storages.getIfUnique()).thenReturn(storage);
         when(applicationContext.getBeanProvider(CheckpointStorage.class)).thenReturn(storages);
         ObjectProvider<LiveStartCheckpoints> liveStartCheckpoints = mock(ObjectProvider.class);
-        LiveStartCheckpoints checkpoints = liveStart -> GlobalCheckpoint.of(Long.parseLong(liveStart));
+        LiveStartCheckpoints checkpoints = new LiveStartCheckpoints() {
+            @Override
+            public Checkpoint checkpointOf(String liveStart) {
+                return GlobalCheckpoint.of(Long.parseLong(liveStart));
+            }
+
+            @Override
+            public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                return liveStartCheckpointsOrderThem;
+            }
+        };
         when(liveStartCheckpoints.getIfUnique()).thenReturn(checkpoints);
         when(applicationContext.getBeanProvider(LiveStartCheckpoints.class)).thenReturn(liveStartCheckpoints);
         ObjectProvider<SubscriptionResumePoints> resumePoints = mock(ObjectProvider.class);

@@ -269,6 +269,64 @@ class LiveStartFirstCheckpointRaceOwnSubscriptionModelMongoTest {
     }
 
     @Test
+    void the_node_whose_pin_moved_a_stored_resume_token_back_to_its_boundary_starts_there_and_receives_the_event_written_before_the_other_nodes_next_save() throws Exception {
+        Race race = new Race();
+        race.theBehindNodesExistenceReadFollowsTheHoldingNodesFirstToken = true;
+        race.behindNodeMayWrite.countDown();
+        Node behind = new Node(true, race);
+        Node holding = new Node(false, race);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        @Nullable ConfigurableApplicationContext behindContext = null;
+        @Nullable ConfigurableApplicationContext holdingContext = null;
+        try {
+            // The behind node has read its boundary, and is held before it reads whether a checkpoint is stored
+            Future<ConfigurableApplicationContext> behindBoot = pool.submit(() -> boot(behind));
+            assertThat(race.behindNodeIsAtItsFirstCheckpointWrite.await(WAIT_SECONDS, TimeUnit.SECONDS))
+                    .as("the behind node read its boundary and reached its read of the stored checkpoint").isTrue();
+            write(behind, "e1");
+            // Moves the cluster time on, so the boundary of the holding node is strictly after e1
+            writeUnrelatedDocument(race);
+
+            // The holding node delivers an event and saves a resume token over its boundary, before the behind node reads what is stored
+            holdingContext = pool.submit(() -> boot(holding)).get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            assertThat(operationTimeOf(behind.liveStart)).as("the behind node's boundary").isLessThan(operationTimeOf(holding.liveStart));
+            write(holding, "e2");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(holding.received).as("events the holding node received").contains("e2"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storedCheckpoint(holding))
+                    .as("the holding node saved a resume token over its boundary").isNotEqualTo(boundaryOf(holding)));
+            race.holdingNodeHasSavedAToken.countDown();
+
+            // The behind node found that token stored, so its pin settles the race by position and writes its earlier boundary over the token
+            assertThat(race.behindNodeIsAtItsSubscribe.await(WAIT_SECONDS, TimeUnit.SECONDS)).as("the behind node got to its subscribe, held there").isTrue();
+            assertThat(storedCheckpoint(holding)).as("the checkpoint stored once the pin settled the race").isEqualTo(boundaryOf(behind));
+
+            // The holding node saves a later resume token over the earlier boundary before the behind node's durable model reads storage
+            write(holding, "e3");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(holding.received).as("events the holding node received").contains("e3"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storedCheckpoint(holding))
+                    .as("the holding node saved a later resume token over the earlier boundary").isNotEqualTo(boundaryOf(behind)));
+            race.behindNodeMaySubscribe.countDown();
+
+            behindContext = behindBoot.get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            write(holding, "e4");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(behind.received).as("events the behind node received").contains("e4"));
+
+            // Reading the checkpoint stored when it subscribes would start the behind node after e1, which no node delivers
+            assertThat(behind.received).as("events the behind node received, the one written between the two boundaries among them").contains("e1");
+        } finally {
+            race.holdingNodeHasSavedAToken.countDown();
+            race.behindNodeMaySubscribe.countDown();
+            pool.shutdownNow();
+            if (behindContext != null) {
+                behindContext.close();
+            }
+            if (holdingContext != null) {
+                holdingContext.close();
+            }
+        }
+    }
+
+    @Test
     void a_restart_with_a_resume_token_stored_since_before_its_boundary_goes_on_from_the_token() throws Exception {
         Race race = new Race();
         Node first = new Node(false, race);
@@ -466,11 +524,19 @@ class LiveStartFirstCheckpointRaceOwnSubscriptionModelMongoTest {
         public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
             if (bean instanceof LiveStartCheckpoints starter) {
                 Node node = node();
-                return (LiveStartCheckpoints) liveStart -> {
-                    @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
-                    node.liveStart = liveStart;
-                    node.liveStartCheckpoint = checkpoint;
-                    return checkpoint;
+                return new LiveStartCheckpoints() {
+                    @Override
+                    public @Nullable Checkpoint checkpointOf(String liveStart) {
+                        @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
+                        node.liveStart = liveStart;
+                        node.liveStartCheckpoint = checkpoint;
+                        return checkpoint;
+                    }
+
+                    @Override
+                    public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                        return starter.ordersCheckpointsIn(checkpointStorage);
+                    }
                 };
             }
             if (bean instanceof CheckpointStorage storage) {

@@ -146,7 +146,10 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * before it starts there, through the three-argument {@code resolveFirstCheckpointRace} with that checkpoint as the
  * position. Without it, a mark another node's first position left stored would refuse this node's first save of a
  * delivered event. The start is the caller's, so when the storage holds a newer write version or the call fails, this
- * model logs it and starts from that checkpoint anyway.
+ * model logs it and starts from that checkpoint anyway. When another node moved the stored checkpoint earlier between
+ * this model's read and the call, the storage keeps that earlier one and removes the mark, and this model starts from
+ * the checkpoint the storage answers instead. Starting at the caller's checkpoint then would let this node's saves move
+ * storage past the events the other node replays.
  * <p>
  * Without a version, or for a storage whose three-argument {@code resolveFirstCheckpointRace} answers empty, the first
  * position is written with
@@ -1298,9 +1301,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             });
         } else {
             if (originalStartAt instanceof StartAt.StartAtCheckpoint startAtCheckpoint) {
-                storeThisNodesWriteVersionWithTheStoredCheckpointAt(subscriptionId, startAtCheckpoint.checkpoint);
+                Checkpoint startsFrom = storeThisNodesWriteVersionWithTheStoredCheckpointAt(subscriptionId, startAtCheckpoint.checkpoint);
+                startAtToUse = startsFrom == startAtCheckpoint.checkpoint ? originalStartAt : StartAt.checkpoint(startsFrom);
+            } else {
+                startAtToUse = originalStartAt;
             }
-            startAtToUse = originalStartAt;
         }
         return startAtToUse;
     }
@@ -1308,18 +1313,33 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // A start at the checkpoint stored goes on from it, so this node's version is stored with it, as for a start at the
     // model default. That also removes the mark a first-position race stores when it moves the stored checkpoint
     // earlier, which would refuse this node's own saves from that checkpoint. Runs under the id lock, so no cancel or
-    // resume of the id comes between the read and the write. Nothing is written when another checkpoint is stored, or
-    // none. When a newer version is stored, or the write fails, the subscription still starts at that checkpoint
-    private void storeThisNodesWriteVersionWithTheStoredCheckpointAt(String subscriptionId, Checkpoint startAt) {
+    // resume of the id on this node comes between the read and the write. Nothing is written when another checkpoint
+    // is stored, or none. When a newer version is stored, or the write fails, the subscription still starts at that
+    // checkpoint.
+    //
+    // Another node can still move the stored checkpoint earlier between the read and the write. The storage then keeps
+    // that earlier checkpoint, stores this node's version with it and removes the mark, so this node no longer starts at
+    // startAt but at the checkpoint the storage answers. Starting at startAt instead would let this node's saves move
+    // storage past the events the other node replays from the earlier checkpoint, and lose them should that node stop
+    // before it reaches startAt. The storage never answers a checkpoint later than startAt, so this skips nothing
+    private Checkpoint storeThisNodesWriteVersionWithTheStoredCheckpointAt(String subscriptionId, Checkpoint startAt) {
         OptionalLong writeVersion = writeVersionOfStoredCheckpoint(subscriptionId);
         if (writeVersion.isEmpty()) {
-            return;
+            return startAt;
         }
         try {
             Checkpoint stored = storage.read(subscriptionId);
-            if (stored != null && stored.asString().equals(startAt.asString())) {
-                storage.resolveFirstCheckpointRace(subscriptionId, stored, writeVersion.getAsLong());
+            if (stored == null || !stored.asString().equals(startAt.asString())) {
+                return startAt;
             }
+            Optional<Checkpoint> governs = storage.resolveFirstCheckpointRace(subscriptionId, stored, writeVersion.getAsLong());
+            if (governs.isEmpty() || governs.get().asString().equals(startAt.asString())) {
+                return startAt;
+            }
+            log.info("Another node moved the checkpoint stored for subscription {} earlier, to {}, after this node read {} " +
+                     "there and before it stored its write version with it. The subscription starts at {}.",
+                    subscriptionId, governs.get().asString(), startAt.asString(), governs.get().asString());
+            return governs.get();
         } catch (CheckpointWriteConditionNotFulfilledException e) {
             log.debug("A newer write version is stored for subscription {}, so this node's version {} was not stored with the " +
                       "checkpoint {} it starts at.", subscriptionId, writeVersion.getAsLong(), startAt.asString());
@@ -1328,6 +1348,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             log.warn("Could not store this node's write version with the checkpoint {} that subscription {} starts at. It " +
                      "starts there anyway.", startAt.asString(), subscriptionId, e);
         }
+        return startAt;
     }
 
     // Read once the subscribe is tracked, so a registration it replaced has stopped writing and what is read was stored

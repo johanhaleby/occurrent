@@ -79,7 +79,9 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
  * <p>
  * It also holds the start boundary of the application context, the live start the event store reports when its bean
  * is created. A first start that goes straight to live begins there, so an event written while the application starts
- * reaches it. A bean built after startup begins at a boundary read when it is created.
+ * reaches it. A bean built after startup begins at a boundary read when it is created. Over a checkpoint storage the
+ * store starter doesn't know to compare with the boundary, the start is the one it was in 0.34.0, except NOW under
+ * SAME_AS_START_AT, which stores nothing and still begins at the boundary.
  */
 class StartPositionSupport {
 
@@ -256,7 +258,8 @@ class StartPositionSupport {
     // boundary instead of wherever the feed has reached when the model subscribes (issue 979). NOW under
     // SAME_AS_START_AT stores nothing and starts the live model at the boundary. Every other one pins the boundary as
     // the first checkpoint and starts at the checkpoint the pin settled, see startAtTheSettledCheckpoint. Without a
-    // boundary, or with a stored checkpoint the pin kept, the start is the one it was before.
+    // boundary, with a stored checkpoint the pin kept, or over a storage the store starter doesn't know to compare with
+    // the boundary, the start is the one it was before.
     private StartAt liveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
         @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
         if (boundary != null) {
@@ -339,10 +342,15 @@ class StartPositionSupport {
     // pin settled. Where a checkpoint was stored already, the existence read ran after the boundary was read, so the
     // stored checkpoint can belong to a node that booted at the same time. When the pin settled on the boundary, the
     // storage proved the stored one later and wrote the boundary over it, and the subscription starts there. Otherwise
-    // the stored checkpoint is kept, and the subscription resumes from it as it did before
+    // the stored checkpoint is kept, and the subscription resumes from it as it did before.
+    //
+    // Nothing is pinned over a storage the store starter doesn't know to compare with the boundary, since it would keep
+    // a checkpoint another node stored after the boundary was read. The subscription then starts as in 0.34.0, and its
+    // durable model reads storage before it reads the position it records.
     private @Nullable Checkpoint pinOverNothingStored(String subscriptionId, Checkpoint boundary) {
         @Nullable CheckpointStorage checkpointStorage = applicationContext.getBeanProvider(CheckpointStorage.class).getIfUnique();
-        if (checkpointStorage == null) {
+        @Nullable LiveStartCheckpoints checkpoints = applicationContext.getBeanProvider(LiveStartCheckpoints.class).getIfUnique();
+        if (checkpointStorage == null || checkpoints == null || !checkpoints.ordersCheckpointsIn(checkpointStorage)) {
             return null;
         }
         boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);

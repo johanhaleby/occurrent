@@ -230,8 +230,9 @@ public interface CheckpointStorage {
      * <p>
      * The blocking {@code DurableSubscriptionModel} also calls this before it starts a subscription at a
      * {@code StartAt.checkpoint(..)} of the stored checkpoint, with that checkpoint as {@code candidate}, so
-     * {@code writeVersion} is stored with it. A start at the model default from a checkpoint already stored goes
-     * through {@link #storeWriteVersion(String, long)} instead.
+     * {@code writeVersion} is stored with it, and starts from the checkpoint this answers. That is an earlier one when
+     * another node stored it between the model's read and this call. A start at the model default from a checkpoint
+     * already stored goes through {@link #storeWriteVersion(String, long)} instead.
      * <p>
      * When the MongoDB storages keep the stored checkpoint, they also remove the mark the two-argument
      * {@link #resolveFirstCheckpointRace(String, Checkpoint)} stores when it moves a position earlier, so a

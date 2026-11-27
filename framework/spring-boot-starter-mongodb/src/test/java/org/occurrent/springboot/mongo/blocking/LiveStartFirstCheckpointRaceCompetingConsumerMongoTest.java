@@ -247,10 +247,18 @@ class LiveStartFirstCheckpointRaceCompetingConsumerMongoTest {
             if (bean instanceof LiveStartCheckpoints starter) {
                 assert beanFactory != null;
                 Recorder recorder = beanFactory.getBean(Recorder.class);
-                return (LiveStartCheckpoints) liveStart -> {
-                    @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
-                    recorder.boundary = checkpoint;
-                    return checkpoint;
+                return new LiveStartCheckpoints() {
+                    @Override
+                    public @Nullable Checkpoint checkpointOf(String liveStart) {
+                        @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
+                        recorder.boundary = checkpoint;
+                        return checkpoint;
+                    }
+
+                    @Override
+                    public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                        return starter.ordersCheckpointsIn(checkpointStorage);
+                    }
                 };
             }
             if (bean instanceof EventStore eventStore) {
