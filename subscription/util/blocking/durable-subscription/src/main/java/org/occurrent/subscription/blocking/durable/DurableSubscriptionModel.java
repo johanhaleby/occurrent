@@ -1324,8 +1324,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // model default. That also removes the mark a first-position race stores when it moves the stored checkpoint
     // earlier, which would refuse this node's own saves from that checkpoint. Runs under the id lock, so no cancel or
     // resume of the id on this node comes between the read and the write. Nothing is written when another checkpoint
-    // is stored, or none. When a newer version is stored, or the write fails, the subscription still starts at that
-    // checkpoint.
+    // is stored, or none, and the version source isn't asked then, so a start at a checkpoint of the caller's own reads
+    // no version before its first event. When a newer version is stored, or the write fails, the subscription still
+    // starts at that checkpoint.
     //
     // Another node can still move the stored checkpoint earlier between the read and the write. The storage then keeps
     // that earlier checkpoint, stores this node's version with it and removes the mark, so this node no longer starts at
@@ -1333,15 +1334,23 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // storage past the events the other node replays from the earlier checkpoint, and lose them should that node stop
     // before it reaches startAt. The storage never answers a checkpoint later than startAt, so this skips nothing
     private Checkpoint storeThisNodesWriteVersionWithTheStoredCheckpointAt(String subscriptionId, Checkpoint startAt) {
+        Checkpoint stored;
+        try {
+            stored = storage.read(subscriptionId);
+        } catch (Exception e) {
+            // Exception, since a storage written in Kotlin can throw a checked exception
+            log.warn("Could not read the checkpoint stored for subscription {}, so this node's write version was not stored " +
+                     "with the checkpoint {} it starts at. It starts there anyway.", subscriptionId, startAt.asString(), e);
+            return startAt;
+        }
+        if (stored == null || !stored.asString().equals(startAt.asString())) {
+            return startAt;
+        }
         OptionalLong writeVersion = writeVersionOfStoredCheckpoint(subscriptionId);
         if (writeVersion.isEmpty()) {
             return startAt;
         }
         try {
-            Checkpoint stored = storage.read(subscriptionId);
-            if (stored == null || !stored.asString().equals(startAt.asString())) {
-                return startAt;
-            }
             Optional<Checkpoint> governs = storage.resolveFirstCheckpointRace(subscriptionId, stored, writeVersion.getAsLong());
             if (governs.isEmpty() || governs.get().asString().equals(startAt.asString())) {
                 return startAt;
