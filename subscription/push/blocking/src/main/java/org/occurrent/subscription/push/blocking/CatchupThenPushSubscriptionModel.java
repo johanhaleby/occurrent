@@ -65,8 +65,8 @@ import java.util.stream.Stream;
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
  *       time via {@link PositionOrderedReader}, then delivers what it buffered and goes live. A write to the in-memory
  *       event store waits on the writing thread while those buffered events are delivered, so the catch-up goes live
- *       however fast events are written, and a handler must not wait for a lock that the writing thread holds. An
- *       event that commits during a replay that runs to the end, while the buffer has room, is delivered either by the
+ *       however fast events are written. So a handler must not wait for a lock that the writing thread holds, or for
+ *       another thread that writes to the event store, such as a write it submits to an executor. An event that commits during a replay that runs to the end, while the buffer has room, is delivered either by the
  *       replay or by the buffered feed. One that finds the buffer full fails the catch-up, which writes no marker,
  *       and the write that found it full throws once the store has committed the event. The same goes for one that
  *       finds it full before the replay has started. The overlap between the replay and the
@@ -799,7 +799,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * had read the whole history and held the id when the write began.
      * <p>
      * The events buffered during the replay are delivered before the marker is written, and the delivery asks whether
-     * this model is stopped before each event and once more before the marker. A stop it finds ends the delivery and
+     * this model is stopped before each event and once more before it goes live. A stop it finds ends the delivery and
      * writes no marker. The events not yet delivered stay buffered for the catch-up {@link #start(boolean)} runs.
      * <p>
      * Live events fed while stopped are dropped rather than refused, the dropped-not-deferred contract every stopped

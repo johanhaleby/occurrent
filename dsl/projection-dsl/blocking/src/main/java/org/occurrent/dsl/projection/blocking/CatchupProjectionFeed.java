@@ -498,7 +498,7 @@ public final class CatchupProjectionFeed<E> {
      * It stops a catch-up asked for before it, whether its replay has started or not, and none asked for after it,
      * also when the view asks for one while the replay it stops is still running. The replay looks for a stop before
      * each event and once more after the last one, also when the history is empty. The feed then looks again before
-     * each live event it held during the replay and once more right before the marker, so a stop that comes while a
+     * each live event it held during the replay and once more right before it goes live, so a stop that comes while a
      * view that buffers during a replay writes that buffer in {@code replayCompleted()} is noticed too. A stop after
      * that last look is not noticed, and neither is a stop before a catch-up that finds the marker already written,
      * since that catch-up replays nothing. A catch-up that misses the stop goes live.

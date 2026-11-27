@@ -165,7 +165,8 @@ public final class HandoverMessages {
      */
     public static String alreadyAppliedNotRecorded(String noun) {
         return "The replay of this " + noun + " already applied the event, and recording that it did failed. Do not "
-                + "acknowledge it. Offer it again and a later delivery records it.";
+                + "acknowledge it. Offer it again and a later delivery records it, while the replay's de-dup cache still "
+                + "holds the event.";
     }
 
     /**
@@ -202,7 +203,7 @@ public final class HandoverMessages {
         return "A live event was fed to this " + noun + " and waited on from inside the handler or a callback of "
                 + "another catch-up feed or subscription while this " + noun + " was not live. A catch-up of the other "
                 + "one can be waiting for this thread, so the two could wait for each other, and the event is refused "
-                + "instead. Feed it from another thread, or without waiting for it.";
+                + "instead. Feed it without waiting for it, or from another thread that this handler does not wait for.";
     }
 
     /**

@@ -39,10 +39,10 @@ class HandoverMessagesTest {
     }
 
     @Test
-    void the_refusal_from_inside_another_handover_names_the_noun_and_says_to_feed_from_another_thread_or_without_waiting() {
+    void the_refusal_from_inside_another_handover_names_the_noun_and_says_to_feed_without_waiting_or_from_another_thread_it_does_not_wait_for() {
         assertThat(HandoverMessages.acceptedFromAnotherHandover("projection feed"))
                 .contains("this projection feed")
-                .endsWith("Feed it from another thread, or without waiting for it.");
+                .endsWith("Feed it without waiting for it, or from another thread that this handler does not wait for.");
     }
 
     @Test
