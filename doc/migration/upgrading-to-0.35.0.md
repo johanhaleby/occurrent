@@ -686,7 +686,8 @@ There is no OpenRewrite recipe for this.
 An application whose blocking `DurableSubscriptionModel` has a `CheckpointWriteVersionSource` and stores its
 checkpoints in `NativeMongoCheckpointStorage` or `SpringMongoCheckpointStorage`, with the same subscription started on
 more than one node, as under `CompetingConsumerSubscriptionModel`. Compiles unchanged. `ReactorCheckpointStorage`
-refuses the same saves, though the reactor durable model never makes one.
+refuses the same saves. `ReactorDurableSubscriptionModel` makes one only after a cancel of the id whose checkpoint
+delete a subscribe of the same id took over, and then saves once more, as below.
 
 ### What changes
 
@@ -708,6 +709,15 @@ resume replays from B's position, so the events after H's position are delivered
 A `resumeSubscription(id, startAt)`, on the durable model or on a stream catch-up model, and the position the durable
 model stores after a lost change stream history, store this node's version with the stored checkpoint when the storage
 refuses them this way, and write once more.
+
+`ReactorDurableSubscriptionModel` saves its checkpoints with `CheckpointWriteCondition.any()`, which isn't refused and
+removes the mark, so on the reactor stack H's next save stores its later position over B's, as in 0.34.0. B starts
+from its earlier position and delivers the events between the two, but when B stops before it has delivered them all
+and a save of H's is the last one stored, the events B hadn't delivered are skipped.
+[#1598](https://github.com/johanhaleby/occurrent/issues/1598) tracks that. The model saves with `notOlderThan` only
+after a cancel whose checkpoint delete a subscribe of the same id on that node took over. When the storage refuses
+that save this way, the model logs a warning and saves the checkpoint once more with `any()`, which keeps the stored
+version, so the delete the cancel started is still refused.
 
 ### What to do
 

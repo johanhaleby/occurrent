@@ -66,6 +66,9 @@ P_H either.
     checkpoint past the events between the two. A subscribe of an id the model already runs or holds paused stores no
     version, since the wrapped model refuses it as a duplicate, and the version would remove the field while the running
     subscription saves from a later position.
+11. When the field refuses the `notOlderThan` save that `ReactorDurableSubscriptionModel` makes after a subscribe took
+    over the checkpoint delete of a cancel of the same id, the model logs a warning and saves the checkpoint once more
+    with `any()`. A refusal with a newer stored version is handled as before.
 
 A version bump, a compare-and-set of the stored position, and never moving a position stored with a version earlier were
 considered and rejected.
@@ -79,11 +82,17 @@ log, until something pauses and resumes it.
 
 A save with `any()`, which a `DurableSubscriptionModel` without a version source writes, isn't refused and removes the
 field. Such a node has no fence against an older lease either. The reactor `ReactorDurableSubscriptionModel` saves an
-event's checkpoint with `any()`. On the reactor stack B starts from P_B, the checkpoint the first-position race settled,
-also through the reactive Spring Boot starter, so B delivers the events between P_B and P_H. The blocking Spring Boot
+event's checkpoint with `any()`, except after a subscribe took over the checkpoint delete of a cancel of the same id.
+That save is `notOlderThan` the version the takeover writes, and without item 11 `ReactorMongoSubscriptionModel` would
+retry its delivery, and run the handler for the same event again, for as long as the field stays stored. The save with
+`any()` keeps the stored version, so the delete and the write back of the takeover are still refused. On the reactor
+stack B starts from P_B, the checkpoint the first-position race settled, also through the reactive Spring Boot starter, so B delivers the events between P_B and P_H. The blocking Spring Boot
 starter starts B from P_B the same way when the application defines a subscription model without
 `CompetingConsumerSubscriptionModel`. When B stops before it has delivered them all and a save of H's is the last one
 stored, B's next start resumes after P_H, and no node delivers the events between P_B and P_H that B hadn't reached.
+On the reactor stack 0.34.0 skips those events the same way, and
+[#1598](https://github.com/johanhaleby/occurrent/issues/1598) tracks it, with a replay from P_B as the blocking stack
+runs one.
 
 Under `CompetingConsumerSubscriptionModel` the blocking starter starts B at the model default, which reads the stored
 checkpoint once B holds the lease. With `occurrent.subscription.competing-consumer.fence-checkpoints=false` the
