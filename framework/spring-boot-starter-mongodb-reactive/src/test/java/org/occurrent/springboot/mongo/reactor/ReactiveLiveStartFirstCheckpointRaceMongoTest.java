@@ -16,6 +16,7 @@
 
 package org.occurrent.springboot.mongo.reactor;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.bson.BsonTimestamp;
@@ -74,6 +75,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -198,6 +200,101 @@ class ReactiveLiveStartFirstCheckpointRaceMongoTest {
         }
     }
 
+    @Test
+    void a_node_that_finds_a_resume_token_stored_by_a_node_with_a_later_live_start_receives_an_event_written_between_the_two_live_starts() throws Exception {
+        Race race = new Race();
+        race.theEarlierNodesExistenceReadFollowsTheLaterNodesFirstSave = true;
+        Node earlier = new Node(true, race);
+        Node later = new Node(false, race);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        @Nullable ConfigurableApplicationContext earlierContext = null;
+        @Nullable ConfigurableApplicationContext laterContext = null;
+        try {
+            // The earlier node has read its live start and is held before it reads whether a checkpoint is stored
+            Future<ConfigurableApplicationContext> earlierBoot = pool.submit(() -> boot(earlier));
+            assertThat(race.earlierNodeIsAtTheFirstCheckpoint.await(WAIT_SECONDS, TimeUnit.SECONDS))
+                    .as("the earlier node read its live start and reached its read of the stored checkpoint").isTrue();
+            write(earlier, "between-the-two-live-starts");
+            Future<ConfigurableApplicationContext> laterBoot = pool.submit(() -> boot(later));
+            laterContext = laterBoot.get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            assertThat(operationTimeOf(earlier.liveStart)).as("the earlier node's live start")
+                    .isLessThan(operationTimeOf(later.liveStart));
+
+            // The later node delivers an event and stores a resume token, before the earlier node reads what is stored
+            write(later, "delivered-by-the-later-node");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(later.received).as("events the later node received").contains("delivered-by-the-later-node"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(later.savesLanded.get())
+                    .as("checkpoint saves the later node completed").isGreaterThan(later.savesLandedWhenDelivered.get("delivered-by-the-later-node")));
+            race.laterNodeHasSavedItsCheckpoint.countDown();
+
+            earlierContext = earlierBoot.get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            write(later, "after-both-are-live");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(earlier.received).as("events the earlier node received").contains("after-both-are-live"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(later.savesLanded.get())
+                    .as("checkpoint saves the later node completed").isGreaterThanOrEqualTo(later.received.size()));
+
+            assertThat(earlier.received).as("events the earlier node received").contains("between-the-two-live-starts");
+        } finally {
+            race.laterNodeHasSavedItsCheckpoint.countDown();
+            pool.shutdownNow();
+            if (earlierContext != null) {
+                earlierContext.close();
+            }
+            if (laterContext != null) {
+                laterContext.close();
+            }
+        }
+    }
+
+    @Test
+    void a_restart_with_a_resume_token_stored_since_before_its_live_start_goes_on_from_the_token() throws Exception {
+        Race race = new Race();
+        race.nothingIsHeld = true;
+        Node first = new Node(true, race);
+        Node restarted = new Node(false, race);
+        @Nullable ConfigurableApplicationContext firstContext = null;
+        @Nullable ConfigurableApplicationContext restartedContext = null;
+        try {
+            firstContext = boot(first);
+            write(first, "delivered-before-the-restart");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(first.received).as("events the first node received").contains("delivered-before-the-restart"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(first.savesLanded.get())
+                    .as("checkpoint saves the first node completed").isGreaterThan(first.savesLandedWhenDelivered.get("delivered-before-the-restart")));
+            String tokenOfTheFirstRun = storedFirstCheckpoint(first);
+            firstContext.close();
+            firstContext = null;
+
+            restartedContext = boot(restarted);
+            write(restarted, "delivered-after-the-restart");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(restarted.received).as("events the restarted node received").contains("delivered-after-the-restart"));
+
+            assertThat(operationTimeOf(first.liveStart)).as("the first node's live start").isLessThan(operationTimeOf(restarted.liveStart));
+            assertAll(
+                    () -> assertThat(tokenOfTheFirstRun).as("the checkpoint the first run left").isNotNull(),
+                    () -> assertThat(restarted.received).as("events the restarted node received").doesNotContain("delivered-before-the-restart"),
+                    () -> assertThat(restartedStoredDocument(race).get("positionMovedEarlier")).as("mark of a stored position moved earlier").isNull(),
+                    () -> assertThat(restartedStoredDocument(race).get("lineageOrigin")).as("lineage origin of the stored checkpoint")
+                            .isEqualTo(operationTimeOf(first.liveStart))
+            );
+        } finally {
+            if (firstContext != null) {
+                firstContext.close();
+            }
+            if (restartedContext != null) {
+                restartedContext.close();
+            }
+        }
+    }
+
+    private static Document restartedStoredDocument(Race race) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(race.database));
+        try (MongoClient client = MongoClients.create(connectionString)) {
+            @Nullable Document document = client.getDatabase(requireNonNull(connectionString.getDatabase())).getCollection("subscriptions").find(new Document("_id", SUBSCRIPTION_ID)).first();
+            assertThat(document).as("the stored checkpoint document").isNotNull();
+            return document;
+        }
+    }
+
     private static void write(Node node, String name) {
         EventStore eventStore = node.eventStore;
         assertThat(eventStore).as("the event store of the node").isNotNull();
@@ -261,6 +358,11 @@ class ReactiveLiveStartFirstCheckpointRaceMongoTest {
         final CountDownLatch laterNodeHasWritten = new CountDownLatch(1);
         final CountDownLatch laterNodeHasSavedItsCheckpoint = new CountDownLatch(1);
         volatile boolean holdTheEarlierNodesSecondRead;
+        // The earlier node reads whether a checkpoint is stored only once the later node has delivered an event and saved a
+        // checkpoint, and the later node reads it at once, as two nodes do whose boot overlaps
+        volatile boolean theEarlierNodesExistenceReadFollowsTheLaterNodesFirstSave;
+        // Neither node is held, as for nodes that boot one after the other
+        volatile boolean nothingIsHeld;
     }
 
     static final class Node {
@@ -291,6 +393,35 @@ class ReactiveLiveStartFirstCheckpointRaceMongoTest {
                 return invocation.callRealMethod();
             }
             String method = invocation.getMethod().getName();
+            if (race.nothingIsHeld) {
+                if (method.equals("save") && arguments.length == 3) {
+                    return ((Mono<Checkpoint>) invocation.callRealMethod()).doOnSuccess(__ -> savesLanded.incrementAndGet());
+                }
+                return invocation.callRealMethod();
+            }
+            if (race.theEarlierNodesExistenceReadFollowsTheLaterNodesFirstSave && method.equals("read") && heldAtTheCheck.compareAndSet(false, true)) {
+                if (!earlierLiveStart) {
+                    return invocation.callRealMethod();
+                }
+                // The boundary was read when the event store was created, which came before this read
+                race.earlierNodeIsAtTheFirstCheckpoint.countDown();
+                return Mono.<Void>fromRunnable(() -> {
+                    try {
+                        if (!race.laterNodeHasSavedItsCheckpoint.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("The later node never saved a checkpoint, so the earlier node's read was held for nothing");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                }).subscribeOn(Schedulers.boundedElastic()).then(Mono.defer(() -> {
+                    try {
+                        return (Mono<Checkpoint>) invocation.callRealMethod();
+                    } catch (Throwable t) {
+                        return Mono.error(t);
+                    }
+                }));
+            }
             if (method.equals("read") && heldAtTheCheck.compareAndSet(false, true)) {
                 Optional<Checkpoint> found = ((Mono<Checkpoint>) invocation.callRealMethod()).blockOptional();
                 if (earlierLiveStart) {

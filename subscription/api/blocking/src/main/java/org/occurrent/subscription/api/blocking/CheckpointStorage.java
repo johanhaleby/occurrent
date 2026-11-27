@@ -190,14 +190,16 @@ public interface CheckpointStorage {
      * nothing to compare positions by. That leaves the caller to its own fallback, the write-order-based rule this
      * capability exists to narrow: a stored position already there when the caller checked for one is taken without
      * comparison, and one that only appeared afterwards is refused unless reading it back shows the same position
-     * {@code candidate} names. A storage overrides this only when it can make that comparison for real; see
-     * {@code NativeMongoCheckpointStorage}, which compares the operation time both a stored and an offered
-     * {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} carry, and answers empty for a stored
-     * checkpoint of any other shape, because only a real checkpoint from actual delivery is not one of those. See
-     * ADR 130.
+     * {@code candidate} names. A storage overrides this only when it can make that comparison for real. The MongoDB
+     * storages, {@code NativeMongoCheckpointStorage} among them, compare the operation time both a stored and an
+     * offered {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} hold. Each checkpoint they
+     * store from 0.35.0 on also keeps the operation time of the first position it was delivered on from, so a stored
+     * resume token or generic checkpoint whose first position is later than {@code candidate} counts as later too, and
+     * {@code candidate} replaces it. They answer empty for any other stored resume token or generic checkpoint, and for
+     * one an older Occurrent version stored, which keeps no such operation time. See ADR 130 and ADR 186.
      * <p>
      * The node that stored the later position may already deliver from it, with its version stored next to it, and
-     * this keeps that version. So when {@code candidate} replaces a later operation time, the MongoDB storages also
+     * this keeps that version. So when {@code candidate} replaces a stored checkpoint, the MongoDB storages also
      * store a mark with it, and refuse a {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan} write of a
      * resume token or an operation time while the mark is stored. Without it the next save of that node would store a
      * position after {@code candidate} and skip the events between the two. A write that replaces the stored checkpoint
@@ -220,9 +222,16 @@ public interface CheckpointStorage {
      * can ask this before it writes anything. The checkpoint that governs is {@code candidate} when nothing is stored
      * or the stored first position is later, and the stored checkpoint otherwise, so this never moves a stored
      * position later. A stored checkpoint that is {@code candidate} itself governs too, and {@code writeVersion} is
-     * stored with it. When the stored checkpoint is another one this storage can't compare {@code candidate} against,
-     * such as one written for a delivered event, nothing is written and this answers {@link Optional#empty()}, as the
-     * default does.
+     * stored with it. On the MongoDB storages, a stored resume token or generic checkpoint whose first position is
+     * later than an operation-time {@code candidate} counts as a later first position, as for the two-argument
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint)}. When the stored checkpoint is another one this storage
+     * can't order before {@code candidate}, such as one written for a delivered event whose first position isn't later,
+     * nothing is written and this answers {@link Optional#empty()}, as the default does.
+     * <p>
+     * The blocking {@code DurableSubscriptionModel} also calls this before it starts a subscription at a
+     * {@code StartAt.checkpoint(..)} of the stored checkpoint, with that checkpoint as {@code candidate}, so
+     * {@code writeVersion} is stored with it. A start at the model default from a checkpoint already stored goes
+     * through {@link #storeWriteVersion(String, long)} instead.
      * <p>
      * When the MongoDB storages keep the stored checkpoint, they also remove the mark the two-argument
      * {@link #resolveFirstCheckpointRace(String, Checkpoint)} stores when it moves a position earlier, so a

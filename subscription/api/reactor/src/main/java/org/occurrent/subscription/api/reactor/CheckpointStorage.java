@@ -237,13 +237,15 @@ public interface CheckpointStorage {
      * nothing to compare positions by. That leaves the caller to its own fallback, the write-order-based rule this
      * capability exists to narrow: a stored position already there when the caller checked for one is taken without
      * comparison, and one that only appeared afterwards is refused unless reading it back shows the same position
-     * {@code candidate} names. A storage overrides this only when it can make that comparison for real; see
-     * {@code ReactorCheckpointStorage}, which compares the operation time both a stored and an offered
-     * {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} carry, and signals empty for a stored
-     * checkpoint of any other shape, because only a real checkpoint from actual delivery is not one of those. See
-     * ADR 130.
+     * {@code candidate} names. A storage overrides this only when it can make that comparison for real.
+     * {@code ReactorCheckpointStorage} compares the operation time both a stored and an offered
+     * {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} hold. Each checkpoint it stores from
+     * 0.35.0 on also keeps the operation time of the first position it was delivered on from, so a stored resume token
+     * or generic checkpoint whose first position is later than {@code candidate} counts as later too, and
+     * {@code candidate} replaces it. It signals empty for any other stored resume token or generic checkpoint, and for
+     * one an older Occurrent version stored, which keeps no such operation time. See ADR 130 and ADR 186.
      * <p>
-     * When {@code candidate} replaces a later operation time, {@code ReactorCheckpointStorage} also stores a mark with
+     * When {@code candidate} replaces a stored checkpoint, {@code ReactorCheckpointStorage} also stores a mark with
      * it, and refuses a {@code notOlderThan} save of a resume token or an operation time while the mark is stored, as
      * the blocking MongoDB storages do. A write that replaces the stored checkpoint removes the mark.
      *

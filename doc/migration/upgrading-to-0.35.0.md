@@ -139,6 +139,9 @@ other sections compile fine and behave differently, so read them first.
 - [A save from a later position is refused once a start position moved it earlier](#a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier).
   On the MongoDB checkpoint storages, a durable subscription stops delivering at a refused save until it is paused and
   resumed, which `CompetingConsumerSubscriptionModel` does. Compiles unchanged.
+- [A first-position race compares a resume token by where its delivery started](#a-first-position-race-compares-a-resume-token-by-where-its-delivery-started).
+  On the MongoDB checkpoint storages, `resolveFirstCheckpointRace` writes an earlier operation time over a stored
+  resume token whose delivery started later, where 0.34.0 answered empty. Compiles unchanged.
 - [A quiet position whose save throws a checked exception is logged](#a-quiet-position-whose-save-throws-a-checked-exception-is-logged).
   A checked exception that a `CheckpointStorage` throws from the save of a quiet position no longer reaches the
   wrapped subscription model. Compiles unchanged.
@@ -715,6 +718,42 @@ which a pause from that thread would wait for.
 
 If you treat every `CheckpointWriteConditionNotFulfilledException` as a moved lease, a stored version that isn't newer
 than the version of the write means this refusal instead.
+
+There is no OpenRewrite recipe for this.
+
+## A first-position race compares a resume token by where its delivery started
+
+### Who is affected
+
+An application that stores checkpoints in `NativeMongoCheckpointStorage`, `SpringMongoCheckpointStorage` or
+`ReactorCheckpointStorage` and starts the same subscription on more than one node, and code of your own that calls
+the two-argument `resolveFirstCheckpointRace` on one of them. Compiles unchanged.
+
+### What changes
+
+Each checkpoint these storages write from 0.35.0 on keeps a `lineageOrigin` field, the operation time of the first
+position its delivery started from. A checkpoint written over nothing stored takes it from the operation time it
+stores, every later write keeps it, and a first-position race that writes its candidate sets it to the candidate's
+operation time.
+
+Node H stores its first position and then the resume token of an event it delivered. Node B read an earlier position
+before that and stores it only now. In 0.34.0 the two-argument `resolveFirstCheckpointRace` answered empty for H's
+resume token, B kept it, and no node delivered the events between B's position and H's. From 0.35.0 the call writes
+B's position over the resume token when its `lineageOrigin` is later than B's position, stores the
+`positionMovedEarlier` mark with it, and answers B's position. That mark refuses H's next `notOlderThan` save, as
+[a save from a later position is refused once a start position moved it earlier](#a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier)
+describes. B starts there. The
+three-argument `resolveFirstCheckpointRace` compares the same way.
+
+A checkpoint that a version before 0.35.0 stored has no `lineageOrigin`, and is compared as in 0.34.0. So is a
+checkpoint that a node still on 0.34.0 writes again, since that write doesn't keep the field. An ordinary restart keeps
+its stored checkpoint, because its `lineageOrigin` is earlier than the position the restart reads.
+
+### What to do
+
+Nothing, unless code of your own reads the checkpoint documents. Those now have the `lineageOrigin` field. Upgrade
+every node of an application to 0.35.0 before you rely on this, since a node on 0.34.0 removes the field each time it
+writes a checkpoint.
 
 There is no OpenRewrite recipe for this.
 

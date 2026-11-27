@@ -240,7 +240,12 @@ they set `startAt`.
   [ADR 184](0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
 - At `NOW` with `resumeBehavior = SAME_AS_START_AT`, nothing is stored and the live subscription model starts there.
 - A subscription that has a checkpoint stored already, or whose start the application's `SubscriptionResumePoints`
-  gives, starts as in 0.34.0. So does any other one when Spring can't pick a `CheckpointStorage`.
+  gives, starts as in 0.34.0. So does any other one when Spring can't pick a `CheckpointStorage`. A checkpoint that
+  another node stored after this node read its live start is different. On a MongoDB checkpoint storage, when that
+  node's first position is later than the live start, the first-position race of
+  [ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md) writes the live start
+  over it, as [ADR 186](0186-a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier.md)
+  records, and the subscription starts from the live start.
 
 A subscription starts where the event store is when it subscribes, which decision point 3 places after the startup
 scan, also in three cases where the starter has no live start to give it. On the reactor starter a bean built on a Reactor non-blocking thread reads none,

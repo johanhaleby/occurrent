@@ -19,11 +19,17 @@ H's change stream still reads from P_H. Its next save is `notOlderThan(v)`, whic
 position after P_H over P_B. No node delivers the events between P_B and P_H. They stay undelivered until a checkpoint
 that isn't an operation time is stored, because the two-argument resolve compares only operation times.
 
+The Spring Boot starters read P_B when the event store bean is created, and ask whether a checkpoint is stored only
+when the subscription registers. When H stores P_H and then the resume token of a delivered event between those two
+reads, B sees a checkpoint stored, its `ifAbsent()` write is refused, and the two-argument resolve answers empty for
+the resume token. B then keeps H's resume token and starts from it, and no node delivers the events between P_B and
+P_H either.
+
 ## Decision
 
-1. When the two-argument `resolveFirstCheckpointRace` of a MongoDB checkpoint storage writes over a later operation
-   time, it stores a `positionMovedEarlier` field with the checkpoint. The native, Spring and reactor storages share
-   this through `MongoCommons`. The Redis and in-memory storages keep the default resolve, which writes nothing.
+1. When the two-argument `resolveFirstCheckpointRace` of a MongoDB checkpoint storage writes over a stored checkpoint,
+   it stores a `positionMovedEarlier` field with the checkpoint. The native, Spring and reactor storages share this
+   through `MongoCommons`. The Redis and in-memory storages keep the default resolve, which writes nothing.
 2. A `notOlderThan` write of a resume token or an operation time is refused while that field is stored. The refusal is
    the released `CheckpointWriteConditionNotFulfilledException`, with a stored version that isn't newer than the
    version of the write. A write of a catch-up or generic checkpoint is not refused, since it doesn't go on from a
@@ -39,6 +45,22 @@ that isn't an operation time is stored, because the two-argument resolve compare
 6. A resume at a position, in `DurableSubscriptionModel` and in the stream catch-up model, and the position a
    `DurableSubscriptionModel` stores after a lost history, are refused the same way. They store this node's version
    with the stored checkpoint first and write once more, since nothing else would remove the field.
+7. Every checkpoint a MongoDB checkpoint storage writes keeps a `lineageOrigin` field, the operation time of the first
+   position its delivery started from. A write over nothing stored sets it from the operation time it writes, and
+   every other write keeps the stored one. A first-position race that writes its candidate sets it to the candidate's
+   operation time. A checkpoint an Occurrent version before 0.35.0 stored has none, and neither has one whose first
+   write was a resume token.
+8. Both `resolveFirstCheckpointRace` methods of the MongoDB storages count a stored resume token or generic checkpoint
+   whose `lineageOrigin` is later than the candidate's operation time as a later first position, and write the
+   candidate over it. The two-argument one stores `positionMovedEarlier` with it, as for a later operation time. A
+   stored checkpoint without `lineageOrigin` is compared as in 0.34.0.
+9. The blocking Spring Boot starter starts at the checkpoint the race settled when that checkpoint is the live start,
+   also when a checkpoint was stored when the subscription registered. When the race keeps the stored checkpoint, it
+   starts at the model default, as before.
+10. A subscribe of the blocking `DurableSubscriptionModel` at `StartAt.checkpoint(..)` of the stored checkpoint stores
+    this node's version with it through the three-argument `resolveFirstCheckpointRace`, as a subscribe at the model
+    default does. The starter subscribes that way without `CompetingConsumerSubscriptionModel`, and without it the
+    field item 1 stores would refuse B's own first save.
 
 A version bump, a compare-and-set of the stored position, and never moving a position stored with a version earlier were
 considered and rejected.
@@ -63,5 +85,18 @@ checkpoint once B holds the lease. With `occurrent.subscription.competing-consum
 starter's version source answers no version, so H saves with `any()`. H's next save then writes a position after P_H
 over P_B, and no node delivers the events between P_B and P_H.
 
-The `notOlderThan` contract of the MongoDB storages, released in 0.33.0, refuses a write it allowed before. No API
-changes for it, so the changelog lists it as a fix of behaviour shipped in 0.34.0, with a section in the upgrade guide.
+An ordinary restart keeps its stored checkpoint, since the `lineageOrigin` of a checkpoint stored before the restart
+is earlier than the live start the restart reads. A `lineageOrigin` that is later than the real first position would
+only deliver events again. One that is earlier would keep a checkpoint that skips events, so no write sets it from
+anything other than an operation time it writes.
+
+The race in the second paragraph of the context stays open in three cases. A node on 0.34.0 rewrites the whole
+document without `lineageOrigin`, so the next race compares as in 0.34.0. A node that stores a resume token as its
+first position, such as one that reads no operation time from MongoDB, stores no `lineageOrigin` either. And a
+checkpoint storage that can't compare positions, such as `SpringRedisCheckpointStorage`, keeps the stored checkpoint
+as in 0.34.0.
+
+The `notOlderThan` contract of the MongoDB storages, released in 0.33.0, refuses a write it allowed before. The
+two-argument `resolveFirstCheckpointRace`, released in 0.34.0, now writes over a stored resume token or generic
+checkpoint whose `lineageOrigin` is later than the candidate, where it used to answer empty. No API changes for either,
+so the changelog lists both as changes of behaviour shipped in 0.34.0, with a section in the upgrade guide.

@@ -16,6 +16,7 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -72,6 +73,7 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -82,6 +84,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -170,6 +173,151 @@ class LiveStartFirstCheckpointRaceOwnSubscriptionModelMongoTest {
         }
     }
 
+    @Test
+    void the_node_that_finds_a_resume_token_stored_by_the_holding_node_after_its_boundary_read_receives_the_event_written_between_the_two_boundaries() throws Exception {
+        Race race = new Race();
+        race.theBehindNodesExistenceReadFollowsTheHoldingNodesFirstToken = true;
+        race.behindNodeMayWrite.countDown();
+        race.behindNodeMaySubscribe.countDown();
+        Node behind = new Node(true, race);
+        Node holding = new Node(false, race);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        @Nullable ConfigurableApplicationContext behindContext = null;
+        @Nullable ConfigurableApplicationContext holdingContext = null;
+        try {
+            // The behind node has read its boundary, and is held before it reads whether a checkpoint is stored
+            Future<ConfigurableApplicationContext> behindBoot = pool.submit(() -> boot(behind));
+            assertThat(race.behindNodeIsAtItsFirstCheckpointWrite.await(WAIT_SECONDS, TimeUnit.SECONDS))
+                    .as("the behind node read its boundary and reached its read of the stored checkpoint").isTrue();
+            write(behind, "e1");
+            // Moves the cluster time on, so the boundary of the holding node is strictly after e1
+            writeUnrelatedDocument(race);
+
+            holdingContext = pool.submit(() -> boot(holding)).get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            assertThat(operationTimeOf(behind.liveStart)).as("the behind node's boundary").isLessThan(operationTimeOf(holding.liveStart));
+            // The holding node delivers an event and saves a resume token over its boundary, before the behind node reads what is stored
+            write(holding, "e2");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(holding.received).as("events the holding node received").contains("e2"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storedCheckpoint(holding))
+                    .as("the holding node saved a resume token over its boundary").isNotEqualTo(boundaryOf(holding)));
+            race.holdingNodeHasSavedAToken.countDown();
+
+            behindContext = behindBoot.get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            write(holding, "e3");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(behind.received).as("events the behind node received").contains("e3"));
+
+            assertThat(holding.received).as("events the holding node received, none written before its boundary").doesNotContain("e1");
+            assertThat(behind.received).as("events the behind node received").contains("e1");
+        } finally {
+            race.holdingNodeHasSavedAToken.countDown();
+            pool.shutdownNow();
+            if (behindContext != null) {
+                behindContext.close();
+            }
+            if (holdingContext != null) {
+                holdingContext.close();
+            }
+        }
+    }
+
+    @Test
+    void the_node_that_finds_a_resume_token_stored_by_the_holding_node_stores_its_write_version_with_the_checkpoint_it_starts_at_and_its_first_save_goes_through() throws Exception {
+        Race race = new Race();
+        race.theBehindNodesExistenceReadFollowsTheHoldingNodesFirstToken = true;
+        race.behindNodeMayWrite.countDown();
+        race.behindNodeMaySubscribe.countDown();
+        Node behind = new Node(true, race);
+        behind.writeVersion = 2L;
+        Node holding = new Node(false, race);
+        holding.writeVersion = 1L;
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        @Nullable ConfigurableApplicationContext behindContext = null;
+        @Nullable ConfigurableApplicationContext holdingContext = null;
+        try {
+            Future<ConfigurableApplicationContext> behindBoot = pool.submit(() -> boot(behind));
+            assertThat(race.behindNodeIsAtItsFirstCheckpointWrite.await(WAIT_SECONDS, TimeUnit.SECONDS))
+                    .as("the behind node read its boundary and reached its read of the stored checkpoint").isTrue();
+            write(behind, "e1");
+            writeUnrelatedDocument(race);
+
+            holdingContext = pool.submit(() -> boot(holding)).get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            assertThat(operationTimeOf(behind.liveStart)).as("the behind node's boundary").isLessThan(operationTimeOf(holding.liveStart));
+            write(holding, "e2");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(holding.received).as("events the holding node received").contains("e2"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storedCheckpoint(holding))
+                    .as("the holding node saved a resume token over its boundary").isNotEqualTo(boundaryOf(holding)));
+            race.holdingNodeHasSavedAToken.countDown();
+
+            behindContext = behindBoot.get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            assertThat(writeVersionOf(behind)).as("the write version stored once the behind node started at the checkpoint it settled").isEqualTo(OptionalLong.of(2L));
+            write(holding, "e3");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(behind.received).as("events the behind node received").contains("e1", "e3"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storedCheckpoint(behind))
+                    .as("the behind node's save of a delivered event went through, replacing the earlier boundary it started at")
+                    .isNotEqualTo(boundaryOf(behind)));
+            assertThat(storedDocumentOf(race).get("positionMovedEarlier")).as("mark of a stored position moved earlier").isNull();
+        } finally {
+            race.holdingNodeHasSavedAToken.countDown();
+            pool.shutdownNow();
+            if (behindContext != null) {
+                behindContext.close();
+            }
+            if (holdingContext != null) {
+                holdingContext.close();
+            }
+        }
+    }
+
+    @Test
+    void a_restart_with_a_resume_token_stored_since_before_its_boundary_goes_on_from_the_token() throws Exception {
+        Race race = new Race();
+        Node first = new Node(false, race);
+        Node restarted = new Node(false, race);
+        @Nullable ConfigurableApplicationContext firstContext = null;
+        @Nullable ConfigurableApplicationContext restartedContext = null;
+        try {
+            firstContext = boot(first);
+            write(first, "delivered-before-the-restart");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(first.received).as("events the first node received").contains("delivered-before-the-restart"));
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(storedCheckpoint(first))
+                    .as("the first node saved a resume token over its boundary").isNotEqualTo(boundaryOf(first)));
+            firstContext.close();
+            firstContext = null;
+
+            restartedContext = boot(restarted);
+            write(restarted, "delivered-after-the-restart");
+            await().atMost(WAIT_SECONDS, TimeUnit.SECONDS).untilAsserted(() -> assertThat(restarted.received).as("events the restarted node received").contains("delivered-after-the-restart"));
+
+            assertThat(operationTimeOf(first.liveStart)).as("the first node's boundary").isLessThan(operationTimeOf(restarted.liveStart));
+            Document stored = storedDocumentOf(race);
+            assertThat(restarted.received).as("events the restarted node received").doesNotContain("delivered-before-the-restart");
+            assertThat(stored.get("positionMovedEarlier")).as("mark of a stored position moved earlier").isNull();
+            assertThat(stored.get("lineageOrigin")).as("lineage origin of the stored checkpoint").isEqualTo(operationTimeOf(first.liveStart));
+        } finally {
+            if (firstContext != null) {
+                firstContext.close();
+            }
+            if (restartedContext != null) {
+                restartedContext.close();
+            }
+        }
+    }
+
+    private static Document storedDocumentOf(Race race) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(race.database));
+        try (MongoClient client = MongoClients.create(connectionString)) {
+            @Nullable Document document = client.getDatabase(requireNonNull(connectionString.getDatabase())).getCollection("subscriptions").find(new Document("_id", SUBSCRIPTION_ID)).first();
+            assertThat(document).as("the stored checkpoint document").isNotNull();
+            return document;
+        }
+    }
+
+    private static OptionalLong writeVersionOf(Node node) {
+        CheckpointStorage storage = node.checkpointStorage;
+        assertThat(storage).as("the checkpoint storage of the node").isNotNull();
+        return storage.writeVersion(SUBSCRIPTION_ID);
+    }
+
     private static void write(Node node, String name) {
         EventStore eventStore = node.eventStore;
         assertThat(eventStore).as("the event store of the node").isNotNull();
@@ -229,18 +377,25 @@ class LiveStartFirstCheckpointRaceOwnSubscriptionModelMongoTest {
         final CountDownLatch behindNodeResolvedTheRace = new CountDownLatch(1);
         final CountDownLatch behindNodeIsAtItsSubscribe = new CountDownLatch(1);
         final CountDownLatch behindNodeMaySubscribe = new CountDownLatch(1);
+        // The behind node reads whether a checkpoint is stored only once the holding node has delivered an event and saved a
+        // resume token, as it does when it is slow between reading its boundary and reading what is stored
+        volatile boolean theBehindNodesExistenceReadFollowsTheHoldingNodesFirstToken;
+        final CountDownLatch holdingNodeHasSavedAToken = new CountDownLatch(1);
     }
 
     static final class Node {
         final boolean behind;
         final Race race;
         final AtomicBoolean heldAtTheWrite = new AtomicBoolean();
+        final AtomicBoolean heldAtTheExistenceRead = new AtomicBoolean();
         final AtomicBoolean heldAtTheSubscribe = new AtomicBoolean();
         final List<String> received = new CopyOnWriteArrayList<>();
         volatile @Nullable EventStore eventStore;
         volatile @Nullable String liveStart;
         volatile @Nullable Checkpoint liveStartCheckpoint;
         volatile @Nullable CheckpointStorage checkpointStorage;
+        // The version the application-owned durable model stores its checkpoints with, none for any()
+        volatile @Nullable Long writeVersion;
 
         Node(boolean behind, Race race) {
             this.behind = behind;
@@ -253,6 +408,14 @@ class LiveStartFirstCheckpointRaceOwnSubscriptionModelMongoTest {
                 return invocation.callRealMethod();
             }
             String method = invocation.getMethod().getName();
+            if (race.theBehindNodesExistenceReadFollowsTheHoldingNodesFirstToken && method.equals("exists") && heldAtTheExistenceRead.compareAndSet(false, true)) {
+                // The boundary was read when the event store was created, which came before this read
+                race.behindNodeIsAtItsFirstCheckpointWrite.countDown();
+                if (!race.holdingNodeHasSavedAToken.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("The holding node never saved a token, so the behind node's read was held for nothing");
+                }
+                return invocation.callRealMethod();
+            }
             if (method.equals("save") && arguments.length == 3 && CheckpointWriteCondition.ifAbsent().equals(arguments[2]) && heldAtTheWrite.compareAndSet(false, true)) {
                 race.behindNodeIsAtItsFirstCheckpointWrite.countDown();
                 if (!race.behindNodeMayWrite.await(WAIT_SECONDS, TimeUnit.SECONDS)) {
@@ -370,13 +533,16 @@ class LiveStartFirstCheckpointRaceOwnSubscriptionModelMongoTest {
     @Configuration(proxyBeanMethods = false)
     static class OwnSubscriptionModelConfiguration {
 
-        // No competing consumers and no write version source, so every checkpoint is written with any()
+        // No competing consumers, and a write version source only when the node was given a version, so every checkpoint is
+        // otherwise written with any()
         @Bean(destroyMethod = "shutdown")
         HoldingCatchupSubscriptionModel ownSubscriptionModel(Node node, MongoTemplate mongoTemplate, CheckpointStorage checkpointStorage,
                                                              EventStoreQueries eventStoreQueries, OccurrentProperties occurrentProperties) {
             EventStoreProperties eventStore = occurrentProperties.getEventStore();
             SpringMongoSubscriptionModel mongo = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStore.resolveCollection(), eventStore.resolveTimeRepresentation()));
-            DurableSubscriptionModel durable = new DurableSubscriptionModel(mongo, checkpointStorage, new DurableSubscriptionModelConfig(EveryN.everyEvent()));
+            @Nullable Long writeVersion = node.writeVersion;
+            DurableSubscriptionModel durable = new DurableSubscriptionModel(mongo, checkpointStorage, new DurableSubscriptionModelConfig(EveryN.everyEvent()),
+                    writeVersion == null ? null : id -> OptionalLong.of(writeVersion));
             CatchupSubscriptionModelConfig catchup = new CatchupSubscriptionModelConfig(useCheckpointStorage(checkpointStorage));
             return new HoldingCatchupSubscriptionModel(node, durable, eventStoreQueries, catchup);
         }

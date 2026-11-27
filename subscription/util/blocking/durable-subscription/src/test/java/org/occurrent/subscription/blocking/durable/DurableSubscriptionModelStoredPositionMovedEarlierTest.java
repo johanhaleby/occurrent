@@ -197,6 +197,88 @@ class DurableSubscriptionModelStoredPositionMovedEarlierTest {
         durable.shutdown();
     }
 
+    @Test
+    void a_subscribe_at_the_checkpoint_a_start_position_moved_earlier_stores_this_nodes_version_with_it_so_the_first_event_save_goes_through() {
+        // Given a checkpoint another node stored with an older version, and a start position of this node that moved it earlier
+        storage.anEarlierPositionStoredWithAnOlderVersionThatThisNodesStartMovedEarlier();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, id -> OptionalLong.of(VERSION));
+
+        // When
+        durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(EARLIER_POSITION), cloudEvent -> {
+        });
+        OptionalLong versionAfterTheSubscribe = storage.writeVersion(SUBSCRIPTION_ID);
+        boolean markedAfterTheSubscribe = storage.movedEarlier;
+        Throwable thrown = catchThrowable(() -> wrapped.deliver(SUBSCRIPTION_ID, POSITION_OF_A_DELIVERED_EVENT));
+
+        // Then
+        assertAll(
+                () -> assertThat(versionAfterTheSubscribe).as("stored version after the subscribe").hasValue(VERSION),
+                () -> assertThat(markedAfterTheSubscribe).as("stored position marked as moved earlier after the subscribe").isFalse(),
+                () -> assertThat(thrown).as("thrown by the save of the first event delivered").isNull(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(POSITION_OF_A_DELIVERED_EVENT.asString())
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_subscribe_at_a_checkpoint_other_than_the_stored_one_stores_no_version_and_leaves_the_mark() {
+        // Given
+        storage.anEarlierPositionStoredWithAnOlderVersionThatThisNodesStartMovedEarlier();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, id -> OptionalLong.of(VERSION));
+
+        // When
+        durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(LATER_POSITION), cloudEvent -> {
+        });
+
+        // Then
+        assertAll(
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(EARLIER_POSITION.asString()),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(VERSION - 1),
+                () -> assertThat(storage.movedEarlier).as("stored position marked as moved earlier").isTrue()
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_subscribe_at_the_checkpoint_a_start_position_moved_earlier_starts_there_when_a_newer_version_is_stored() {
+        // Given another node's lease stored a newer version with the checkpoint
+        storage.delegate.save(SUBSCRIPTION_ID, EARLIER_POSITION, CheckpointWriteCondition.notOlderThan(VERSION + 3));
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, id -> OptionalLong.of(VERSION));
+
+        // When
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(EARLIER_POSITION), cloudEvent -> {
+        }));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the subscribe").isNull(),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(VERSION + 3),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(EARLIER_POSITION.asString())
+        );
+        durable.shutdown();
+    }
+
+    @Test
+    void a_subscribe_at_the_model_default_stores_this_nodes_version_with_a_checkpoint_a_start_position_moved_earlier_and_the_first_event_save_goes_through() {
+        // Given
+        storage.anEarlierPositionStoredWithAnOlderVersionThatThisNodesStartMovedEarlier();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage, id -> OptionalLong.of(VERSION));
+
+        // When
+        durable.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Throwable thrown = catchThrowable(() -> wrapped.deliver(SUBSCRIPTION_ID, POSITION_OF_A_DELIVERED_EVENT));
+
+        // Then
+        assertAll(
+                () -> assertThat(thrown).as("thrown by the save of the first event delivered").isNull(),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(VERSION),
+                () -> assertThat(storage.movedEarlier).as("stored position marked as moved earlier").isFalse(),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(POSITION_OF_A_DELIVERED_EVENT.asString())
+        );
+        durable.shutdown();
+    }
+
     private DurableSubscriptionModel subscribedWithAListener() {
         DurableSubscriptionModel durable = subscribed();
         durable.addStartRefusalListener(new StartRefusalListener() {
@@ -244,6 +326,11 @@ class DurableSubscriptionModelStoredPositionMovedEarlierTest {
         void aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier() {
             delegate.save(SUBSCRIPTION_ID, LATER_POSITION, CheckpointWriteCondition.notOlderThan(VERSION));
             delegate.save(SUBSCRIPTION_ID, EARLIER_POSITION, CheckpointWriteCondition.any());
+            movedEarlier = true;
+        }
+
+        void anEarlierPositionStoredWithAnOlderVersionThatThisNodesStartMovedEarlier() {
+            delegate.save(SUBSCRIPTION_ID, EARLIER_POSITION, CheckpointWriteCondition.notOlderThan(VERSION - 1));
             movedEarlier = true;
         }
 

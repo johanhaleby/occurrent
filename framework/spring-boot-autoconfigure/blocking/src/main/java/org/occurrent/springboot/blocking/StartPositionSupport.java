@@ -256,7 +256,7 @@ class StartPositionSupport {
     // boundary instead of wherever the feed has reached when the model subscribes (issue 979). NOW under
     // SAME_AS_START_AT stores nothing and starts the live model at the boundary. Every other one pins the boundary as
     // the first checkpoint and starts at the checkpoint the pin settled, see startAtTheSettledCheckpoint. Without a
-    // boundary, or with a checkpoint already stored, the start is the one it was before.
+    // boundary, or with a stored checkpoint the pin kept, the start is the one it was before.
     private StartAt liveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
         @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
         if (boundary != null) {
@@ -334,10 +334,12 @@ class StartPositionSupport {
         return checkpoints == null ? null : checkpoints.checkpointOf(liveStart);
     }
 
-    // Pinned whether or not something is stored, since another node may have pinned its own later boundary, and
-    // StartPositionPin settles that race by order. Only a pin over nothing changes the start, and it answers the
-    // checkpoint the pin settled. Where a checkpoint was stored already, the subscription resumes from whatever
-    // governs, as it did before.
+    // Pinned whether or not something is stored, since another node may have pinned its own later boundary, or begun
+    // delivering from it, and StartPositionPin settles that race by order. A pin over nothing answers the checkpoint the
+    // pin settled. Where a checkpoint was stored already, the existence read ran after the boundary was read, so the
+    // stored checkpoint can belong to a node that booted at the same time. When the pin settled on the boundary, the
+    // storage proved the stored one later and wrote the boundary over it, and the subscription starts there. Otherwise
+    // the stored checkpoint is kept, and the subscription resumes from it as it did before
     private @Nullable Checkpoint pinOverNothingStored(String subscriptionId, Checkpoint boundary) {
         @Nullable CheckpointStorage checkpointStorage = applicationContext.getBeanProvider(CheckpointStorage.class).getIfUnique();
         if (checkpointStorage == null) {
@@ -348,7 +350,10 @@ class StartPositionSupport {
             throw firstPositionCanBeOverwritten(checkpointStorage, subscriptionId);
         }
         @Nullable Checkpoint settled = StartPositionPin.pinOrSaveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
-        return checkpointAlreadyExisted ? null : settled;
+        if (!checkpointAlreadyExisted || settled != null && settled.asString().equals(boundary.asString())) {
+            return settled;
+        }
+        return null;
     }
 
     // Refused before the pin writes anything, where the first checkpoint could only be written unconditionally. The

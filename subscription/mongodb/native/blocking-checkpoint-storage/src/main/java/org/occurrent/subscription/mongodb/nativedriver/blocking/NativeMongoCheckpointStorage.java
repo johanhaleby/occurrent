@@ -154,11 +154,13 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     }
 
     /**
-     * Compares by {@link MongoOperationTimeCheckpoint#operationTime}, the one shape both a stored and an offered
-     * checkpoint carry when neither has ever been advanced by real delivery, and answers empty for any other stored
-     * shape or for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} to begin with. See ADR 130.
+     * Compares by {@link MongoOperationTimeCheckpoint#operationTime}. A stored resume token or generic checkpoint is
+     * compared by the operation time of the first position it was delivered on from, which every checkpoint stored from
+     * 0.35.0 on keeps, so {@code candidate} replaces one whose first position is later. It answers empty for any other
+     * stored checkpoint, for one an older Occurrent version stored, and for a {@code candidate} that is not a
+     * {@link MongoOperationTimeCheckpoint} to begin with. See ADR 130 and ADR 186.
      * <p>
-     * When {@code candidate} replaces a later operation time, a mark is stored with it, and a
+     * When {@code candidate} replaces a stored checkpoint, a mark is stored with it, and a
      * {@code notOlderThan} save of a resume token or an operation time is refused until a write replaces the stored
      * checkpoint, or the three-argument {@code resolveFirstCheckpointRace} keeps it.
      */

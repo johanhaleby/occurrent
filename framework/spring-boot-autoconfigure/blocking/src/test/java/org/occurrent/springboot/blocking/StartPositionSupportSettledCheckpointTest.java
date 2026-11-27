@@ -132,6 +132,38 @@ class StartPositionSupportSettledCheckpointTest {
 
     @ParameterizedTest
     @CsvSource({"STREAM,NOW", "STREAM,DEFAULT", "AGNOSTIC,NOW", "AGNOSTIC,DEFAULT", "DCB,NOW", "DCB,DEFAULT"})
+    void starts_at_the_boundary_when_a_checkpoint_was_stored_already_and_the_storage_proved_it_later_and_wrote_the_boundary_over_it(Api api, StartPosition startPosition) {
+        // Given
+        StubStorage storage = new StubStorage();
+        storage.stored = LATER;
+        storage.resolved = BOUNDARY;
+
+        // When
+        StartAt start = startOf(api, startPosition, storage);
+
+        // Then
+        assertThat(checkpointOf(start.get(ANY_MODEL))).isEqualTo(BOUNDARY.asString());
+        assertThat(start.get(COMPETING)).as("the competing consumer model").matches(StartAt::isDefault);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"STREAM,NOW", "STREAM,DEFAULT", "AGNOSTIC,NOW", "AGNOSTIC,DEFAULT", "DCB,NOW", "DCB,DEFAULT"})
+    void starts_as_before_when_a_checkpoint_was_stored_already_and_the_storage_kept_an_earlier_one(Api api, StartPosition startPosition) {
+        // Given
+        StubStorage storage = new StubStorage();
+        storage.stored = EARLIER;
+        storage.resolved = EARLIER;
+
+        // When
+        StartAt start = startOf(api, startPosition, storage);
+
+        // Then
+        assertThat(startPosition == StartPosition.NOW ? start.isNow() : start.isDefault()).as("start is the one it was before the boundary was pinned").isTrue();
+        assertThat(storage.stored).as("the stored checkpoint is kept").isEqualTo(EARLIER);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"STREAM,NOW", "STREAM,DEFAULT", "AGNOSTIC,NOW", "AGNOSTIC,DEFAULT", "DCB,NOW", "DCB,DEFAULT"})
     void a_competing_consumer_model_starts_at_the_model_default_and_so_does_every_model_that_asks_after_it(Api api, StartPosition startPosition) {
         // Given
         StartAt start = startOf(api, startPosition, new StubStorage());

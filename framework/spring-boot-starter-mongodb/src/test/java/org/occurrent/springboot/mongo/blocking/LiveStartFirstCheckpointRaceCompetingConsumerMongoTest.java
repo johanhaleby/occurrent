@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.mockito.Mockito;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
@@ -36,8 +38,11 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.BeansException;
@@ -63,6 +68,9 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static java.time.Duration.ofSeconds;
 import static java.util.Objects.requireNonNull;
@@ -138,6 +146,58 @@ class LiveStartFirstCheckpointRaceCompetingConsumerMongoTest {
         }
     }
 
+    @Test
+    void a_node_that_finds_a_resume_token_stored_after_its_boundary_read_resumes_from_its_boundary_once_it_gets_the_lease_and_its_first_save_goes_through() {
+        String url = mongoDBContainer.getReplicaSetUrl("competing-consumer-live-start-" + UUID.randomUUID().toString().substring(0, 8));
+        String database = requireNonNull(new ConnectionString(url).getDatabase());
+        Recorder recorder = new Recorder();
+        AtomicReference<Checkpoint> tokenOfTheOtherNode = new AtomicReference<>();
+        try (MongoClient client = MongoClients.create(url)) {
+            SpringMongoLeaseCompetingConsumerStrategy otherNode = new SpringMongoLeaseCompetingConsumerStrategy.Builder(new MongoTemplate(client, database))
+                    .collectionName(LOCKS_COLLECTION).build();
+            try {
+                assertThat(otherNode.registerCompetingConsumer(SUBSCRIPTION_ID, "other-node")).as("the other node holds the lease").isTrue();
+                // This node has read its boundary when it reads whether a checkpoint is stored. The other node, which booted
+                // after that boundary, has pinned its later boundary and saved the resume token of an event it delivered by then
+                recorder.beforeTheExistenceRead = storage -> {
+                    try (MongoChangeStreamCursor<ChangeStreamDocument<Document>> events = client.getDatabase(database).getCollection("events").watch().cursor()) {
+                        write(requireNonNull(recorder.eventStore), "e1");
+                        client.getDatabase(database).getCollection("unrelated").insertOne(new Document("_id", "moves-the-cluster-time-on"));
+                        BsonTimestamp otherNodesBoundary = MongoCommons.operationTimeAfter(client.getDatabase(database).runCommand(new Document("ping", 1)));
+                        storage.save(SUBSCRIPTION_ID, new MongoOperationTimeCheckpoint(otherNodesBoundary), CheckpointWriteCondition.ifAbsent());
+                        write(requireNonNull(recorder.eventStore), "e2");
+                        events.next();
+                        Checkpoint afterE2 = new MongoResumeTokenCheckpoint(events.next().getResumeToken());
+                        storage.save(SUBSCRIPTION_ID, afterE2, CheckpointWriteCondition.notOlderThan(1));
+                        tokenOfTheOtherNode.set(afterE2);
+                    }
+                };
+
+                try (ConfigurableApplicationContext context = boot(recorder, url)) {
+                    CheckpointStorage storage = context.getBean(CheckpointStorage.class);
+                    SpringMongoLeaseCompetingConsumerStrategy strategy = context.getBean(SpringMongoLeaseCompetingConsumerStrategy.class);
+                    Checkpoint boundary = recorder.boundary;
+                    assertThat(boundary).as("the checkpoint the starter made of the live start").isNotNull();
+                    assertThat(tokenOfTheOtherNode.get()).as("the resume token the other node saved before this node read what is stored").isNotNull();
+                    assertThat(asString(storage.read(SUBSCRIPTION_ID))).as("the boundary this node read governs, over the resume token of the other node").isEqualTo(boundary.asString());
+                    assertThat(recorder.received).as("events the node received without the lease").isEmpty();
+
+                    // The other node lets go, and this node gets the lease and goes on from its boundary
+                    otherNode.unregisterCompetingConsumer(SUBSCRIPTION_ID, "other-node");
+
+                    await("the events written after the boundary are delivered").atMost(ofSeconds(WAIT_SECONDS)).untilAsserted(() -> assertThat(recorder.received).contains("e1", "e2"));
+                    write(context.getBean(EventStore.class), "e3");
+                    await("the event is delivered").atMost(ofSeconds(WAIT_SECONDS)).untilAsserted(() -> assertThat(recorder.received).contains("e3"));
+                    await("the checkpoint of the event is saved over the one the other node saved").atMost(ofSeconds(WAIT_SECONDS))
+                            .untilAsserted(() -> assertThat(asString(storage.read(SUBSCRIPTION_ID))).isNotEqualTo(tokenOfTheOtherNode.get().asString()));
+                    assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("the write version the checkpoint of the event was saved under").isPresent().isEqualTo(strategy.fencingToken(SUBSCRIPTION_ID));
+                }
+            } finally {
+                otherNode.shutdown();
+            }
+        }
+    }
+
     private static @Nullable String asString(@Nullable Checkpoint checkpoint) {
         return checkpoint == null ? null : checkpoint.asString();
     }
@@ -164,10 +224,15 @@ class LiveStartFirstCheckpointRaceCompetingConsumerMongoTest {
     static final class Recorder {
         final List<String> received = new CopyOnWriteArrayList<>();
         volatile @Nullable Checkpoint boundary;
+        volatile @Nullable EventStore eventStore;
+        // Run once, just before this node reads whether a checkpoint is stored, which comes after it read its boundary
+        volatile @Nullable Consumer<CheckpointStorage> beforeTheExistenceRead;
+        final AtomicBoolean existenceReadHeld = new AtomicBoolean();
     }
 
     /**
-     * Records the checkpoint the starter makes of the live start.
+     * Records the checkpoint the starter makes of the live start and the event store, and runs what another node does
+     * before this node reads whether a checkpoint is stored.
      */
     static class RecordingHooks implements BeanPostProcessor, BeanFactoryAware {
         private @Nullable BeanFactory beanFactory;
@@ -187,6 +252,23 @@ class LiveStartFirstCheckpointRaceCompetingConsumerMongoTest {
                     recorder.boundary = checkpoint;
                     return checkpoint;
                 };
+            }
+            if (bean instanceof EventStore eventStore) {
+                assert beanFactory != null;
+                beanFactory.getBean(Recorder.class).eventStore = eventStore;
+                return bean;
+            }
+            if (bean instanceof CheckpointStorage storage) {
+                assert beanFactory != null;
+                Recorder recorder = beanFactory.getBean(Recorder.class);
+                return Mockito.mock(storage.getClass(), Mockito.withSettings().spiedInstance(storage).defaultAnswer(invocation -> {
+                    @Nullable Consumer<CheckpointStorage> before = recorder.beforeTheExistenceRead;
+                    if (before != null && invocation.getMethod().getName().equals("exists") && SUBSCRIPTION_ID.equals(invocation.getArguments()[0])
+                        && recorder.existenceReadHeld.compareAndSet(false, true)) {
+                        before.accept(storage);
+                    }
+                    return invocation.callRealMethod();
+                }));
             }
             return bean;
         }
