@@ -1019,7 +1019,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * it up as {@link #runInTurn} describes, and so is the live delegate's {@code stop()}. Called from inside the action of a live
      * call or a replay of this model, it returns at once and takes effect on another thread once the action has
      * returned, and what it throws there is logged at {@code ERROR}. Until then the live delegate can go on delivering
-     * to the action, and the replay can go on to its next event. From any other thread it also waits for the calls such
+     * to the action, and other replays can go on to their next event. The replay whose action made the call parks once
+     * the action has returned and delivers no further event until a {@code start(true)} or a resume runs it again,
+     * also when the call hasn't taken effect by then. From any other thread it also waits for the calls such
      * actions handed over before it, and takes effect after them, or changes nothing when a {@code shutdown()} has
      * begun by then. With none of those calls pending it runs after a {@code shutdown()} that returned normally as it
      * did in 0.34.0, and calls the live delegate's {@code stop()}, as {@link #runInTurn} describes.
@@ -1042,7 +1044,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public void stop() {
-        runInTurn(this, "stop()", this::stopTheReplaysAndTheLiveDelegate);
+        runInTurn(this, "stop()", List.of(this), this::stopTheReplaysAndTheLiveDelegate);
     }
 
     // Under the model lock. Also run by a start(..) once more for a stop() made from inside it
@@ -3333,6 +3335,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // start(false) or a resume of another subscription let replays run again meanwhile. A start(true) moves
         // relaunchesBegun, and a resume of the subscription clears this under the handover lock
         private volatile long parkOwedSince = NO_PARK_OWED;
+        // Set on this attempt's own thread when its action hands over a stop() or a stopReplay() of the owner, so the
+        // replay parks at its next check also before that call has run. Cleared by that call once it has set
+        // parkOwedSince, so a later start(true) or resume runs the replay again
+        private volatile boolean parkAskedInItsAction = false;
         // Set under the handover lock while a replay a resume started waits to run again after it failed, so a pause
         // holds it instead of waiting for a handover
         private volatile boolean backingOff = false;
@@ -3383,9 +3389,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
 
         // Whether a stop gave up before it parked this attempt's replay, and no start(true) and no resume of the
-        // subscription came since
+        // subscription came since, or the action handed over a stop that hasn't run yet
         private boolean owesAPark() {
-            return parkOwedSince == owner.relaunchesBegun;
+            return parkAskedInItsAction || parkOwedSince == owner.relaunchesBegun;
         }
     }
 
@@ -3734,8 +3740,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
                 // Not shouldKeepReplaying, since the action has returned, and a stop or a shutdown that took effect
                 // meanwhile doesn't keep its position from being stored. A stop the action asked for takes effect once
-                // the action has returned, so it parks the replay at this or a later event. A replay that runs again
-                // after a stop starts from the stored position.
+                // the action has returned, and the replay owes the park from the moment the action asked, so it parks
+                // at the next check, see CatchupAttempt.parkAskedInItsAction. A replay that runs again after a stop
+                // starts from the stored position.
                 saveIfStillSafe(subscriptionId, () -> persistDuringCatchup.test(event), checkpoint);
             }
         }
@@ -5458,14 +5465,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link #stop()} or {@code shutdown()} under way, unless code a caller supplied holds it up as {@link #runInTurn}
      * describes. Called from inside the action of a live call or a replay of this
      * model, it returns at once and takes effect on another thread once the action has returned, and what it throws
-     * there is logged at {@code ERROR}. From any other thread it also waits for the calls such actions handed over
+     * there is logged at {@code ERROR}. A replay whose action made the call parks once that action has returned, as
+     * {@link #stop()} describes. From any other thread it also waits for the calls such actions handed over
      * before it.
      *
      * @throws IllegalStateException where {@link #stop()} throws it. Nothing was changed then, apart from when parking
      *                               a replay gives up, after which the replays of this model are stopped all the same.
      */
     public void stopReplay() {
-        runInTurn(this, "stopReplay()", () -> {
+        runInTurn(this, "stopReplay()", List.of(this), () -> {
             List<ActionInFlight> admitted = new ArrayList<>();
             try {
                 stopReplayLeavingTheActions(admitted);
@@ -5505,6 +5513,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // it, so the replay then parks itself once that code returns, whatever lets replays run again meanwhile
                 // short of a start(true) or a resume of the subscription
                 attempt.parkOwedSince = relaunchesBegun;
+                // Only once parkOwedSince is set, so owesAPark() stays true in between
+                attempt.parkAskedInItsAction = false;
                 try (Claim ignored = claim(entry.getKey(), STOPPED_ALL_THE_SAME); HandoverLock alsoIgnored = lockHandover(entry.getKey())) {
                     parkIfStillCurrent(entry.getKey(), attempt);
                     admitted.add(new ActionInFlight(entry.getKey(), attempt.actionReturned, attempt.actionUnwanted));
@@ -5588,8 +5598,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      *                               above. Nothing was changed then.
      */
     void runInTurn(Object model, String call, Runnable body) {
+        runInTurn(model, call, List.of(), body);
+    }
+
+    /**
+     * Runs {@code body} as {@link #runInTurn(Object, String, Runnable)} does, where {@code body} parks the replays of
+     * {@code parking}, as a {@link #stop()} or a {@link #stopReplay()} does. When the calling thread runs the action of
+     * a replay of one of {@code parking}, that replay owes the park from the moment the call is handed over, so it
+     * parks at its next check once the action has returned and lets no further event through, also when the lifecycle
+     * thread hasn't run {@code body} by then. Once {@code body} has run, a {@code start(true)} or a resume of the
+     * subscription runs the replay again, as it runs one {@code body} parked.
+     */
+    void runInTurn(Object model, String call, List<AbstractCatchupSubscriptionModel> parking, Runnable body) {
         ActionOnThread action = outermostActionOnTheCallingThread();
         if (action != null) {
+            CatchupAttempt replaying = CURRENT_ATTEMPT.get();
+            if (replaying != null && parking.contains(replaying.owner)) {
+                replaying.parkAskedInItsAction = true;
+            }
             handOver(action, null, model, call, body);
             return;
         }

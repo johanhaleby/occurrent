@@ -2949,8 +2949,9 @@ the catch-up is not affected.
   entered its turn under the model's lock or taken the subscription's claim by then. Either way the calls handed over
   after it go on, and that is logged at `ERROR` too. One that isn't withdrawn takes effect once it finishes, after
   those calls. A resume that a handed `start(true)` left until after its turn is never withdrawn, and a `stop()`, or a pause or a cancel of that subscription that returns, or a new subscribe of it, made after the start's turn keeps it from changing anything. A `resumeSubscription(id)` of that subscription made while that resume is still to run throws `SubscriptionAlreadyRunningException` and changes nothing, unless a `stop()` came after the start's turn. Made before the action hands a call over, these calls run at once as in 0.34.0.
-* After a `stop()` from a replay's action, the replay goes on to its next event until the lifecycle thread runs the
-  `stop()`, which then parks it. After a `stop()` from a live call's action, the wrapped model can go on delivering live
+* After a `stop()` from a replay's action, that replay delivers no further event once the action has returned, also
+  when the lifecycle thread hasn't run the `stop()` yet. Other replays can go on to their next event until the
+  lifecycle thread runs it. After a `stop()` from a live call's action, the wrapped model can go on delivering live
   events to the action until then. In 0.34.0 the wrapped model had stopped by the time `stop()` returned. The tests of
   this release run these calls over test models of the wrapped model, not over the MongoDB subscription models the
   Spring Boot starter sets up.

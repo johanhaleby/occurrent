@@ -340,7 +340,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // describes.
     @Override
     public void stop() {
-        anyCatchupModel().runInTurn(this, "stop()", this::stopTheReplaysAndTheLiveDelegate);
+        anyCatchupModel().runInTurn(this, "stop()", presentCatchupModels().toList(), this::stopTheReplaysAndTheLiveDelegate);
     }
 
     // Under the model lock. Also run by a start(..) once more for a stop() made from inside it

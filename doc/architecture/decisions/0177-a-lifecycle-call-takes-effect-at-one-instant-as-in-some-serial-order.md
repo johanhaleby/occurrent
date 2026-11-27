@@ -81,7 +81,9 @@ Two properties are true at every instant, not only at the end:
   `resumeSubscription(X)` or `start(true)` takes effect. Once `cancelSubscription(X)` has returned, no call to the
   action of the subscription it cancelled starts. A later `subscribe(X)` is a new subscription, and S2 doesn't hold
   back its action. A `stop()` or a `pauseSubscription(X)` the blocking catch-up hands over from an action counts from
-  the instant it takes effect, not from its return, so the action can be called again until then. A resume that a
+  the instant it takes effect, not from its return, so the action can be called again until then. The replay whose
+  action handed over a `stop()` doesn't call that action again once it has returned, also before the `stop()` takes
+  effect. A resume that a
   `start(true)` left until after its turn counts as taking effect in that turn, so it doesn't undo a `stop()`, a
   pause or a cancel that came after the turn.
 
@@ -412,7 +414,9 @@ waits for that call to begin, as described above. So the call takes effect after
 the others. Calls handed over
 from two actions run in the order the actions returned, which is the order in which they take effect, apart from a
 call for one subscription that didn't finish in its 10 seconds and wasn't withdrawn, as described above. Until then the
-wrapped model can go on delivering to the action, and the replay can go on to its next event. The lifecycle thread begins no call once a `shutdown()` has begun, and a resume a handed `start(true)` left until
+wrapped model can go on delivering to the action, and other replays can go on to their next event. A replay whose
+action handed over a `stop()` or a `stopReplay()` of its own model delivers no further event once the action has
+returned, whether or not the call has run by then. A `start(true)` or a resume made after the call runs that replay again. The lifecycle thread begins no call once a `shutdown()` has begun, and a resume a handed `start(true)` left until
 after its turn changes nothing once it takes its claim after that. The lifecycle thread logs an `ERROR` naming the
 model for a call that throws. It inherits no inheritable thread-local from the thread that happens to create it. The
 catch-up marks the thread while it runs the action of a live call or a replay, with or without a record for the
