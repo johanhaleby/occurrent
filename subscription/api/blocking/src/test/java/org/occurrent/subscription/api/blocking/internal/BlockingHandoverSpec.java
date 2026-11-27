@@ -16,7 +16,11 @@ final class BlockingHandoverSpec {
      * and including the first of those that did not return false. It is the only failure that can explain a reported
      * payload being lost.
      */
-    record Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp, long startedAt) {
+    record Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp, long startedAt, List<String> deliveredWhenStarted) {
+        Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp, long startedAt) {
+            this(payload, call, answer, failureFiredAfterInItsCatchUp, startedAt, List.of());
+        }
+
         Offer(String payload, String call, String answer, boolean failureFiredAfterInItsCatchUp) {
             this(payload, call, answer, failureFiredAfterInItsCatchUp, Long.MAX_VALUE);
         }

@@ -72,7 +72,8 @@ import java.util.stream.Stream;
  * {@link #acceptAndWait(Object)} returns). No live position watermark is kept, so delivery is at-least-once and the fold
  * must be idempotent. The de-dup cache and the live buffer are bounded. The buffer fails loud on overflow.
  * {@link #acceptAndWait(Object)} returns only once the event has been folded, during the catch-up as well as after it.
- * An event fed before the feed goes live waits in the buffer, and the call waits with it until the drain folds it. A
+ * An event fed during the replay waits in the buffer, and the call waits with it until the drain folds it. One fed
+ * while the drain runs waits for the drain to take the feed live, and is then folded on the calling thread. A
  * catch-up stopped before the feed went live, a failed catch-up or an interrupt throws instead, so the listener never
  * acknowledges an event that is only held in memory. A replay stopped after a {@link #goLive()} drains the buffer
  * instead, and the call returns normally.
@@ -190,7 +191,9 @@ public final class CatchupProjectionFeed<E> {
      * Feed a live domain event and return once it has been folded. Call this from the broker listener, acknowledging
      * the message only once it returns. Once the feed is live the event is folded on the calling thread. Before the
      * feed goes live, and while a catch-up runs on a feed that already went live, the event waits in the buffer and
-     * this call waits with it until the drain after the replay folds it.
+     * this call waits with it until the drain after the replay folds it. A call that comes while that drain runs
+     * waits for the drain to end instead, and then folds the event on the calling thread when the drain took the feed
+     * live, or throws as described below when the catch-up was stopped or failed.
      * <p>
      * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
      * {@code max.poll.interval.ms}, five minutes by default, is taken out of its group and the record is delivered

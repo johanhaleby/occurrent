@@ -27,7 +27,11 @@ final class BlockingHandoverRunner {
     enum Action {
         CATCH_UP, STEP, CANCEL, STOP, ACCEPT, ACCEPT_REPORTING, ACCEPT_IF_LIVE, ACCEPT_COPY_OF_HISTORY, FAIL_FOLD, FAIL_CALLBACK, INTERRUPT,
         /** The next payload a drain delivers parks inside deliver, so a payload offered next is offered while that drain runs. Released when the script ends. */
-        HOLD_DRAIN
+        HOLD_DRAIN,
+        /** A catch-up of a source that is already caught up. It drains what the buffer holds at once, on a thread of its own, and starts even while another catch-up runs */
+        CATCH_UP_CAUGHT_UP,
+        /** The next payload a catch-up delivers outside the history feeds a further payload to the handover from inside the fold, which buffers it for a later round */
+        FEED_FROM_HANDLER
     }
 
     record Script(boolean startsLive, List<Action> actions) {
@@ -45,10 +49,11 @@ final class BlockingHandoverRunner {
      * after it in a catch-up that ended after it, up to and including the first of those, in start order, that did
      * not return false. A stopped catch-up leaves the buffer to the next one, but the stop path can drain it too.
      */
-    private record Helper(Thread thread, String payload, String call, AtomicReference<String> answer, AtomicLong offeredAt, AtomicLong startedAt) {
+    private record Helper(Thread thread, String payload, String call, AtomicReference<String> answer, AtomicLong offeredAt, AtomicLong startedAt, List<String> deliveredWhenStarted) {
     }
 
-    private record Replay(ControllableSource source, Thread thread, AtomicReference<String> result) {
+    /** gated is false for a catch-up of a caught-up source, which has no gate for a step to open */
+    private record Replay(ControllableSource source, Thread thread, AtomicReference<String> result, boolean gated) {
     }
 
     static Trace run(Script script) {
@@ -61,19 +66,37 @@ final class BlockingHandoverRunner {
         List<String> overlaps = new CopyOnWriteArrayList<>();
         AtomicInteger catchUpsDelivering = new AtomicInteger();
         AtomicBoolean holdNextDrainDelivery = new AtomicBoolean();
+        AtomicBoolean feedFromNextFold = new AtomicBoolean();
+        AtomicInteger feeds = new AtomicInteger();
+        // The thread parked in the held drain delivery, so a step does not wait for it to reach a gate
+        AtomicReference<Thread> heldThread = new AtomicReference<>();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
         Semaphore drainHold = new Semaphore(0);
         BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
             boolean ofACatchUp = catchUps.stream().anyMatch(source -> source.catchUpThread == Thread.currentThread());
-            if (ofACatchUp && !HISTORY.contains(payload) && holdNextDrainDelivery.compareAndSet(true, false)) {
-                catchUps.stream().filter(source -> source.catchUpThread == Thread.currentThread()).forEach(source -> source.toScheduler.release());
-                try {
-                    drainHold.tryAcquire(5, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
+            // Counted from the first thing the delivery does, so a drain held inside it still counts as delivering
             if (ofACatchUp && catchUpsDelivering.incrementAndGet() > 1) {
                 overlaps.add("two catch-ups were delivering at once, the second delivering " + payload);
+            }
+            if (ofACatchUp && !HISTORY.contains(payload) && holdNextDrainDelivery.compareAndSet(true, false)) {
+                catchUps.stream().filter(source -> source.catchUpThread == Thread.currentThread()).forEach(source -> source.toScheduler.release());
+                heldThread.set(Thread.currentThread());
+                try {
+                    if (!drainHold.tryAcquire(5, TimeUnit.SECONDS)) {
+                        notes.add("the held drain was not released within 5 seconds");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    heldThread.set(null);
+                }
+            }
+            if (ofACatchUp && !HISTORY.contains(payload) && feedFromNextFold.compareAndSet(true, false)) {
+                try {
+                    self.get().acceptReportingDelivery("f" + feeds.getAndIncrement());
+                } catch (RuntimeException refused) {
+                    // A catch-up that has failed refuses it, and that is the caller's to see, not this fold's.
+                }
             }
             try {
                 if (failNextFold.getAndSet(false)) {
@@ -90,6 +113,7 @@ final class BlockingHandoverRunner {
                 }
             }
         }, payload -> payload, CatchupThenLiveOptions.defaults(), "thing");
+        self.set(handover);
         if (script.startsLive()) {
             ControllableSource alreadyCaughtUp = new ControllableSource(List.of(), new AtomicBoolean(true), clock);
             alreadyCaughtUp.openAllGates();
@@ -103,25 +127,38 @@ final class BlockingHandoverRunner {
         for (Action action : script.actions()) {
             Replay current = replays.isEmpty() ? null : replays.get(replays.size() - 1);
             boolean replaying = current != null && current.thread().isAlive();
+            long running = replays.stream().filter(replay -> replay.thread().isAlive()).count();
+            // The catch-up a step or an interrupt is for, the oldest one that still runs and has a gate to open
+            Replay gated = replays.stream().filter(replay -> replay.thread().isAlive() && replay.gated()).findFirst().orElse(null);
             switch (action) {
-                case CATCH_UP -> {
-                    if (!replaying) {
-                        ControllableSource source = new ControllableSource(HISTORY, marker, clock);
+                case CATCH_UP, CATCH_UP_CAUGHT_UP -> {
+                    // A second catch-up starts while one runs, which is the only way two of them are ever there at once
+                    if (running < 2) {
+                        boolean caughtUp = action == Action.CATCH_UP_CAUGHT_UP;
+                        ControllableSource source = caughtUp ? new ControllableSource(List.of(), new AtomicBoolean(true), clock) : new ControllableSource(HISTORY, marker, clock);
+                        if (caughtUp) {
+                            source.openAllGates();
+                        }
                         source.failCallback = failCallback;
                         AtomicReference<String> result = new AtomicReference<>();
                         Thread thread = Thread.ofPlatform().name("handover-replay").unstarted(() -> {
-                            result.set(runCatchUp(handover, source, notes));
+                            result.set(runCatchUp(handover, source, notes, catchUps));
                         });
                         catchUps.add(source);
-                        replays.add(new Replay(source, thread, result));
+                        replays.add(new Replay(source, thread, result, !caughtUp));
                         thread.start();
-                        source.awaitParkedOrDone(thread);
+                        if (running == 0 && !caughtUp) {
+                            source.awaitParkedOrDone(thread);
+                        } else {
+                            settle(thread);
+                        }
                     }
                 }
                 case STEP -> {
-                    if (replaying) {
-                        current.source().step();
-                        current.source().awaitParkedOrDone(current.thread());
+                    // A catch-up parked in the held drain has no gate to open until the hold is released
+                    if (gated != null && heldThread.get() != gated.thread()) {
+                        gated.source().step();
+                        awaitParked(gated, running > 1);
                     }
                 }
                 case CANCEL -> {
@@ -139,14 +176,16 @@ final class BlockingHandoverRunner {
                 }
                 case FAIL_FOLD -> failNextFold.set(true);
                 case HOLD_DRAIN -> holdNextDrainDelivery.set(true);
+                case FEED_FROM_HANDLER -> feedFromNextFold.set(true);
                 case FAIL_CALLBACK -> {
                     failCallback = true;
                     replays.forEach(replay -> replay.source().failCallback = true);
                 }
                 case INTERRUPT -> {
-                    if (replaying) {
-                        current.thread().interrupt();
-                        current.source().awaitParkedOrDone(current.thread());
+                    if (gated != null) {
+                        boolean held = heldThread.get() == gated.thread();
+                        gated.thread().interrupt();
+                        awaitParked(gated, running > 1 || held);
                     }
                 }
                 default -> {
@@ -156,11 +195,12 @@ final class BlockingHandoverRunner {
                     AtomicLong offeredAt = new AtomicLong(Long.MAX_VALUE);
                     AtomicLong startedAt = new AtomicLong(Long.MAX_VALUE);
                     startedAt.set(clock.incrementAndGet());
+                    List<String> deliveredWhenStarted = List.copyOf(delivered);
                     Thread thread = Thread.ofPlatform().name("handover-accept-" + payload).unstarted(() -> {
                         answer.set(offer(handover, call, payload));
                         offeredAt.set(clock.incrementAndGet());
                     });
-                    helpers.add(new Helper(thread, payload, call, answer, offeredAt, startedAt));
+                    helpers.add(new Helper(thread, payload, call, answer, offeredAt, startedAt, deliveredWhenStarted));
                     thread.start();
                     settle(thread);
                 }
@@ -169,22 +209,25 @@ final class BlockingHandoverRunner {
         List<String> replayed = new ArrayList<>();
         drainHold.release(1_000);
         finish(replays, helpers, handover, marker, notes, markerFindings, replayed, clock, catchUps);
-        List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get(), failureFiredAfter(helper.offeredAt().get(), catchUps), helper.startedAt().get())).toList();
+        List<Offer> offers = helpers.stream().map(helper -> new Offer(helper.payload(), helper.call(), helper.answer().get(), failureFiredAfter(helper.offeredAt().get(), catchUps), helper.startedAt().get(), helper.deliveredWhenStarted())).toList();
         List<CatchUp> started = replays.stream().map(replay -> new CatchUp(String.valueOf(replay.result().get()), replay.source().cancelledBeforeItReturned)).toList();
         List<Long> drainStarts = catchUps.stream().flatMap(source -> source.drainStartedAt.stream()).toList();
         return new Trace(HISTORY, List.copyOf(delivered), offers, List.copyOf(markerFindings), List.copyOf(notes), replayed, started, drainStarts, List.copyOf(overlaps));
     }
 
-    /** A catch-up that throws is expected only when an injected failure fired in its own replay or drain */
-    private static String runCatchUp(BlockingHandover<String, String> handover, ControllableSource source, List<String> notes) {
+    /**
+     * A catch-up that throws is expected only when an injected failure fired in its own replay or drain, or in another
+     * catch-up of the run, which leaves the handover refusing every catch-up after it
+     */
+    private static String runCatchUp(BlockingHandover<String, String> handover, ControllableSource source, List<String> notes, List<ControllableSource> catchUps) {
         source.catchUpThread = Thread.currentThread();
         source.startedAt = source.clock.incrementAndGet();
         try {
             source.outcome = String.valueOf(handover.catchUp(source));
         } catch (Throwable t) {
             source.outcome = "threw " + t.getClass().getSimpleName();
-            if (source.failuresFiredAt.isEmpty()) {
-                notes.add("a catch-up threw although no failure was injected into it: " + t);
+            if (catchUps.stream().allMatch(other -> other.failuresFiredAt.isEmpty())) {
+                notes.add("a catch-up threw although no failure was injected into the run: " + t);
             }
         } finally {
             source.endedAt = source.clock.incrementAndGet();
@@ -224,6 +267,34 @@ final class BlockingHandoverRunner {
             }
         } catch (Throwable t) {
             return "refused:" + t.getClass().getSimpleName();
+        }
+    }
+
+    /**
+     * Waits until the catch-up is parked at a gate or has ended. When another catch-up runs too, this one may be waiting
+     * for it instead of parked, so it also stops waiting once it has stayed blocked for a while.
+     */
+    private static void awaitParked(Replay replay, boolean maybeWaitingForAnother) {
+        if (!maybeWaitingForAnother) {
+            replay.source().awaitParkedOrDone(replay.thread());
+            return;
+        }
+        int blocked = 0;
+        long until = System.nanoTime() + 5_000_000_000L;
+        while (System.nanoTime() < until && blocked < 10) {
+            try {
+                if (replay.source().toScheduler.tryAcquire(1, TimeUnit.MILLISECONDS)) {
+                    return;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            Thread.State state = replay.thread().getState();
+            if (state == Thread.State.TERMINATED) {
+                return;
+            }
+            blocked = state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING || state == Thread.State.BLOCKED ? blocked + 1 : 0;
         }
     }
 
@@ -278,12 +349,12 @@ final class BlockingHandoverRunner {
         ControllableSource clean = new ControllableSource(HISTORY, marker, clock);
         clean.openAllGates();
         catchUps.add(clean);
-        Thread later = Thread.ofPlatform().name("handover-later-catch-up").start(() -> runCatchUp(handover, clean, notes));
+        Thread later = Thread.ofPlatform().name("handover-later-catch-up").start(() -> runCatchUp(handover, clean, notes, catchUps));
         join(later, 5_000);
         if (later.isAlive()) {
             notes.add("a later catch-up never returned, so the replay turn was not released");
             later.interrupt();
-        } else if (!"true".equals(clean.outcome) && !"false".equals(clean.outcome) && clean.failuresFiredAt.isEmpty()) {
+        } else if (!"true".equals(clean.outcome) && !"false".equals(clean.outcome) && catchUps.stream().allMatch(other -> other.failuresFiredAt.isEmpty())) {
             // A fold failure that the script armed and nothing consumed can still fire in this catch-up, and then it may throw
             notes.add("the later catch-up did not return, it gave " + clean.outcome);
         }

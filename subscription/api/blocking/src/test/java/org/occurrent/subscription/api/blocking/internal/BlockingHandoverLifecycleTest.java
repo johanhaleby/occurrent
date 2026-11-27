@@ -29,8 +29,11 @@ class BlockingHandoverLifecycleTest {
                 net.jqwik.api.Tuple.of(1, Arbitraries.just(ACCEPT_COPY_OF_HISTORY)),
                 net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(FAIL_FOLD)),
                 net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(FAIL_CALLBACK)),
-                net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(INTERRUPT)));
-        return Arbitraries.of(true, false).flatMap(live -> action.list().ofMinSize(2).ofMaxSize(9).map(actions -> new Script(live, actions)));
+                net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(INTERRUPT)),
+                net.jqwik.api.Tuple.of(2, Arbitraries.just(HOLD_DRAIN)),
+                net.jqwik.api.Tuple.of(2, Arbitraries.just(CATCH_UP_CAUGHT_UP)),
+                net.jqwik.api.Tuple.of(1, Arbitraries.just(FEED_FROM_HANDLER)));
+        return Arbitraries.of(true, false).flatMap(live -> action.list().ofMinSize(2).ofMaxSize(12).map(actions -> new Script(live, actions)));
     }
 
     @Provide
@@ -97,9 +100,30 @@ class BlockingHandoverLifecycleTest {
     @Example
     void a_payload_fed_while_the_drain_delivers_is_delivered_behind_the_one_buffered_before_the_catch_up() {
         Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(ACCEPT_REPORTING, HOLD_DRAIN, CATCH_UP, STEP, STEP, STEP, STEP, ACCEPT_REPORTING)));
-        assertThat(trace.drainStarts()).as("the drain had started when the second payload was fed").hasSize(2);
+        assertThat(trace.notes()).as("the held drain was released when the script ended").isEmpty();
+        assertThat(trace.drainStarts()).as("this catch-up's drain and the one of the clean catch-up the run ends with").hasSize(2);
+        assertThat(trace.offers()).hasSize(2);
+        BlockingHandoverSpec.Offer fedDuringTheDrain = trace.offers().get(1);
+        assertThat(fedDuringTheDrain.startedAt()).as("p1 was offered after the drain started").isGreaterThan(trace.drainStarts().get(0));
+        assertThat(fedDuringTheDrain.deliveredWhenStarted()).as("what had been delivered when p1 was offered, with the drain held inside p0").doesNotContain("p0");
         assertThat(BlockingHandoverSpec.orderViolations(trace)).as(trace.toString()).isEmpty();
         assertThat(trace.delivered()).containsSubsequence("p0", "p1");
+    }
+
+    @Example
+    void a_catch_up_of_a_caught_up_source_that_comes_in_while_a_drain_is_held_does_not_deliver_next_to_it() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(ACCEPT_REPORTING, ACCEPT_REPORTING, HOLD_DRAIN, CATCH_UP_CAUGHT_UP, ACCEPT_REPORTING, CATCH_UP, STEP, STEP, STEP, STEP)));
+        assertThat(trace.drainStarts()).as("the drain of the caught-up catch-up was held when the second catch-up came in").isNotEmpty();
+        assertThat(trace.offers().get(2).deliveredWhenStarted()).as("p2 was offered while the drain was held inside p0").doesNotContain("p0");
+        assertThat(BlockingHandoverSpec.orderViolations(trace)).as(trace.toString()).isEmpty();
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).as(trace.toString()).isEmpty();
+    }
+
+    @Example
+    void a_payload_a_fold_feeds_during_the_drain_is_delivered_once_after_the_ones_the_drain_took() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(ACCEPT_REPORTING, ACCEPT_REPORTING, FEED_FROM_HANDLER, CATCH_UP_CAUGHT_UP)));
+        assertThat(trace.delivered()).filteredOn(payload -> !BlockingHandoverRunner.HISTORY.contains(payload)).containsExactly("p0", "p1", "f0");
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).as(trace.toString()).isEmpty();
     }
 
     @Example

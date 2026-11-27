@@ -221,12 +221,16 @@ other sections compile fine and behave differently, so read them first.
   Compiles unchanged.
 - [A blocking catch-up holds live events until it has delivered what it held](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held).
   `acceptOrDefer(..)` answers `DEFERRED` until the events held during the replay are delivered, where 0.34.0 went live
-  before that. Compiles unchanged.
+  before that, and a write to the in-memory event store waits meanwhile. Compiles unchanged.
 - [A full live buffer fails a blocking catch-up push subscription](#a-full-live-buffer-fails-a-blocking-catch-up-push-subscription).
-- [A blocking catch-up stopped while it delivers what it held ends there](#a-blocking-catch-up-stopped-while-it-delivers-what-it-held-ends-there).
-- [A recording callback that throws fails only its own event on a blocking catch-up](#a-recording-callback-that-throws-fails-only-its-own-event-on-a-blocking-catch-up).
   An event written once the buffer is full fails the catch-up, where 0.34.0 refused the event and went live without
   it. Compiles unchanged.
+- [A blocking catch-up stopped while it delivers what it held ends there](#a-blocking-catch-up-stopped-while-it-delivers-what-it-held-ends-there).
+  A stop that comes after the last replayed event writes no marker, where 0.34.0 still wrote it or still went live.
+  Compiles unchanged.
+- [A recording callback that throws fails only its own event on a blocking catch-up](#a-recording-callback-that-throws-fails-only-its-own-event-on-a-blocking-catch-up).
+  A throw from `alreadyDeliveredByReplay(..)` for a held event fails that event alone, where 0.34.0 failed the whole
+  catch-up. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -4872,8 +4876,12 @@ arrive while it replays and delivers them once the replay ends. In 0.34.0 it wen
 live event that arrived then could reach the handler ahead of an older held one. It now goes live once it holds
 nothing, and a live event that arrives meanwhile waits behind the held ones.
 
-There is nothing to change for most applications. A listener that calls `acceptOrDefer(..)` gets `DEFERRED` for a
-little longer after a catch-up and has the broker deliver the event again, as it already does during the replay.
+There is nothing to change for most applications. A listener that calls `acceptOrDefer(..)` gets `DEFERRED` until
+the catch-up has delivered what it held, and has the broker deliver the event again, as it already does during the
+replay. A write to the in-memory event store that reaches a `CatchupThenPushSubscriptionModel` meanwhile waits on the
+writing thread until the catch-up has gone live, stopped or failed, so the catch-up goes live however fast events are
+written. Don't write to the event store while holding a lock that the handler takes, since the write and the handler
+then wait for each other.
 `isReadyForLiveDelivery(..)` on the model or the feed answers `false` for that time too, so a RabbitMQ or Kafka source
 wired with `readinessSource(..)` stays paused until the catch-up holds nothing.
 A projection that calls `acceptAndWait(..)` on its own feed while it applies an event gets an `IllegalStateException`
@@ -4888,9 +4896,21 @@ subscription never got the event. The catch-up now fails instead, writes no mark
 later event. A `PushObserver` is told `REFUSED` for the event that found the buffer full, where 0.34.0 told it
 `NOT_DELIVERABLE`.
 
-There is no code to change. A subscription that fails this way stays failed until you cancel it and subscribe again,
-and that replay delivers the event from the store. A history too large to replay while the writers fill the buffer
-needs a larger `maxBufferedEvents` in its `CatchupThenLiveOptions`.
+The write that found the buffer full, and every write to the in-memory event store after it, throws once the store
+has committed the event. So a writer that retries such a write stores the event twice. The live events the
+subscription held before the buffer filled up were reported `DELIVERED` to a `PushObserver` when they were held, and
+the failed subscription never delivers them.
+
+An event that finds the buffer full while no replay runs, before the first replay has started for example, fails
+nothing, since the next replay reads it from the store. Only a catch-up that finds its marker and skips the replay
+fails for it. Once the replay has ended, a write waits for the catch-up to deliver what it held instead of adding to
+the buffer, unless a handler makes it, as [the section above](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held)
+describes.
+
+There is no code to change, unless a writer retries a write that threw. A subscription that fails this way stays
+failed until you cancel it and subscribe again, and that replay delivers every event the failed one missed, from the
+store. A history too large to replay while the writers fill the buffer needs a larger `maxBufferedEvents` in its
+`CatchupThenLiveOptions`.
 
 ## A blocking catch-up stopped while it delivers what it held ends there
 

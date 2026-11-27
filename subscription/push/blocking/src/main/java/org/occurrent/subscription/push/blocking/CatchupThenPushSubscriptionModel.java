@@ -63,9 +63,14 @@ import java.util.stream.Stream;
  * <ul>
  *   <li><strong>Catch-up</strong> is Occurrent's job and runs once per subscription id. On subscribe this model
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
- *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during a
- *       replay that runs to the end, while the buffer has room, is delivered either by the replay or by the buffered
- *       feed, and a full buffer refuses it. The overlap is de-duplicated by the
+ *       time via {@link PositionOrderedReader}, then delivers what it buffered and goes live. A write to the in-memory
+ *       event store waits on the writing thread while those buffered events are delivered, so the catch-up goes live
+ *       however fast events are written, and a handler must not wait for a lock that the writing thread holds. An
+ *       event that commits during a replay that runs to the end, while the buffer has room, is delivered either by the
+ *       replay or by the buffered feed. One that finds the buffer full fails the catch-up, which writes no marker,
+ *       and the write that found it full throws once the store has committed the event. One that finds it full while no
+ *       replay runs is left to the next replay, which reads it from the store. The overlap between the replay and the
+ *       buffered feed is de-duplicated by the
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
  *       reconcile pass is needed. A catch-up that fails on an interrupted thread is not a failed catch-up. This model
@@ -295,8 +300,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         BlockingHandover<CloudEvent, CloudEventKey> handover = BlockingHandover.create(action, CloudEventKey::of, options, "subscription", subscriptionId);
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
-        // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
-        // exactly as before, while PushSubscriptionModel.acceptOrDefer(..) (a broker path that can redeliver,
+        // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) buffers during
+        // the replay and waits while the catch-up delivers what it held, while PushSubscriptionModel.acceptOrDefer(..) (a broker path that can redeliver,
         // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED. Both branches
         // wrap only a BlockingHandover.PreDispatchRefusalException as RoutingAction.Refusal, never every
         // IllegalStateException the call could throw, since the handler itself can throw one too (deliverOutsideLock
