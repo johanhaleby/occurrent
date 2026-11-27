@@ -192,6 +192,20 @@ public final class HandoverMessages {
     }
 
     /**
+     * Refuses a live event fed and waited on, while the handover is not live, from inside the deliveries or callbacks
+     * of another blocking handover. That other handover's catch-up can be waiting for the calling thread, so waiting
+     * here can leave two catch-ups each waiting for the other.
+     *
+     * @param noun The noun describing what was fed, e.g. {@code "projection feed"}.
+     */
+    public static String acceptedFromAnotherHandover(String noun) {
+        return "A live event was fed to this " + noun + " and waited on from inside the handler or a callback of "
+                + "another catch-up feed or subscription while this " + noun + " was not live. A catch-up of the other "
+                + "one can be waiting for this thread, so the two could wait for each other, and the event is refused "
+                + "instead. Feed it from another thread, or without waiting for it.";
+    }
+
+    /**
      * Refuses a live event fed through {@code acceptOrDefer(..)} from inside one of the reactive handover's own
      * deliveries or callbacks. That delivery cannot start before the code that fed it returns, so the call could only
      * answer before the event is applied. A projection feed's fold is pointed at {@code acceptAndWait(..)}, and

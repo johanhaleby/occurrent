@@ -221,7 +221,8 @@ other sections compile fine and behave differently, so read them first.
   Compiles unchanged.
 - [A blocking catch-up holds live events until it has delivered what it held](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held).
   `acceptOrDefer(..)` answers `DEFERRED` until the events held during the replay are delivered, where 0.34.0 went live
-  before that, and a write to the in-memory event store waits meanwhile. Compiles unchanged.
+  before that, and a write to the in-memory event store waits meanwhile. An `acceptAndWait(..)` from the handler of
+  another blocking catch-up throws while the feed isn't live. Compiles unchanged.
 - [A full live buffer fails a blocking catch-up push subscription](#a-full-live-buffer-fails-a-blocking-catch-up-push-subscription).
   An event written once the buffer is full fails the catch-up, where 0.34.0 refused the event and went live without
   it. Compiles unchanged.
@@ -4886,6 +4887,10 @@ then wait for each other.
 wired with `readinessSource(..)` stays paused until the catch-up holds nothing.
 A projection that calls `acceptAndWait(..)` on its own feed while it applies an event gets an `IllegalStateException`
 for a held event, as it already did during the replay. Feed that event from another thread instead.
+A projection, view or handler of a blocking catch-up feed or subscription that calls `acceptAndWait(..)` on another
+blocking feed gets an `IllegalStateException` while that other feed isn't live. In 0.34.0 the call waited for that
+feed's catch-up, or applied the event at once while the feed delivered what it held, and two catch-ups whose handlers
+fed each other this way could wait for each other forever. Feed that event from another thread.
 
 ## A full live buffer fails a blocking catch-up push subscription
 

@@ -211,8 +211,11 @@ public final class CatchupProjectionFeed<E> {
      *                               {@link RoutingOutcome.Disposition#HOLD} describes. Also thrown when this is called
      *                               while the feed is not live from inside the feed's own folds or callbacks, the
      *                               projection's or a view's included, since the wait could only end once that same
-     *                               thread moved on. The feed is not live yet while it folds the events it held
-     *                               during the replay.
+     *                               thread moved on. It is thrown too for a call from inside the projection, view or
+     *                               handler of another blocking catch-up feed or subscription, since a catch-up of
+     *                               that one can be waiting for the calling thread, and two of them feeding each
+     *                               other would wait for each other. The feed is not live yet while it folds the
+     *                               events it held during the replay.
      */
     public void acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
