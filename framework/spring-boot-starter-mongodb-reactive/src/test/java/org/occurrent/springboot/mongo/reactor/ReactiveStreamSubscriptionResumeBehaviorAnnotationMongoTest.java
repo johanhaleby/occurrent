@@ -36,8 +36,13 @@ import org.occurrent.springboot.mongo.reactor.ApplicationRestart.FirstBootEnds;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.RecordingSubscriber;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.Recorder;
 import org.occurrent.springboot.mongo.reactor.ApplicationRestart.TestEvent;
+import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -176,8 +181,28 @@ class ReactiveStreamSubscriptionResumeBehaviorAnnotationMongoTest {
         @Bean
         EventWriter eventWriter(ApplicationService<TestEvent> applicationService,
                                 @Value("${test.before-subscribe}") String beforeSubscribe,
-                                @Value("${test.after-start}") String afterStart) {
-            return new EventWriter(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))).block(), beforeSubscribe, afterStart);
+                                @Value("${test.after-start}") String afterStart,
+                                @Value("${test.last-history}") String lastHistory,
+                                ObjectProvider<BeginningOfTimeDefault> beginningOfTimeDefault,
+                                ObjectProvider<ComposedCatchupModel> composedCatchupModel,
+                                ObjectProvider<FluxSubscriptionModel> subscriptionModel) {
+            // An event written while the replay still runs can be read by the replay and again by the catch-up's second
+            // read, and the checkpoint stored for it is then the live token from before it, so a restart delivers it
+            // again, as the ReactorStreamCatchupSubscriptionModel javadoc describes. live-1 is written once the
+            // replay is over so that it is only delivered live.
+            Runnable replayIsOver = () -> {
+                // The boot that writes the history has subscriptions off, so nothing replays and there is no model
+                if (subscriptionModel.getIfAvailable() == null) {
+                    return;
+                }
+                RecordingSubscriber replaying = beginningOfTimeDefault.getObject();
+                ReplayAwareSubscriptions replayAware = composedCatchupModel.getObject().catchupModelFor((SubscriptionModelCapability) subscriptionModel.getObject()).orElseThrow();
+                await().atMost(ofSeconds(30)).pollInterval(ofMillis(50)).untilAsserted(() -> {
+                    assertThat(replaying.names()).contains(lastHistory);
+                    assertThat(replayAware.isCatchingUp("reactive-resume-bot-default")).isFalse();
+                });
+            };
+            return new EventWriter(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))).block(), beforeSubscribe, afterStart, replayIsOver);
         }
 
         @Bean
