@@ -42,6 +42,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 /**
  * A recording projection learns of an append only from the live copy of its event. That copy is delivered live or by
@@ -93,16 +94,18 @@ class RecordingProjectionBufferOverflowBeforeReplayTest {
             Throwable later = catchThrowable(() -> store.write("stream", List.of(event("later"))));
 
             // Then
-            assertThat(first).as("the append the buffer had room for").isNull();
-            assertThat(second).as("the append that found the buffer full, which would otherwise return normally and never be recorded").isNotNull().hasMessageContaining("buffer overflowed");
-            assertThat(store.read("stream").events().map(CloudEvent::getId).toList()).as("the store committed every append before the feed refused it").containsExactly("first", "second", "later");
-            assertThat(startFailure).as("the catch-up that found the buffer full before it replayed").isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Catch-up failed").cause().hasMessageContaining("buffer overflowed");
-            assertThat(marker.exists(SUBSCRIPTION_ID)).as("catch-up marker").isFalse();
-            assertThat(later).as("a later append, refused after the store committed it").isNotNull().hasMessageContaining("Catch-up failed");
             AppendId secondAppend = AppendId.from(EventMetadata.from(store.read("stream").events().skip(1).findFirst().orElseThrow())).orElseThrow();
-            assertThat(appliedAppends.hasApplied(SUBSCRIPTION_ID, secondAppend)).as("the refused append is not claimed as applied").isFalse();
-            assertThat(applied).as("what the failed catch-up applied of the appends the live feed took").doesNotContain("second", "later");
+            assertSoftly(softly -> {
+                softly.assertThat(first).as("the append the buffer had room for").isNull();
+                softly.assertThat(second).as("the append that found the buffer full, which would otherwise return normally and never be recorded").isNotNull().hasMessageContaining("buffer overflowed");
+                softly.assertThat(store.read("stream").events().map(CloudEvent::getId).toList()).as("the store committed every append before the feed refused it").containsExactly("first", "second", "later");
+                softly.assertThat(startFailure).as("the catch-up that found the buffer full before it replayed").isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed").cause().hasMessageContaining("buffer overflowed");
+                softly.assertThat(marker.exists(SUBSCRIPTION_ID)).as("catch-up marker").isFalse();
+                softly.assertThat(later).as("a later append, refused after the store committed it").isNotNull().hasMessageContaining("Catch-up failed");
+                softly.assertThat(appliedAppends.hasApplied(SUBSCRIPTION_ID, secondAppend)).as("the refused append is not claimed as applied").isFalse();
+                softly.assertThat(applied).as("what the failed catch-up applied of the appends the live feed took").doesNotContain("second", "later");
+            });
         } finally {
             releaseMarkerLookup.countDown();
             model.shutdown();

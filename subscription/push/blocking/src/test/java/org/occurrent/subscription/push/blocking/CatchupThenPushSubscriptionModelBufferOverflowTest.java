@@ -22,6 +22,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 
 class CatchupThenPushSubscriptionModelBufferOverflowTest {
 
@@ -69,24 +70,27 @@ class CatchupThenPushSubscriptionModelBufferOverflowTest {
             observed.clear();
             store.write("stream", List.of(event("l1")));
             store.write("stream", List.of(event("l2")));
-            catchThrowable(() -> store.write("stream", List.of(event("l3"))));
+            Throwable overflowingWrite = catchThrowable(() -> store.write("stream", List.of(event("l3"))));
             releaseReplay.countDown();
             Throwable startFailure = catchThrowable(subscription::waitUntilStarted);
             Throwable laterWrite = catchThrowable(() -> store.write("stream", List.of(event("l4"))));
 
             // Then
-            assertThat(startFailure).as("the catch-up that found the buffer full").isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Catch-up failed").cause().hasMessageContaining("buffer overflowed");
-            assertThat(marker.exists("proj")).as("catch-up marker").isFalse();
-            assertThat(handled).as("events handled: l1 and l2 were buffered before the overflow and reported DELIVERED, yet the failed catch-up delivered neither of them, nor l3 or l4")
-                    .doesNotContain("l1", "l2", "l3", "l4");
-            assertThat(laterWrite).as("a later event written to the subscription that missed one, refused after it committed so the source redelivers it")
-                    .isNotNull().hasMessageContaining("Catch-up failed");
-            assertThat(store.read("stream").events().map(CloudEvent::getId).toList())
-                    .as("the in-memory store commits an event before it calls the listener, so l3 and l4 are stored although their writes threw")
-                    .containsExactly("1", "l1", "l2", "l3", "l4");
-            assertThat(observed).as("what the live feed reported for l1, l2, l3 and the later l4: the two buffered ones DELIVERED, the overflowing one and the one after it REFUSED")
-                    .containsExactly(RoutingOutcome.DELIVERED, RoutingOutcome.DELIVERED, RoutingOutcome.REFUSED, RoutingOutcome.REFUSED);
+            assertSoftly(softly -> {
+                softly.assertThat(overflowingWrite).as("the write that found the buffer full").isNotNull().hasMessageContaining("buffer overflowed");
+                softly.assertThat(startFailure).as("the catch-up that found the buffer full").isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed").cause().hasMessageContaining("buffer overflowed");
+                softly.assertThat(marker.exists("proj")).as("catch-up marker").isFalse();
+                softly.assertThat(handled).as("events handled: l1 and l2 were buffered before the overflow and reported DELIVERED, yet the failed catch-up delivered neither of them, nor l3 or l4")
+                        .doesNotContain("l1", "l2", "l3", "l4");
+                softly.assertThat(laterWrite).as("a later event written to the subscription that missed one, refused after it committed so the source redelivers it")
+                        .isNotNull().hasMessageContaining("Catch-up failed");
+                softly.assertThat(store.read("stream").events().map(CloudEvent::getId).toList())
+                        .as("the in-memory store commits an event before it calls the listener, so l3 and l4 are stored although their writes threw")
+                        .containsExactly("1", "l1", "l2", "l3", "l4");
+                softly.assertThat(observed).as("what the live feed reported for l1, l2, l3 and the later l4: the two buffered ones DELIVERED, the overflowing one and the one after it REFUSED")
+                        .containsExactly(RoutingOutcome.DELIVERED, RoutingOutcome.DELIVERED, RoutingOutcome.REFUSED, RoutingOutcome.REFUSED);
+            });
         } finally {
             releaseReplay.countDown();
             model.shutdown();

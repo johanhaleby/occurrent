@@ -31,6 +31,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -147,9 +148,24 @@ class SagaCatchUpDrainOrderTest {
         // When
         releaseReplay.countDown();
         assertThat(drainingFirstBufferedVersion.await(5, TimeUnit.SECONDS)).as("the drain is delivering the first buffered version").isTrue();
-        eventStore.write(ORDER, converter.toCloudEvents(List.of(new ItemAdded("live", ORDER, "live"))));
+        // From a thread of its own, since the write waits for the drain the handler holds until it is released
+        AtomicReference<Throwable> liveWriteFailure = new AtomicReference<>();
+        Thread liveWriter = new Thread(() -> {
+            try {
+                eventStore.write(ORDER, converter.toCloudEvents(List.of(new ItemAdded("live", ORDER, "live"))));
+            } catch (Throwable e) {
+                liveWriteFailure.set(e);
+            }
+        }, "saga-live-writer");
+        liveWriter.setDaemon(true);
+        liveWriter.start();
+        await().atMost(Duration.ofSeconds(5)).until(() -> !liveWriter.isAlive() || liveWriter.getState() == Thread.State.WAITING);
+        assertThat(liveWriter.isAlive()).as("the live write is still waiting for the drain").isTrue();
         expected.add("live");
         releaseDrain.countDown();
+        liveWriter.join(10_000);
+        assertThat(liveWriter.isAlive()).as("the live write ended once the drain was released").isFalse();
+        assertThat(liveWriteFailure.get()).as("what the live write threw").isNull();
         subscriptionsToClose.add(running.get(10, TimeUnit.SECONDS));
 
         // Then
