@@ -55,7 +55,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -109,6 +112,7 @@ class CompetingConsumerRefusedWriteInAStartEvaluationOverNativeMongoTest {
 
     @AfterEach
     void shutdown() {
+        nativeModel.subscribeReturned.countDown();
         try {
             competing.shutdown();
         } finally {
@@ -121,9 +125,10 @@ class CompetingConsumerRefusedWriteInAStartEvaluationOverNativeMongoTest {
         // Given
         Throwable thrown = catchThrowable(() -> competing.subscribe(NODE, ID, null, StartAt.subscriptionModelDefault(), __ -> {
         }));
+        nativeModel.subscribeReturned.countDown();
 
         // When the evaluation has found the newer version stored. The native model's thread of its own ends with the refusal, which the await would report as an uncaught exception
-        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().until(() -> checkpointStorage.resolverCalls.get() > 0);
+        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().until(() -> !nativeModel.evaluationFailures.isEmpty());
 
         // Then
         assertThat(thrown).as("thrown by subscribe").isNull();
@@ -144,7 +149,9 @@ class CompetingConsumerRefusedWriteInAStartEvaluationOverNativeMongoTest {
         // Given a subscription whose start evaluation found a newer write version stored
         competing.subscribe(NODE, ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
-        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().until(() -> checkpointStorage.resolverCalls.get() > 0);
+        nativeModel.subscribeReturned.countDown();
+        // Recorded once the evaluation throws the refusal, which is after the other node's position was stored and the resolver refused
+        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().until(() -> !nativeModel.evaluationFailures.isEmpty());
 
         // When the lease strategy says another node holds the lease
         strategy.holders.remove(ID);
@@ -163,13 +170,18 @@ class CompetingConsumerRefusedWriteInAStartEvaluationOverNativeMongoTest {
     }
 
     /**
-     * Answers no global checkpoint the first time, so the first position is recorded by the start position evaluation
-     * the native model runs on a thread of its own, and the position it computes then is a later one.
+     * Answers no global checkpoint the first time the subscribing thread asks, so the first position is recorded by the
+     * start position evaluation the native model runs on a thread of its own, and the position it computes then is a
+     * later one. That evaluation is held in its ask until the subscribe has returned, so the subscribing thread always
+     * settles first.
      */
     private static final class NoPositionTheFirstTime extends NativeMongoSubscriptionModel {
         final List<String> positionsStartedFrom = new CopyOnWriteArrayList<>();
         final List<Throwable> evaluationFailures = new CopyOnWriteArrayList<>();
-        private final AtomicInteger calls = new AtomicInteger();
+        final CountDownLatch subscribeReturned = new CountDownLatch(1);
+        private final AtomicBoolean noPositionGiven = new AtomicBoolean();
+        // The thread that builds the model is the one that subscribes
+        private final Thread subscribingThread = Thread.currentThread();
 
         NoPositionTheFirstTime(MongoDatabase database, String eventCollectionName) {
             super(database, eventCollectionName, TimeRepresentation.RFC_3339_STRING, Executors.newCachedThreadPool());
@@ -206,7 +218,18 @@ class CompetingConsumerRefusedWriteInAStartEvaluationOverNativeMongoTest {
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
-            return calls.getAndIncrement() == 0 ? null : super.globalCheckpoint();
+            if (Thread.currentThread() == subscribingThread) {
+                return noPositionGiven.compareAndSet(false, true) ? null : super.globalCheckpoint();
+            }
+            try {
+                if (!subscribeReturned.await(EVENTUALLY.toSeconds(), TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("The subscribe never returned.");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while held until the subscribe returned.", e);
+            }
+            return super.globalCheckpoint();
         }
     }
 
