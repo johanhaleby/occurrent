@@ -50,9 +50,12 @@ package org.occurrent.subscription;
  * {@link RoutingOutcome.Disposition#HOLD} describes. A push model's
  * {@code NOT_DELIVERABLE} goes to the listener's own failure policy instead. A
  * {@code CatchupThenPushSubscriptionModel}'s {@code accept(..)} is supported only from the in-memory event store's
- * write path. There the write call throws although the store has kept the event. The push model's
- * {@code accept(Iterable)} stops at that event, so it routes none of the write's later events either, and the
- * subscription can miss all of them.
+ * write path. There the write call throws although the store has kept the event, and the push model's
+ * {@code accept(Iterable)} stops at that event, so it routes none of the write's later events either. On the blocking
+ * stack the catch-up then fails, writes no marker and refuses every later event until the subscription is cancelled
+ * and subscribed again, and the replay of the new subscription delivers the events it missed from the store. A write
+ * that reaches the cap before the replay has started fails the catch-up the same way. On the reactor stack the
+ * catch-up goes on, and the subscription can miss that event and every later event of the write.
  *
  * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap, per
  *                          cache, of which a handover keeps two.

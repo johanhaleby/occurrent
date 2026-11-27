@@ -89,7 +89,10 @@ public interface CatchupListener {
      * Unlike the two calls above, a failure here is meant to escape rather than be swallowed. Where this is sent at
      * all it is the only chance the append gets, so swallowing a failed write acknowledges an append nothing wrote
      * down. What a thrown exception reaches is whatever the model does with a failed delivery at that moment, an
-     * event's own failed acknowledgement or the catch-up itself, and never an acknowledgement of the event. It still
+     * event's own failed acknowledgement or, on the reactor model, the catch-up itself, and never an acknowledgement
+     * of the event. The blocking model is the exception for an event it held during its catch-up. An event store that
+     * pushes its writes, such as the in-memory one, fed it that event and took it as handled when it was held, and
+     * nothing offers it again, so a throw for it is logged as a warning and the catch-up goes on. It still
      * has to return promptly, since it runs on a thread the subscription needs back. The default does nothing, which
      * is what a listener that records nothing per event wants.
      *

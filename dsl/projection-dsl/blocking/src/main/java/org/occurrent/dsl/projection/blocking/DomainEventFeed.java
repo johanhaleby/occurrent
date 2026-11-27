@@ -205,7 +205,7 @@ public final class DomainEventFeed<E> {
      * consumption on more than just {@link #hasProjection()}. Delegates to the underlying catch-up-then-live
      * handover rather than tracking this separately, so it is {@code true} only once
      * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually reached live,
-     * {@code false} while either is still replaying or buffering ahead of its own drain, and {@code false} forever
+     * {@code false} while either is still replaying or delivering the events it held, and {@code false} forever
      * once either has thrown, since that failure is permanent and a later call reaching live does not clear it. A
      * live event fed through {@link #acceptOrDefer(Object)} or {@link #acceptOrDeferCloudEvent(CloudEvent)} while this
      * answers {@code false} is never buffered. It is refused outright, and
@@ -249,7 +249,9 @@ public final class DomainEventFeed<E> {
      * <p>
      * Once the projection is live the event is folded on the calling thread, and an exception from the projection
      * propagates. Before the projection goes live, and while a catch-up runs on a projection that already went live,
-     * this waits until the drain after the replay has folded the event, and throws when it does not fold it, a
+     * this waits until the drain after the replay has folded the event. When it comes while that drain runs, it waits
+     * for the drain to take the projection live and then folds the event on the calling thread. It throws when the
+     * event is not folded, a
      * catch-up stopped or failed before the projection went live, say. {@link CatchupProjectionFeed#acceptAndWait(Object)}
      * has the details, including what a long wait does to a Kafka consumer.
      *
@@ -371,8 +373,8 @@ public final class DomainEventFeed<E> {
      * check and the accept together, under the same lock the underlying handover already holds for that decision, so
      * there is no window between "is it live" and "hand it over" for a concurrent {@link #goLive(String)} to land
      * in. That covers an event fed before {@link #catchUpAll()}/{@link #catchUp(String)} or
-     * {@link #goLive(String)} has been called at all, one fed while a replay is still running and buffering ahead
-     * of its own drain, one fed after {@link #stopCatchUp()} interrupted a replay before the projection went live,
+     * {@link #goLive(String)} has been called at all, one fed while a replay is still running or the catch-up
+     * delivers the events it held, one fed after {@link #stopCatchUp()} interrupted a replay before the projection went live,
      * and one fed while another thread is still folding the same event. Redelivering a
      * {@link RoutingOutcome#DEFERRED} event is always safe. This feed's own de-dup key absorbs a repeat that
      * already landed, and a caller with nowhere else to redeliver from, {@link #goLive(String)} exists precisely
@@ -554,14 +556,22 @@ public final class DomainEventFeed<E> {
      * feed's events are not in the local event store, so there is nothing to replay. No completion marker is written,
      * so a later {@link #catchUp(String)} on the same projection still replays the full history.
      * <p>
-     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
-     * once the replay has ended, so {@link #acceptOrDeferCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
-     * a matching event after that, unless another replay has started since. When a catch-up of that projection failed
+     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection, or while this
+     * feed delivers the events it held or writes its marker, returns only once that catch-up has ended and the
+     * projection is live, so {@link #acceptOrDeferCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
+     * a matching event after that, unless another replay has started since. Don't make the call while holding a lock
+     * that the projection takes, since the call waits for this feed to apply an event to the
+     * projection, and applying it waits for that lock. When a catch-up of that projection failed
      * while it waited, this throws an {@link IllegalStateException} whose cause is a catch-up failure recorded while it
      * waited. An interrupt ends the wait early and stays on the thread. A call the view makes while this feed is
      * calling it, from its fold or from a callback such as {@code replayStarted()}, returns without waiting for the
      * replay, since that replay cannot end before the call returns. During a replay, a call the view hands to another
      * thread waits for that replay, which cannot end while the view waits for the call.
+     * <p>
+     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription waits only when it
+     * comes while the replay runs. One that comes while this feed delivers the events it held returns without waiting,
+     * so {@link #acceptOrDeferCloudEvent(CloudEvent)} can still return {@link RoutingOutcome#DEFERRED} right after it.
+     * {@link CatchupProjectionFeed#goLive()} has the details.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */

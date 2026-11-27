@@ -80,9 +80,10 @@ public enum RoutingOutcome {
      * next one, and a filter that fails on every event needs an operator rather than a redelivery.
      * <p>
      * Also reported for a registered action that refused the event before attempting dispatch without promising the
-     * refusal is permanent, a catch-up-then-live engine whose live buffer is full while its replay is still
+     * refusal is permanent, a reactor catch-up-then-live engine whose live buffer is full while its replay is still
      * running, say. That refusal clears on its own once the replay drains, so it is a failure to report rather than
-     * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead. A push
+     * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead, as a blocking
+     * catch-up-then-live engine does for a full live buffer, since its catch-up then fails. A push
      * model's {@code acceptOrDefer(..)} returns this refusal without throwing its cause.
      * <p>
      * On the reactor stack a catch-up-then-live engine also reports this outcome after its handler has run, when it

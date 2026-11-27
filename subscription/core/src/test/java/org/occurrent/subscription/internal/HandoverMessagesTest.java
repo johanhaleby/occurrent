@@ -39,6 +39,13 @@ class HandoverMessagesTest {
     }
 
     @Test
+    void the_refusal_from_inside_another_handover_names_the_noun_and_says_to_feed_without_waiting_or_from_another_thread_it_does_not_wait_for() {
+        assertThat(HandoverMessages.acceptedFromAnotherHandover("projection feed"))
+                .contains("this projection feed")
+                .endsWith("Feed it without waiting for it, or from another thread that this handler does not wait for.");
+    }
+
+    @Test
     void the_refusal_after_a_failed_catch_up_says_how_to_change_what_is_stored_when_several_instances_run_it() {
         assertThat(HandoverMessages.catchUpFailed("subscription")).endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
         assertThat(HandoverMessages.catchUpFailed("projection feed")).endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);

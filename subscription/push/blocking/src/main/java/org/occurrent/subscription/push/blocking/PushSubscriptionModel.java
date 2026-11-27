@@ -153,7 +153,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * never delivered by this call. Call this instead of {@link #accept(CloudEvent)} from a broker listener that
      * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
      * refuses is lost rather than protected, which is why {@link #accept(CloudEvent)} buffers such an event instead,
-     * unless the buffer is full or the catch-up has been stopped. The
+     * or waits while the catch-up delivers what it buffered, unless the buffer is full or the catch-up has been
+     * stopped. The
      * same holds for a call from inside another subscription's handler, so act on the returned outcome there. Throw on
      * anything but {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, say, so the outer handler
      * fails instead of returning as if the event had been handled. Calling {@link #accept(CloudEvent)} there instead

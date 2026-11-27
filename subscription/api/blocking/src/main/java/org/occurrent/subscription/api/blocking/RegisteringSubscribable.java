@@ -134,8 +134,8 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
          * {@code permanent} is the action's promise about its own refusal, and it decides which outcome is
          * reported. Pass {@code true} only when offering the same event to this same registration again is certain
          * to be refused the same way, which reports {@link RoutingOutcome#REFUSED} and tells a caller to stop.
-         * A refusal that clears on its own, a catch-up-then-live engine whose live buffer is full while its replay
-         * is still running, say, passes {@code false} and reports {@link RoutingOutcome#NOT_DELIVERABLE}, which
+         * A refusal that clears on its own, a reactor catch-up-then-live engine whose live buffer is full while its
+         * replay is still running, say, passes {@code false} and reports {@link RoutingOutcome#NOT_DELIVERABLE}, which
          * sends the event through the caller's failure policy instead.
          */
         final class Refusal extends RuntimeException {

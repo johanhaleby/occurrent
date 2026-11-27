@@ -37,9 +37,11 @@ final class ControllableSource implements BlockingHandover.Source<String> {
     volatile long startedAt = Long.MAX_VALUE;
     volatile long endedAt = Long.MAX_VALUE;
     volatile Thread catchUpThread;
+    /** When the drain of this catch-up began, taken once the source is told the history is done, so after the drain was claimed */
+    final List<Long> drainStartedAt = new CopyOnWriteArrayList<>();
     /** What the catch-up returned or "threw ...", null while it has not ended */
     volatile String outcome;
-    /** When an injected failure fired in this catch-up's own replay or drain: the fold threw, the callback threw or an interrupt landed at a gate */
+    /** When an injected failure fired in this catch-up's own replay or drain: the fold threw, the callback threw or an interrupt landed at a gate. A callback that throws is not one, it changes only the answer of its own payload */
     final List<Long> failuresFiredAt = new CopyOnWriteArrayList<>();
 
     ControllableSource(List<String> history, AtomicBoolean marker, AtomicLong clock) {
@@ -105,6 +107,7 @@ final class ControllableSource implements BlockingHandover.Source<String> {
 
     @Override
     public void historyDone() {
+        drainStartedAt.add(clock.incrementAndGet());
         gate();
     }
 
@@ -123,9 +126,6 @@ final class ControllableSource implements BlockingHandover.Source<String> {
     @Override
     public void alreadyDeliveredByReplay(String payload) {
         if (failCallback) {
-            if (Thread.currentThread() == catchUpThread) {
-                failureFired();
-            }
             throw new IllegalStateException("recording callback failed for " + payload);
         }
     }

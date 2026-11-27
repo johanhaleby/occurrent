@@ -1257,18 +1257,13 @@ class DomainEventFeedTest {
     }
 
     /**
-     * Round 8 had {@code goLive()} flip its own one-shot flag true only after draining the buffer it inherited, to
-     * close a window where a poll on another thread could see it as safe to consume while an event fed ahead of
-     * {@code goLive()} was still only sitting in that buffer. The round-11 delegate reports {@code true} earlier
-     * than that, as soon as {@code BlockingHandover} claims the buffer under its own lock and marks itself live,
-     * before the claimed items are actually folded outside that lock. That is safe rather than a reopened window.
-     * The claim (under lock, {@code tryReserve}) and the fold (outside it, {@code deliverOutsideLock}) are exactly
-     * the same split a concurrent live {@code acceptAndWait(Object)} already uses (the handover's own class javadoc, #588),
-     * so a live event racing this drain either matches the same de-dup key and is dropped as already in flight, or
-     * matches a different key and is delivered independently. Nothing is left buffered-but-reported-ready.
+     * {@code goLive()} delivers the events the feed held before the feed reports ready for live delivery. The handover
+     * goes live only when a drain round finds its buffer empty under its lock (#1316). While the projection still
+     * applies an event fed ahead of {@code goLive()}, the feed reports not ready, and once that event is applied it
+     * reports ready. A poll on another thread never sees the feed as ready while an event it held is undelivered.
      */
     @Test
-    void go_live_reports_ready_once_its_drain_claims_the_buffer_even_while_an_inherited_items_fold_is_still_running() throws InterruptedException {
+    void go_live_reports_ready_only_after_its_drain_has_delivered_the_inherited_item() throws InterruptedException {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
@@ -1291,9 +1286,8 @@ class DomainEventFeedTest {
         goLive.start();
         awaitUninterruptibly(foldEntered);
 
-        assertThat(feed.isReadyForLiveDelivery()).as("the drain already claimed the buffer and marked itself live, "
-                        + "even though this claimed item's own fold is still running")
-                .isTrue();
+        assertThat(feed.isReadyForLiveDelivery()).as("the drain is still delivering the inherited item, so the handover is not live yet")
+                .isFalse();
 
         releaseFold.countDown();
         goLive.join(TimeUnit.SECONDS.toMillis(5));

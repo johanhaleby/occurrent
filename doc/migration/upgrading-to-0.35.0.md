@@ -219,6 +219,19 @@ other sections compile fine and behave differently, so read them first.
   A reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` start that reads a stored
   marker replays the events after it instead of skipping its replay, and a cancel no longer promises a rebuild.
   Compiles unchanged.
+- [A blocking catch-up holds live events until it has delivered what it held](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held).
+  `acceptOrDefer(..)` answers `DEFERRED` until the events held during the replay are delivered, where 0.34.0 went live
+  before that, and a write to the in-memory event store and a `goLive()` wait meanwhile. An `acceptAndWait(..)` from
+  the handler of another blocking catch-up throws while the feed isn't live. Compiles unchanged.
+- [A full live buffer fails a blocking catch-up push subscription](#a-full-live-buffer-fails-a-blocking-catch-up-push-subscription).
+  An event written once the buffer is full fails the catch-up, where 0.34.0 refused the event and went live without
+  it. Compiles unchanged.
+- [A blocking catch-up stopped while it delivers what it held ends there](#a-blocking-catch-up-stopped-while-it-delivers-what-it-held-ends-there).
+  A stop that comes after the last replayed event writes no marker, where 0.34.0 still wrote it or still went live.
+  Compiles unchanged.
+- [A recording callback that throws fails only its own event on a blocking catch-up](#a-recording-callback-that-throws-fails-only-its-own-event-on-a-blocking-catch-up).
+  A throw from `alreadyDeliveredByReplay(..)` for a held event fails that event alone, where 0.34.0 failed the whole
+  catch-up. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
@@ -4856,6 +4869,89 @@ a replay, such as the one `Projections` builds, reads and writes once per event 
 recorder writes a record for each append the projection applies. Plan for that replay, and set
 `startupMode = BACKGROUND` when a startup probe could cut it short. A 0.34.0 node that reads a marker 0.35.0 stored
 skips its replay, as it always did, so a rolling upgrade needs nothing more on either side.
+
+## A blocking catch-up holds live events until it has delivered what it held
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` holds the live events that
+arrive while it replays and delivers them once the replay ends. In 0.34.0 it went live before it delivered them, so a
+live event that arrived then could reach the handler ahead of an older held one. It now goes live once it holds
+nothing, and a live event that arrives meanwhile waits behind the held ones.
+
+There is nothing to change for most applications. A listener that calls `acceptOrDefer(..)` gets `DEFERRED` until
+the catch-up has delivered what it held, and has the broker deliver the event again, as it already does during the
+replay. A write to the in-memory event store that reaches a `CatchupThenPushSubscriptionModel` meanwhile waits on the
+writing thread until the catch-up has gone live, stopped or failed, so the catch-up goes live however fast events are
+written. Don't write to the event store while holding a lock that the handler takes, since the write and the handler
+then wait for each other. A handler that waits for another thread's write to the event store, such as a write it
+submits to an executor and then waits on, waits forever the same way.
+`isReadyForLiveDelivery(..)` on the model or the feed answers `false` for that time too, so a RabbitMQ or Kafka source
+wired with `readinessSource(..)` stays paused until the catch-up holds nothing.
+A projection that calls `acceptAndWait(..)` on its own feed while it applies an event gets an `IllegalStateException`
+for a held event, as it already did during the replay. Feed that event from another thread instead, and don't have
+the projection wait for that thread.
+A projection, view or handler of a blocking catch-up feed or subscription that calls `acceptAndWait(..)` on another
+blocking feed gets an `IllegalStateException` while that other feed isn't live. In 0.34.0 the call waited for that
+feed's catch-up, or applied the event at once while the feed delivered what it held, and two catch-ups whose handlers
+fed each other this way could wait for each other forever. Feed that event from another thread, and don't have the
+handler wait for that thread.
+
+A `goLive()` on a `CatchupProjectionFeed`, a `goLive(id)` on a `DomainEventFeed`, and a `catchUp()`, `catchUp(id)` or
+`catchUpAll()` that finds the catch-up marker already written wait until the feed is live when they're called while
+the feed delivers what it held or writes its marker. In 0.34.0 they returned at once then. So application code that
+makes one of these calls while holding a lock that the projection takes now waits forever when the feed delivers a
+held event to the projection, since that delivery waits for the lock. Release the lock before the call, or make the
+call from another thread without waiting for it while you hold the lock. A call from the projection, view or handler of
+another blocking feed or catch-up subscription doesn't wait for that delivery, as in 0.34.0.
+
+## A full live buffer fails a blocking catch-up push subscription
+
+A blocking `CatchupThenPushSubscriptionModel` over an event store that pushes its writes to it, such as the in-memory
+event store, holds up to `maxBufferedEvents` live events until its catch-up has delivered them, 100,000 by default.
+In 0.34.0 an event written once that buffer was full was refused to the writer, the catch-up went on and wrote its
+marker, and the subscription never got the event. The catch-up now fails instead, writes no marker, and the
+subscription refuses every later event. A `PushObserver` is told `REFUSED` for the event that found the buffer full,
+where 0.34.0 told it `NOT_DELIVERABLE`.
+
+The write that found the buffer full, and every later write to the in-memory event store of an event the subscription
+would receive, throws once the store has committed the event. So a writer that retries such a write stores the event twice. The live events the
+subscription held before the buffer filled up were reported `DELIVERED` to a `PushObserver` when they were held, and
+the failed subscription never delivers them.
+
+An event that finds the buffer full before the replay has started fails the catch-up too. The replay reads that event
+from the store, but a projection that records its appends never records that event's append, so `waitUntilApplied`
+would time out for it. Once the replay has ended, a write waits for the catch-up to deliver what it held instead of
+adding to the buffer, unless a handler makes it, as [the section above](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held)
+describes.
+
+There is no code to change, unless a writer retries a write that threw. A subscription that fails this way stays
+failed until you cancel it and subscribe again, and that replay delivers every event the failed one missed, from the
+store. A history too large to replay while the writers fill the buffer needs a larger `maxBufferedEvents` in its
+`CatchupThenLiveOptions`.
+
+## A blocking catch-up stopped while it delivers what it held ends there
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` delivers the live events it
+held during its replay before it writes the catch-up marker. In 0.34.0 a `stopCatchUp()` that came after the last
+replayed event still let a feed write its marker, and a `stop()` that came then still let a subscription deliver every
+held event and go live. The catch-up now looks for a stop before each held event and once more right before it goes
+live, and a stop it finds there writes no marker.
+
+There is no code to change. The next catch-up replays the history the stopped one would have marked, and the held
+events the stopped one kept reach the handler from that replay or after it. They reach it once while that replay's
+de-dup cache, sized by `dedupCacheSize`, still holds them.
+
+## A recording callback that throws fails only its own event on a blocking catch-up
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` calls
+`alreadyDeliveredByReplay(..)` on its `CatchupListener` or `ReplayAware` view for a live event its replay already
+applied, so a recording projection can write down the append the event came from. In 0.34.0 a throw from that call for
+an event held during the catch-up failed the whole catch-up, so it wrote no marker and refused every later event. Now
+the throw fails that event alone. A feed's `acceptAndWait(..)` for it throws, and a subscription logs a warning. The
+catch-up delivers the rest, goes live and writes its marker.
+
+There is no code to change, unless an application relied on a recording failure to fail the catch-up. A projection
+that has to stop on such a failure now sees it through the `acceptAndWait(..)` that throws, or through the warning
+on a subscription.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
