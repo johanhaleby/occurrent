@@ -1599,8 +1599,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         private @Nullable Settled write(@Nullable Checkpoint read, @Nullable Checkpoint position) {
             Checkpoint stored = null;
             if (read != null) {
-                // Before the outcome settles, so a newer version stored refuses the subscribe on its own thread. An
-                // evaluation can get here once the subscribe has returned and a cancel deleted what it read
+                // Before the outcome settles, so the refusal for a newer version stored is the outcome, and subscribe
+                // throws it whichever party wrote
                 stored = withThisNodesWriteVersionStoredUnlessCancelled(subscriptionId, read, registration);
                 if (stored == null) {
                     return null;
