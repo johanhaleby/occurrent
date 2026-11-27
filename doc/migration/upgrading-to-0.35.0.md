@@ -493,8 +493,10 @@ position is saved over a checkpoint another node stored during the pause until t
 checkpoint of an event. An evaluation of the start position that found no checkpoint stored before such a resume, or
 a restart after a lost history, stored a position records no first position over it. One that read a stored checkpoint
 before then doesn't store this node's version with that checkpoint, since on the MongoDB storages that write could
-replace a later operation time the resume stored with the earlier one read. Both throw `IllegalStateException`, and
-evaluating again starts from the stored checkpoint.
+replace a later operation time the resume stored with the earlier one read. One that read it once `subscribe(..)` had
+decided the start position throws `IllegalStateException`, as one that found no checkpoint does, and evaluating again
+starts from the stored checkpoint. One that read it while `subscribe(..)` decided the start position reads the stored
+checkpoint again and starts from it.
 
 A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
 durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live

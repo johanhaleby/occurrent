@@ -54,9 +54,10 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * An evaluation of the start position from the model default reads a stored checkpoint P and, with a write version
  * configured, stores this node's version with it. When a resume, a resume at a position or a restart after a lost
  * history stores a position R2 after that read and before that store, storing P again could replace R2 with an earlier
- * position, so the evaluation is refused and R2 stays stored. The storage here stores the checkpoint it is asked to
- * resolve whatever it holds, as a MongoDB storage does for an earlier operation time, so storing the version with P, when it isn't refused,
- * shows as P stored.
+ * position, so a later evaluation is refused and R2 stays stored. An evaluation that read P while the subscribe
+ * settled the first position stores nothing from that read, so it reads again, finds R2 and starts from it. The storage
+ * here stores the checkpoint it is asked to resolve whatever it holds, as a MongoDB storage does for an earlier
+ * operation time, so storing the version with P, when it isn't refused, shows as P stored.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
@@ -114,7 +115,7 @@ class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
     }
 
     @Test
-    void an_evaluation_that_settles_on_another_thread_while_subscribe_is_under_way_is_refused_when_a_plain_resume_stored_a_position_between_its_read_and_its_stamp() throws Exception {
+    void an_evaluation_that_read_the_checkpoint_before_the_subscribe_settled_reads_it_again_after_a_plain_resume_and_starts_from_what_it_stored() throws Exception {
         EvaluatingOnAnotherThreadModel wrapped = new EvaluatingOnAnotherThreadModel();
         DurableSubscriptionModel durable = subscribedOverStoredCheckpoint(wrapped);
         Future<@Nullable StartAt> evaluation = Objects.requireNonNull(wrapped.evaluation.get(), "the wrapped model started no evaluation");
@@ -123,11 +124,11 @@ class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
         durable.resumeSubscription(SUBSCRIPTION_ID);
         storage.release.countDown();
 
-        assertRefusedAndStillStored(evaluation);
+        assertStartedFromWhatTheRepositionStored(evaluation);
     }
 
     @Test
-    void an_evaluation_that_settles_on_another_thread_while_subscribe_is_under_way_is_refused_when_a_resume_at_a_position_stored_it_between_its_read_and_its_stamp() throws Exception {
+    void an_evaluation_that_read_the_checkpoint_before_the_subscribe_settled_reads_it_again_after_a_resume_at_a_position_and_starts_from_what_it_stored() throws Exception {
         EvaluatingOnAnotherThreadModel wrapped = new EvaluatingOnAnotherThreadModel();
         DurableSubscriptionModel durable = subscribedOverStoredCheckpoint(wrapped);
         Future<@Nullable StartAt> evaluation = Objects.requireNonNull(wrapped.evaluation.get(), "the wrapped model started no evaluation");
@@ -136,11 +137,11 @@ class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
         durable.resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(STORED_BY_THE_REPOSITION));
         storage.release.countDown();
 
-        assertRefusedAndStillStored(evaluation);
+        assertStartedFromWhatTheRepositionStored(evaluation);
     }
 
     @Test
-    void an_evaluation_that_settles_on_another_thread_while_subscribe_is_under_way_is_refused_when_a_restart_after_a_lost_history_stored_a_position_between_its_read_and_its_stamp() throws Exception {
+    void an_evaluation_that_read_the_checkpoint_before_the_subscribe_settled_reads_it_again_after_a_restart_after_a_lost_history_and_starts_from_what_it_stored() throws Exception {
         EvaluatingOnAnotherThreadModel wrapped = new EvaluatingOnAnotherThreadModel();
         subscribedOverStoredCheckpoint(wrapped);
         Future<@Nullable StartAt> evaluation = Objects.requireNonNull(wrapped.evaluation.get(), "the wrapped model started no evaluation");
@@ -148,7 +149,7 @@ class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
         wrapped.historyLossListeners.getFirst().restartingAfterHistoryLoss(SUBSCRIPTION_ID, STORED_BY_THE_REPOSITION, () -> true);
         storage.release.countDown();
 
-        assertRefusedAndStillStored(evaluation);
+        assertStartedFromWhatTheRepositionStored(evaluation);
     }
 
     private DurableSubscriptionModel subscribedOverStoredCheckpoint(QuietPositionReportingModel wrapped) {
@@ -184,6 +185,20 @@ class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID)).as("stored checkpoint").isNotNull()
                         .extracting(Checkpoint::asString).isEqualTo(STORED_BY_THE_REPOSITION.asString()),
                 () -> assertThat(refusal).as("refusal of the evaluation").isInstanceOf(IllegalStateException.class).hasMessageContaining(REFUSAL)
+        );
+    }
+
+    private void assertStartedFromWhatTheRepositionStored(Future<@Nullable StartAt> evaluation) throws Exception {
+        Throwable failure = failureOf(evaluation);
+        StartAt startAt = failure == null ? evaluation.get() : null;
+
+        assertAll(
+                () -> assertThat(failure).as("failure of the evaluation").isNull(),
+                () -> assertThat(startAt).as("start position of the evaluation").isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                        position -> assertThat(position.checkpoint.asString()).isEqualTo(STORED_BY_THE_REPOSITION.asString())),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID)).as("stored checkpoint").isNotNull()
+                        .extracting(Checkpoint::asString).isEqualTo(STORED_BY_THE_REPOSITION.asString()),
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L)
         );
     }
 
