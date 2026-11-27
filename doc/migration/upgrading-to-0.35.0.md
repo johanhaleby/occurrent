@@ -221,8 +221,8 @@ other sections compile fine and behave differently, so read them first.
   Compiles unchanged.
 - [A blocking catch-up holds live events until it has delivered what it held](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held).
   `acceptOrDefer(..)` answers `DEFERRED` until the events held during the replay are delivered, where 0.34.0 went live
-  before that, and a write to the in-memory event store waits meanwhile. An `acceptAndWait(..)` from the handler of
-  another blocking catch-up throws while the feed isn't live. Compiles unchanged.
+  before that, and a write to the in-memory event store and a `goLive()` wait meanwhile. An `acceptAndWait(..)` from
+  the handler of another blocking catch-up throws while the feed isn't live. Compiles unchanged.
 - [A full live buffer fails a blocking catch-up push subscription](#a-full-live-buffer-fails-a-blocking-catch-up-push-subscription).
   An event written once the buffer is full fails the catch-up, where 0.34.0 refused the event and went live without
   it. Compiles unchanged.
@@ -4891,6 +4891,14 @@ A projection, view or handler of a blocking catch-up feed or subscription that c
 blocking feed gets an `IllegalStateException` while that other feed isn't live. In 0.34.0 the call waited for that
 feed's catch-up, or applied the event at once while the feed delivered what it held, and two catch-ups whose handlers
 fed each other this way could wait for each other forever. Feed that event from another thread.
+
+A `goLive()` on a `CatchupProjectionFeed`, a `goLive(id)` on a `DomainEventFeed`, and a `catchUp()`, `catchUp(id)` or
+`catchUpAll()` that finds the catch-up marker already written wait until the feed is live when they're called while
+the feed delivers what it held or writes its marker. In 0.34.0 they returned at once then. So application code that
+makes one of these calls while holding a lock that the projection takes now waits forever when the feed delivers a
+held event to the projection, since that delivery waits for the lock. Release the lock before the call, or make the
+call from another thread without waiting for it while you hold the lock. A call from the projection, view or handler of
+another blocking feed or catch-up subscription doesn't wait for that delivery, as in 0.34.0.
 
 ## A full live buffer fails a blocking catch-up push subscription
 

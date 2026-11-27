@@ -556,18 +556,21 @@ public final class DomainEventFeed<E> {
      * feed's events are not in the local event store, so there is nothing to replay. No completion marker is written,
      * so a later {@link #catchUp(String)} on the same projection still replays the full history.
      * <p>
-     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
-     * once the replay has ended, so {@link #acceptOrDeferCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
-     * a matching event after that, unless another replay has started since. When a catch-up of that projection failed
+     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection, or while this
+     * feed delivers the events it held or writes its marker, returns only once that catch-up has ended and the
+     * projection is live, so {@link #acceptOrDeferCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
+     * a matching event after that, unless another replay has started since. Don't make the call while holding a lock
+     * that the projection takes, since the call waits for this feed to apply an event to the
+     * projection, and applying it waits for that lock. When a catch-up of that projection failed
      * while it waited, this throws an {@link IllegalStateException} whose cause is a catch-up failure recorded while it
      * waited. An interrupt ends the wait early and stays on the thread. A call the view makes while this feed is
      * calling it, from its fold or from a callback such as {@code replayStarted()}, returns without waiting for the
      * replay, since that replay cannot end before the call returns. During a replay, a call the view hands to another
      * thread waits for that replay, which cannot end while the view waits for the call.
      * <p>
-     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription waits only while
-     * the replay runs, and returns at once while this feed delivers the events it held during the replay. So
-     * {@link #acceptOrDeferCloudEvent(CloudEvent)} can still return {@link RoutingOutcome#DEFERRED} right after it.
+     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription waits only when it
+     * comes while the replay runs. One that comes while this feed delivers the events it held returns without waiting,
+     * so {@link #acceptOrDeferCloudEvent(CloudEvent)} can still return {@link RoutingOutcome#DEFERRED} right after it.
      * {@link CatchupProjectionFeed#goLive()} has the details.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed

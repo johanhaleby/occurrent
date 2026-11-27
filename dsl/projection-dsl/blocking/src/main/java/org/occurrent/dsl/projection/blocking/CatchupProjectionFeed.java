@@ -333,7 +333,9 @@ public final class CatchupProjectionFeed<E> {
      * after wiring the live feed, so events arriving during the replay are captured.
      * <p>
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
-     * {@link #stopCatchUp()} to bring it back down.
+     * {@link #stopCatchUp()} to bring it back down. Before it replays, it waits for every event this feed is still
+     * applying to the view and for a catch-up already running, so don't call it while holding a lock that the view takes, as
+     * {@link #goLive()} describes.
      * <p>
      * A catch-up whose failure reaches this feed on an interrupted thread throws that failure but is not recorded as a
      * failed catch-up, since a store client can fail its reads once the thread is interrupted, the MongoDB driver
@@ -446,17 +448,24 @@ public final class CatchupProjectionFeed<E> {
      * events are not in the local event store, so there is nothing to replay. No completion marker is written, since
      * nothing was replayed, so a later {@link #catchUp()} still replays the full history.
      * <p>
-     * A call while {@link #catchUp()} is still replaying returns only once that replay has ended. When a catch-up on
+     * A call while {@link #catchUp()} is still replaying, or while this feed delivers the events it held or writes its
+     * marker, returns only once that catch-up has ended and this feed is live, unless another replay has started
+     * since. When a catch-up on
      * this feed failed while it waited, it throws an {@link IllegalStateException} whose cause is a catch-up failure
      * recorded while it waited. An interrupt ends the wait early and stays on the thread. A call the view makes while
      * this feed is calling it, from its fold or from a callback such as {@code replayStarted()}, returns without
      * waiting for the replay, since that replay cannot end before the call returns. During a replay, a call the view
      * hands to another thread waits for that replay, which cannot end while the view waits for the call.
      * <p>
-     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription waits only while
-     * the replay runs. While this feed delivers the events it held during the replay or writes its marker, that call
-     * returns at once, and this feed goes live once the delivery ends. So {@link #acceptOrDefer(Object)} can still return
-     * {@link RoutingOutcome#DEFERRED} right after it, and a failure of that catch-up is not thrown to it.
+     * Don't make the call while holding a lock that the view takes. The call waits for this feed to apply an event to
+     * the view, and applying it waits for the lock, so neither returns. Release the lock before the call, or make the
+     * call from another thread without waiting for it while you hold the lock.
+     * <p>
+     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription that comes while
+     * the replay runs waits until that catch-up has ended, as above. One that comes after the replay has ended, while
+     * this feed delivers the events it held or writes its marker, returns without waiting, and this feed goes live
+     * once the delivery ends. So {@link #acceptOrDefer(Object)} can still return {@link RoutingOutcome#DEFERRED} right
+     * after it, and a failure of that catch-up is not thrown to it.
      * <p>
      * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. A redelivery
      * of an event this feed already delivered to the view is skipped only while its id is among the latest
