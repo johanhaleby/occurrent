@@ -1600,7 +1600,7 @@ public class SpringMongoSubscriptionModelTest {
                 @Override
                 public synchronized Subscription resumeSubscription(String id) {
                     Subscription resumed = super.resumeSubscription(id);
-                    await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(() -> !isRunning(id));
+                    await().atMost(FIVE_SECONDS).pollInSameThread().with().pollInterval(Duration.of(10, MILLIS)).until(() -> !isRunning(id));
                     return resumed;
                 }
             };
@@ -1633,7 +1633,7 @@ public class SpringMongoSubscriptionModelTest {
                 public void pauseSubscription(String id) {
                     if (firstPause.getAndSet(false)) {
                         holdsTheRefusal.release.countDown();
-                        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(10, MILLIS)).until(() -> !isRunning(id));
+                        await().atMost(FIVE_SECONDS).pollInSameThread().with().pollInterval(Duration.of(10, MILLIS)).until(() -> !isRunning(id));
                     }
                     super.pauseSubscription(id);
                 }
