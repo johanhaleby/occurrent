@@ -2861,6 +2861,10 @@ the subscriber's action that is under way.
 * Past the second, the call returns all the same and logs a `WARN` naming the subscription. After a cancel the replay
   hands the action no further event. After a stop it hands it none until `start(true)` or `resumeSubscription(id)`
   runs the replay again.
+* `stop()` and `stopReplay()` also wait for a replay that had already begun to hand its subscription over to the live
+  delegate's `subscribe(..)`, so the live delegate has the subscription by the time they return, and after a `stop()`
+  it reads as paused. That wait gives up after 10 seconds and throws `IllegalStateException`, with the model stopped
+  all the same, or after `stopReplay()` its replays.
 * A cancel holds the subscription's claim while it waits. A `pauseSubscription(id)` or `cancelSubscription(id)` that
   the action of `id` makes on the replay thread while another thread holds that claim throws `IllegalStateException`
   at once, as in 0.34.0, unless the action has handed a call over before it. That can now happen for up to a second

@@ -67,6 +67,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -111,6 +112,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Pause requested for a subscriptionId while its replay is still in-flight. The handover of a replay a subscribe
     // started applies it once the live delegate has the subscription, and a replay a resume started is held instead.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
+    // The subscriptions whose replay of this model runs its handover under the handover lock, see handOverUnderLock.
+    // Added before the handover reads stopped and removed before the lock is released, both under this set's monitor,
+    // which a stop takes to list them once it has set stopped. So a handover the stop's list misses reads stopped as
+    // true and parks the replay, and the stop waits for every other one, see parkReplaysInFlight
+    private final Set<String> handoversUnderWay = new HashSet<>();
     protected volatile boolean shuttingDown = false;
     // System.nanoTime() as the shutdown began, 0 until then. Set before markShuttingDown marks any record as forgotten
     // by the shutdown, so a live call that finds the mark also finds this set
@@ -1026,14 +1032,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * begun by then. With none of those calls pending it runs after a {@code shutdown()} that returned normally as it
      * did in 0.34.0, and calls the live delegate's {@code stop()}, as {@link #runInTurn} describes.
      * <p>
-     * Parking a replay gives up when another call holds its subscription's claim or handover lock for
-     * {@link #LIFECYCLE_WAIT}. The live delegate's {@code stop()} still runs, and this throws
+     * A replay that had already begun to hand its subscription over to the live delegate's {@code subscribe(..)} when
+     * this began is waited for too, before the live delegate stops. So the live delegate holds the subscription when it
+     * stops, the subscription reads as paused once this returns, and the next start runs it.
+     * <p>
+     * Parking a replay, or waiting for such a handover, gives up when another call holds its subscription's claim or
+     * handover lock for {@link #LIFECYCLE_WAIT}. The live delegate's {@code stop()} still runs, and this throws
      * {@link IllegalStateException} with the model stopped all the same. The replay delivers no further event until
      * a {@code start(true)} or a resume runs it again. One such call is a replay that is handing its subscription over
-     * to the live delegate, inside the live delegate's {@code resumeSubscription(id)}, which holds the handover lock
-     * until that resume returns. Whether the subscription then runs in the live delegate, although this model is
-     * stopped, depends on how the live delegate orders that resume and its own {@code stop()}. Call {@code stop()}
-     * again once that resume has returned to stop it there for certain.
+     * to the live delegate, inside the live delegate's {@code resumeSubscription(id)} or {@code subscribe(..)}, which
+     * holds the handover lock until that call returns. Whether the subscription then runs in the live delegate,
+     * although this model is stopped, depends on how the live delegate orders that call and its own {@code stop()}.
+     * Call {@code stop()} again once that call has returned to stop it there for certain.
      *
      * @throws IllegalStateException when called on a thread that runs a replay of this model outside the subscriber's
      *                               action, such as in a {@link CatchupListener}, or from a thread on which the model
@@ -2832,6 +2842,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     Subscription handOverUnderLock(String subscriptionId, Supplier<Subscription> handover) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            synchronized (handoversUnderWay) {
+                handoversUnderWay.add(subscriptionId);
+            }
             try {
                 return handover.get();
             } catch (Throwable failure) {
@@ -2847,7 +2860,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
                 attempt.decidedFailure = new DecidedFailure(failure, runAgainAfter(subscriptionId, attempt, failure));
                 throw failure;
+            } finally {
+                synchronized (handoversUnderWay) {
+                    handoversUnderWay.remove(subscriptionId);
+                }
             }
+        }
+    }
+
+    // The subscriptions in handoversUnderWay, listed under its monitor
+    private List<String> subscriptionsHandingOver() {
+        synchronized (handoversUnderWay) {
+            return List.copyOf(handoversUnderWay);
         }
     }
 
@@ -5453,7 +5477,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Each replay is parked under its {@link #claim}. A failure to claim one, or to take its handover lock, is thrown
      * once the others are parked, and that replay parks itself once it next asks whether to go on. It stays parked
      * until {@link #relaunchParkedReplays()} or {@link #resumeSubscription(String)} runs it, as one this parked does,
-     * also when a {@code start(false)} or {@link #resumeReplay()} came in between.
+     * also when a {@code start(false)} or {@link #resumeReplay()} came in between. A replay that had already begun to
+     * hand its subscription over to the live delegate's {@code subscribe(..)} when this began isn't parked, since the
+     * live delegate gets the subscription, but this waits for that handover under the claim and the handover lock in
+     * the same way, so the subscription runs in the live delegate by the time this returns.
      * <p>
      * A replay lets no event through to the subscriber's action once it is parked. A call to the action that a replay
      * started before that is waited for, up to a second for all of them together. Past the second this returns all the
@@ -5506,9 +5533,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (shuttingDown) {
             return;
         }
+        Set<String> waitedForAbove = new HashSet<>();
+        // Both steps run when the first throws, so a park that gives up doesn't keep the stop from waiting for the
+        // handovers under way
+        runEach(List.<Runnable>of(() -> parkTheCurrentAttempts(admitted, waitedForAbove), () -> awaitTheHandoversUnderWay(waitedForAbove)), Runnable::run);
+    }
+
+    private void parkTheCurrentAttempts(List<ActionInFlight> admitted, Set<String> waitedForAbove) {
         runEach(List.copyOf(currentAttempt.entrySet()), entry -> {
             CatchupAttempt attempt = entry.getValue();
             if (attempt.owner == this) {
+                waitedForAbove.add(entry.getKey());
                 // Before the claim and the lock, either of which this can give up on while code a caller supplied holds
                 // it, so the replay then parks itself once that code returns, whatever lets replays run again meanwhile
                 // short of a start(true) or a resume of the subscription
@@ -5519,6 +5554,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     parkIfStillCurrent(entry.getKey(), attempt);
                     admitted.add(new ActionInFlight(entry.getKey(), attempt.actionReturned, attempt.actionUnwanted));
                 }
+            }
+        });
+    }
+
+    // A replay that read stopped before this stop set it has left currentAttempt and hands over under its handover lock,
+    // so the stop waits for that handover. It waits under the claim, so the wait gives up after LIFECYCLE_WAIT as a park
+    // does. The subscription is then parked or held by the live delegate by the time the stop goes on to stop the
+    // delegate, see handoversUnderWay. A subscription whose handover lock parkTheCurrentAttempts waited for isn't waited
+    // for again, also when that wait gave up, so the stop gives up after LIFECYCLE_WAIT once for each subscription
+    private void awaitTheHandoversUnderWay(Set<String> waitedForAbove) {
+        runEach(subscriptionsHandingOver().stream().filter(subscriptionId -> !waitedForAbove.contains(subscriptionId)).toList(), subscriptionId -> {
+            try (Claim ignored = claim(subscriptionId, STOPPED_ALL_THE_SAME); HandoverLock alsoIgnored = lockHandover(subscriptionId)) {
+                // Taken only to wait for the handover that holds it
             }
         });
     }

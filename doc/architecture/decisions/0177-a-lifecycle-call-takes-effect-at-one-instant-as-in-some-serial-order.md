@@ -200,7 +200,7 @@ The rule needs one lock for each scope, taken in a fixed order:
 | --- | --- | --- |
 | 1 | `ManualStartSubscriptionModel` model lock | its `start(..)`, `stop()` and registration |
 | 2 | catch-up model lock | `start(..)`, `stop()` and `shutdown()`, across the loop over every id and the wrapped model's own `start(..)`, `stop()` or `shutdown()`, and the turn of `resumeSubscription(X)`. No other per-id call takes it, and replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
-| 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, and a `stop()` for each X whose replay it parks |
+| 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, and a `stop()` for each X whose replay it parks or whose replay is handing X over to the wrapped model |
 | 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check that the replay may still store a catch-up checkpoint, which records the store as under way, but never while it runs the action, asks the predicate that decides whether to store, or stores |
 | 5 | `lifecycleLock` | short reads and writes of shared fields, nothing taken under it |
 
@@ -209,7 +209,10 @@ A `start(..)`, a `stop()`, a `shutdown()` and the turn of a resume run one at a 
 shuts the wrapped model down without the lock, as described below. A resume that takes its subscription's claim
 after such a `shutdown()` began changes nothing. A `stop()` takes the claim and
 the handover lock of each subscription whose replay it parks, so it waits for a call for that subscription or a step of
-its replay that is under way.
+its replay that is under way. It does the same for each subscription whose replay read the model as not stopped
+before the `stop()` began and is handing the subscription over to the wrapped model's `subscribe(..)`. Such a replay is no longer one the stop
+can park, and without the wait the stop could stop the wrapped model before the wrapped model got the subscription. The
+subscription would then read as neither paused nor running right after `stop()` returned.
 
 No thread holds the model lock across a checkpoint storage call, a call to the wrapped model for one subscription that
 can wait for I/O, or code the caller supplied, apart from the three cases at the end of this part. So a checkpoint
