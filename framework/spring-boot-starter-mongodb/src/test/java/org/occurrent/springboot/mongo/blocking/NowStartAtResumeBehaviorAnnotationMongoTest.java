@@ -144,7 +144,7 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     @ParameterizedTest
     @EnumSource(Annotated.class)
     void now_with_same_as_start_at_stores_no_checkpoint_where_default_stores_one(Annotated annotated) {
-        try (ConfigurableApplicationContext context = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext context = boot(
                 bootArgs("now-checkpoint-" + annotated.name().toLowerCase(), "historic-1", "live-1"))) {
             Handled withDefault = context.getBean(annotated.withDefault);
             Handled withSameAsStartAt = context.getBean(annotated.withSameAsStartAt);
@@ -169,8 +169,8 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     @EnumSource(value = Annotated.class, names = {"SAGA", "SNAPSHOT"}, mode = EnumSource.Mode.EXCLUDE)
     void now_with_same_as_start_at_runs_on_every_instance_instead_of_competing(Annotated annotated) {
         String databaseName = "now-every-instance-" + annotated.name().toLowerCase();
-        try (ConfigurableApplicationContext first = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-a", "", ""));
-             ConfigurableApplicationContext second = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-b", "", ""))) {
+        try (ConfigurableApplicationContext first = boot( bootArgs(databaseName, "instance-a", "", ""));
+             ConfigurableApplicationContext second = boot( bootArgs(databaseName, "instance-b", "", ""))) {
             Handled onFirst = first.getBean(annotated.withSameAsStartAt);
             Handled onSecond = second.getBean(annotated.withSameAsStartAt);
 
@@ -190,8 +190,8 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     @EnumSource(value = Annotated.class, names = {"SAGA", "SNAPSHOT"}, mode = EnumSource.Mode.EXCLUDE)
     void now_with_default_competes_so_one_instance_handles_each_event_and_the_other_none(Annotated annotated) {
         String databaseName = "now-competing-" + annotated.name().toLowerCase();
-        try (ConfigurableApplicationContext first = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-a", "", ""));
-             ConfigurableApplicationContext second = SpringApplication.run(RestartApplication.class, bootArgs(databaseName, "instance-b", "", ""))) {
+        try (ConfigurableApplicationContext first = boot( bootArgs(databaseName, "instance-a", "", ""));
+             ConfigurableApplicationContext second = boot( bootArgs(databaseName, "instance-b", "", ""))) {
             Handled competingOnFirst = first.getBean(annotated.withDefault);
             Handled competingOnSecond = second.getBean(annotated.withDefault);
 
@@ -238,7 +238,7 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     // planted checkpoint before live-2.
     @Test
     void now_with_same_as_start_at_does_not_replay_from_a_catch_up_checkpoint_planted_while_paused_when_it_is_resumed() {
-        try (ConfigurableApplicationContext context = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext context = boot(
                 leftOverBootArgs("now-left-over-paused", "now-same-as-start-at", "historic-1,historic-2", "live-1"))) {
             LeftOverNowSameAsStartAt handler = context.getBean(LeftOverNowSameAsStartAt.class);
             awaitHandled(handler, "live-1");
@@ -285,7 +285,7 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     }
 
     private static List<String> restartWithLeftOverCheckpoint(String databaseName, String secondBootStartsAt, Consumer<CheckpointStorage> inspectAndLeaveBehind) {
-        try (ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext firstBoot = boot(
                 leftOverBootArgs(databaseName, "beginning", "historic-1,historic-2", ""))) {
             awaitHandled(firstBoot.getBean(LeftOverBeginning.class), "historic-2");
             CheckpointStorage checkpointStorage = firstBoot.getBean(CheckpointStorage.class);
@@ -297,7 +297,7 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
             });
             inspectAndLeaveBehind.accept(checkpointStorage);
         }
-        try (ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext secondBoot = boot(
                 leftOverBootArgs(databaseName, secondBootStartsAt, "while-down-1", "live-2"))) {
             Class<? extends Handled> handlerType = secondBootStartsAt.equals("now") ? LeftOverNow.class : LeftOverNowSameAsStartAt.class;
             Handled handler = secondBoot.getBean(handlerType);
@@ -312,7 +312,7 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
 
     private static void restart(String databaseName, Class<? extends Handled> handlerType,
                                 List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
-        ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
+        ConfigurableApplicationContext firstBoot = boot(
                 bootArgs(databaseName, "historic-1,historic-2", "live-1"));
         try {
             Handled handler = firstBoot.getBean(handlerType);
@@ -322,7 +322,7 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
             firstBoot.close();
         }
 
-        ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
+        ConfigurableApplicationContext secondBoot = boot(
                 bootArgs(databaseName, "while-down-1", "live-2"));
         try {
             Handled handler = secondBoot.getBean(handlerType);
@@ -348,6 +348,24 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
     // passed as an argument.
     private static String[] bootArgs(String databaseName, String beforeSubscribe, String afterStart) {
         return bootArgs(databaseName, "restart", beforeSubscribe, afterStart);
+    }
+
+    private static final String BEFORE_SUBSCRIBE = "--test.before-subscribe=";
+    private static final String AFTER_START = "--test.after-start=";
+
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off writes the events of test.before-subscribe
+    // and is closed again, and the context under test is then booted with none to write.
+    private static ConfigurableApplicationContext boot(String[] args) {
+        boolean hasHistory = Stream.of(args).anyMatch(arg -> arg.startsWith(BEFORE_SUBSCRIBE) && arg.length() > BEFORE_SUBSCRIBE.length());
+        if (hasHistory) {
+            String[] whileDown = Stream.concat(
+                    Stream.of(args).map(arg -> arg.startsWith(AFTER_START) ? AFTER_START : arg),
+                    Stream.of("--occurrent.subscription.enabled=false")).toArray(String[]::new);
+            SpringApplication.run(RestartApplication.class, whileDown).close();
+        }
+        String[] withoutHistory = Stream.of(args).map(arg -> arg.startsWith(BEFORE_SUBSCRIBE) ? BEFORE_SUBSCRIBE : arg).toArray(String[]::new);
+        return SpringApplication.run(RestartApplication.class, withoutHistory);
     }
 
     private static String[] bootArgs(String databaseName, String applicationName, String beforeSubscribe, String afterStart) {
@@ -469,8 +487,8 @@ class NowStartAtResumeBehaviorAnnotationMongoTest {
             return Stream.of(commaSeparated.split(",")).filter(name -> !name.isBlank()).toList();
         }
 
-        // Subscriptions register once every singleton exists, so these are written before any of them starts. The check
-        // confirms that a NOW subscription would open after them.
+        // Only the context that writes while the application is down is given any, see boot. The check confirms that a
+        // NOW subscription would open after them.
         @PostConstruct
         void writeBeforeSubscribe() {
             beforeSubscribe.forEach(this::write);

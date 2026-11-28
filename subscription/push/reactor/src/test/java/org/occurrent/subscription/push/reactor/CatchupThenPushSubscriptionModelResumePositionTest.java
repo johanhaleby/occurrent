@@ -29,6 +29,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -223,7 +224,8 @@ class CatchupThenPushSubscriptionModelResumePositionTest {
                 .subscribe("proj", null, StartAt.subscriptionModelDefault(), e -> Mono.empty())
                 .waitUntilStarted().block(Duration.ofSeconds(5)));
 
-        assertThat(failure).hasMessageContaining("\"proj\"").hasMessageContaining("subscribe under a new id");
+        assertThat(failure).hasMessageContaining("\"proj\"").hasMessageContaining("Subscribe under a new id").hasMessageContaining(SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .hasMessageNotContaining(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT);
     }
 
     @Test

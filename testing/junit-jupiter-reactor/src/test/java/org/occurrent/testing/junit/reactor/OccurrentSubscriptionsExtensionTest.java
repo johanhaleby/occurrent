@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
+import org.occurrent.application.service.WriteRefusedException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -39,6 +40,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Container-free, like the blocking twin's own test. There is no reactive in-memory event store to drive a durable
@@ -81,6 +83,36 @@ class OccurrentSubscriptionsExtensionTest {
         model.dispatch(List.of(event())).block();
 
         assertThat(received).hasSize(1);
+        model.shutdown();
+    }
+
+    @Test
+    void a_write_check_passes_while_a_synchronous_subscription_is_stopped_and_the_subscription_misses_the_event() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        model.subscribe("orders", event -> {
+            received.add(event);
+            return Mono.empty();
+        });
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(model);
+        runBeforeEach(extension);
+
+        Throwable thrown = catchThrowable(model::beforeWrite);
+        model.dispatch(List.of(event())).block();
+
+        assertThat(thrown).as("what the write check threw").isNull();
+        assertThat(received).as("events the stopped subscription got").isEmpty();
+        model.shutdown();
+    }
+
+    @Test
+    void a_write_check_is_refused_while_a_synchronous_subscription_is_stopped_when_no_extension_made_the_model_drop_events() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        model.subscribe("orders", event -> Mono.empty());
+        model.stop();
+
+        assertThatThrownBy(model::beforeWrite).isInstanceOf(WriteRefusedException.class);
         model.shutdown();
     }
 

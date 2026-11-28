@@ -92,9 +92,18 @@ class SagaRunnerConfigTest {
     class When_no_quarantine_budget_is_asked_for {
 
         @Test
-        void defaults_never_quarantine() {
+        void defaults_quarantine_after_five_minutes() {
             // When
             SagaRunnerConfig config = SagaRunnerConfig.defaults();
+
+            // Then
+            assertThat(config.quarantineAfter()).contains(Duration.ofMinutes(5));
+        }
+
+        @Test
+        void disableQuarantine_turns_the_default_budget_off() {
+            // When
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().disableQuarantine();
 
             // Then
             assertThat(config.quarantineAfter()).isEmpty();
@@ -119,12 +128,12 @@ class SagaRunnerConfigTest {
         }
 
         @Test
-        void is_turned_on_by_withQuarantineAfter_on_the_defaults() {
+        void withQuarantineAfter_replaces_the_default_budget() {
             // When
-            SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5));
+            SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(2));
 
             // Then
-            assertThat(config.quarantineAfter()).isEqualTo(Optional.of(Duration.ofMinutes(5)));
+            assertThat(config.quarantineAfter()).isEqualTo(Optional.of(Duration.ofMinutes(2)));
         }
     }
 
@@ -285,6 +294,9 @@ class SagaRunnerConfigTest {
             // Then
             assertThat(copies).extracting(SagaRunnerConfig::reorderWindow).containsOnly(17);
         }
+
+
+
 
         @ParameterizedTest
         @ValueSource(ints = {0, -1, Integer.MIN_VALUE})

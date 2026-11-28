@@ -17,8 +17,10 @@
 package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
+import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ShutdownSignalException;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -32,6 +34,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -114,6 +117,76 @@ class RabbitMqConfirmPublisherTest {
         assertThat(published.getValue().getCorrelationId()).isEqualTo("application-correlation-id");
     }
 
+    @Test
+    void close_closes_the_channel() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+
+        publisher.close();
+
+        verify(channel).close();
+    }
+
+    @Test
+    void close_returns_normally_when_the_channel_close_throws_AlreadyClosedException() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        doThrow(alreadyClosed(channel)).when(channel).close();
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+
+        assertThatCode(publisher::close).doesNotThrowAnyException();
+
+        verify(channel).close();
+    }
+
+    /**
+     * {@code ChannelN.close} rethrows a plain {@link ShutdownSignalException}, not an {@link AlreadyClosedException},
+     * when the connection drops after the close request was sent and before the broker's reply arrived.
+     */
+    @Test
+    void close_returns_normally_when_the_channel_close_throws_a_plain_ShutdownSignalException() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        doThrow(new ShutdownSignalException(true, false, null, channel)).when(channel).close();
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+
+        assertThatCode(publisher::close).doesNotThrowAnyException();
+
+        verify(channel).close();
+    }
+
+    @Test
+    void close_propagates_an_unrelated_IOException_and_leaves_the_publisher_closed() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        IOException closeFailure = new IOException("close failed");
+        doThrow(closeFailure).when(channel).close();
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+
+        assertThatThrownBy(publisher::close).isSameAs(closeFailure);
+        assertThatThrownBy(() -> publisher.publish("exchange", "routingKey", new BasicProperties(), new byte[0]))
+                .isInstanceOf(RabbitMqPublishException.class)
+                .hasMessageContaining("this publisher is closed");
+        verify(connection).openChannel();
+    }
+
+    @Test
+    void close_propagates_an_unrelated_TimeoutException() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        TimeoutException closeFailure = new TimeoutException("close timed out");
+        doThrow(closeFailure).when(channel).close();
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+
+        assertThatThrownBy(publisher::close).isSameAs(closeFailure);
+    }
+
     /**
      * Reproduces, deterministically enough for a regression test, a {@code close()} racing a timed-out publish's
      * own channel retirement. {@code retireChannel()} reassigns the channel field in two steps, retire the old one
@@ -175,5 +248,9 @@ class RabbitMqConfirmPublisherTest {
         assertThat(closeCall.isAlive()).isFalse();
         // The replacement retireChannel() assigned is the one close() must close, not the one it retired.
         verify(replacementChannel, timeout(2000)).close();
+    }
+
+    private static AlreadyClosedException alreadyClosed(Channel channel) {
+        return new AlreadyClosedException(new ShutdownSignalException(true, true, null, channel));
     }
 }

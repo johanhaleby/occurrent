@@ -32,8 +32,8 @@ import java.util.Objects;
  * {@link #matchedBranchIndex()}), which is part of the record only because {@code evolve} can communicate with
  * {@code react} solely through the returned state.
  * <p>
- * This type is {@code public} only so that a {@code SagaStateStore} in another module can construct and read it. It is
- * not a user-facing API. Author flow sagas through {@link FlowSaga} (or the Kotlin {@code saga} block) and observe their
+ * This type is {@code public} only so that {@code SagaCodec} and {@code FlowSagaImpl}, each in another package, can
+ * construct and read it. It is not a user-facing API. Author flow sagas through {@link FlowSaga} (or the Kotlin {@code saga} block) and observe their
  * state through {@link FlowState}.
  *
  * <h2>Retained events</h2>
@@ -126,7 +126,7 @@ public record FlowStateImpl<E>(@Nullable String currentStep,
 
     /**
      * The pre-0.33.0 component list, without {@link #previousStepEntryIndex()} or {@link #stepConditionProgress()}. Kept
-     * so a {@code SagaStateStore} written against the earlier record still compiles and still behaves. The absent entry
+     * so a caller written against the earlier record still compiles and still behaves. The absent entry
      * position becomes {@code -1}, so a window-condition reaction reads the whole retained history as it did before that
      * field existed, and the absent counts become {@code null}, so they are re-derived from the window.
      */

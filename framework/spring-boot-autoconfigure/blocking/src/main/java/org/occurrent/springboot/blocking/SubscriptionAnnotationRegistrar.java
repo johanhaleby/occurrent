@@ -29,6 +29,7 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.SubscriptionAnnotations;
 import org.occurrent.springboot.common.internal.HandlerMethod;
 import org.occurrent.springboot.common.internal.HandlerScan;
@@ -64,8 +65,10 @@ class SubscriptionAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
+    private final StartupSubscribes startupSubscribes;
 
-    SubscriptionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
+    SubscriptionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, StartupSubscribes startupSubscribes) {
+        this.startupSubscribes = startupSubscribes;
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
     }
@@ -324,7 +327,7 @@ class SubscriptionAnnotationRegistrar {
         StreamSubscriptions<E> subscribable = applicationContext.getBean(StreamSubscriptions.class);
         startPositionSupport.applyStartupWorkarounds();
 
-        return () -> BackgroundStartup.subscribe(subscription.startupMode(), () -> subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer));
+        return () -> BackgroundStartup.subscribe(startupSubscribes, subscription.startupMode(), () -> subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer));
     }
 
     @SuppressWarnings("unchecked")
@@ -351,7 +354,7 @@ class SubscriptionAnnotationRegistrar {
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
         startPositionSupport.applyStartupWorkarounds();
 
-        return () -> BackgroundStartup.subscribe(annotation.startupMode(), () -> subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer));
+        return () -> BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer));
     }
 
     @SuppressWarnings("unchecked")
@@ -418,7 +421,7 @@ class SubscriptionAnnotationRegistrar {
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
         startPositionSupport.applyStartupWorkarounds();
 
-        return () -> BackgroundStartup.subscribe(annotation.startupMode(), () -> {
+        return () -> BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> {
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
             if (shouldWaitUntilStarted) {
                 subscription.waitUntilStarted();

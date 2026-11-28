@@ -282,7 +282,10 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
 
     /**
      * Closes the {@link Channel} this publisher created. Does not close the {@link Connection} it was built from. A
-     * publish after this throws {@link RabbitMqPublishException}.
+     * publish after this throws {@link RabbitMqPublishException}. Returns normally when the client reports that the
+     * channel, or the connection under it, has shut down, whether that was before this call or while it waited for
+     * the broker's reply. An {@link IOException} or {@link TimeoutException} is still thrown, since the client raises
+     * them for a failed close as well, so a connection that drops while this call is closing can end in either.
      */
     @Override
     public void close() throws IOException, TimeoutException {
@@ -293,7 +296,13 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
         publishLock.lock();
         try {
             closed = true;
-            channel.close();
+            try {
+                channel.close();
+            } catch (ShutdownSignalException ignored) {
+                // Closing is still needed on a closed channel, since a recovering channel is only unregistered by
+                // its close. The client throws a ShutdownSignalException, or its AlreadyClosedException subclass, when
+                // the channel or connection is closed before the call or drops before the broker replies to it.
+            }
         } finally {
             publishLock.unlock();
         }

@@ -241,9 +241,10 @@ jobs:
           # subscription utilities can have a shard of their own below and the count stays at 10. That last group
           # added about 150 seconds, and the shard was already over SHARD_BUDGET_SECONDS before it.
           - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure subscription/api subscription/core subscription/inmemory subscription/synchronous/reactor subscription/push/reactor subscription/redis eventstore/migration eventstore/inmemory" }
-          # `eventstore/mongodb/spring` lodges here, so the blocking competing consumer can have a shard of its own and
-          # the count stays at 10.
-          - { name: dsl,                         paths: "dsl eventstore/mongodb/spring" }
+          # The RabbitMQ broker modules lodge here and the Kafka ones in `eventstore-mongodb-spring`. Misc ran into the
+          # 20 minute timeout with them, and so did this shard with `eventstore/mongodb/spring`.
+          - { name: dsl,                         paths: "dsl broker/rabbitmq/blocking broker/rabbitmq/spring-boot-starter" }
+          - { name: eventstore-mongodb-spring,   paths: "eventstore/mongodb/spring broker/kafka/blocking broker/kafka/spring-boot-starter" }
           # misc is the deliberate junk drawer: whatever is too small to shard on its own. The
           # reactive Spring Boot starter is here because the blocking one nearly fills a shard by
           # itself, so the two cannot share.
@@ -251,15 +252,10 @@ jobs:
           # event store and subscription model, so they need no container and cost almost nothing. `testing/mongodb`
           # is named separately in mongodb-native rather than riding along, because it does start a container. The
           # leaves are listed one by one for that reason, since the bare `testing` prefix would pull it back in here.
-          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/junit-jupiter-reactor testing/spring-boot test-support broker/api/blocking broker/rabbitmq/blocking broker/kafka/blocking broker/rabbitmq/spring-boot-starter broker/kafka/spring-boot-starter" }
-          # example modules run real MongoDB replica-set containers with timing-sensitive
-          # Awaitility subscription-catchup tests, so the shard keeps an in-run retry as a backstop
-          # for timing flakiness. They once had two shards, split by container load, after one shard
-          # starting 12 containers in a row tipped those waits over. That split was made before the
-          # retry, and on main the two took 146 to 151 and 106 to 137 seconds (run 44464061054), the
-          # two cheapest shards by far, so they share one again to give catchup-subscription a shard.
-          # If the examples turn flaky again, move a slow module elsewhere before splitting them,
-          # since no other shard has the room.
+          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/junit-jupiter-reactor testing/spring-boot test-support broker/api/blocking" }
+          # Most example modules run MongoDB containers with timing-sensitive Awaitility tests, so the shard keeps an in-run
+          # retry, and no other subtree lodges here because the retry would hide its flaky tests. It was once split in two
+          # to start fewer containers per runner, but `example/domain` alone now starts as many as the whole tree did then.
           - { name: example,                     paths: "example/domain example/projection example/forwarder example/snapshot example/saga example/broker", args: "-Dsurefire.rerunFailingTestsCount=2" }
           # The blocking subscription utilities are listed one by one, because the competing consumer and the catch-up
           # model among them are each slow enough to need a shard of their own. The bare `subscription/util/blocking`

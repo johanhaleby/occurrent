@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.internal;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.*;
@@ -63,9 +64,7 @@ public final class SagaExecutionSupport {
      * {@link OutOfMemoryError} is the exclusion, and it is the only one. It says the JVM ran out of heap while this
      * instance held the thread, which is a statement about the process rather than about the instance's work, and any
      * other instance running at that moment would have met the same thing. Charging it to whichever instance was
-     * unlucky matters here more than it would elsewhere, because quarantine has no way out. Nothing in 0.34.0 releases
-     * an instance, so {@code SagaStateStore.delete(sagaId)} destroying its state is the only exit, and that would stop
-     * an instance for good over a heap exhaustion it had nothing to do with.
+     * unlucky would stop that instance until somebody releases it, over a heap exhaustion it had nothing to do with.
      * <p>
      * The test is on the failure itself and not on its causes. A reaction that catches an {@code OutOfMemoryError} and
      * wraps it has decided the failure is its own, and this takes it at its word.
@@ -99,12 +98,32 @@ public final class SagaExecutionSupport {
      * Delivery metadata used to deduplicate a redelivered event. All fields are {@code null} for a timer input.
      * {@code eventType} is the cloud event type, and it only has to be there when the feed can reorder a stream's events
      * across types. A stream event without one is treated as being of a single type named by the empty string.
+     * {@code eventId} and {@code eventSource} are the CloudEvent id and source, which key an input a quarantined instance
+     * skips when it has no stream id and stream version, see {@link #skipKey()}.
      */
-    public record EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position, @Nullable String eventType) {
+    public record EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position, @Nullable String eventType,
+                            @Nullable String eventId, @Nullable String eventSource) {
         public static final EventMeta NONE = new EventMeta(null, null, null, null);
+
+        public EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position, @Nullable String eventType) {
+            this(streamId, streamVersion, position, eventType, null, null);
+        }
 
         public EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position) {
             this(streamId, streamVersion, position, null);
+        }
+
+        /**
+         * The key a quarantined instance records this input under when it skips it, see
+         * {@link SkippedInput#key()}. That is {@link #redeliveryKey()} when there is one, and otherwise a
+         * key built from the CloudEvent id and source. {@code null} for a timer input and for an event that has neither.
+         */
+        public @Nullable String skipKey() {
+            String redeliveryKey = redeliveryKey();
+            if (redeliveryKey != null) {
+                return redeliveryKey;
+            }
+            return eventId == null || eventSource == null ? null : SkippedInputKey.cloudEventKey(eventId, eventSource);
         }
 
         /**
@@ -130,20 +149,29 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * The result of processing one input. When {@link #processed()} is false the executor does nothing (the input was a
-     * redelivery, the instance is terminal, or the event cannot start an instance). Otherwise it dispatches
-     * {@link #commands()} in order and then saves {@link #envelope()} with {@code compareAndSave(..., expectedVersion())}.
+     * The result of processing one input. When {@link #processed()} is false the input was not applied (it was a
+     * redelivery, the instance is terminal or quarantined, or the event cannot start an instance). The executor then
+     * dispatches nothing. When there is a {@link #skipToRecord()}, which is a quarantined instance recording the input
+     * it skips, it records that as {@link SagaExecutionSupport#skipToRecord} says. Otherwise it dispatches
+     * {@link #commands()} in order and then saves {@link #envelope()} with {@code compareAndSave(..., expectedVersion())},
+     * after asking a store that implements {@code SagaStateStoreSkippedInputs} whether it can write {@link #envelope()}.
+     * When that store can't, the attempt dispatches nothing and the executor records the failure instead.
      */
     public record Outcome<S extends @Nullable Object, C>(boolean processed,
                                                          @Nullable SagaEnvelope<S> envelope,
                                                          List<C> commands,
-                                                         long expectedVersion) {
+                                                         long expectedVersion,
+                                                         @Nullable SkipToRecord skipToRecord) {
         static <S extends @Nullable Object, C> Outcome<S, C> skip() {
-            return new Outcome<>(false, null, List.of(), 0);
+            return new Outcome<>(false, null, List.of(), 0, null);
+        }
+
+        static <S extends @Nullable Object, C> Outcome<S, C> skipToRecord(SkipToRecord toRecord) {
+            return new Outcome<>(false, null, List.of(), 0, toRecord);
         }
 
         static <S extends @Nullable Object, C> Outcome<S, C> processed(SagaEnvelope<S> envelope, List<C> commands, long expectedVersion) {
-            return new Outcome<>(true, envelope, commands, expectedVersion);
+            return new Outcome<>(true, envelope, commands, expectedVersion, null);
         }
     }
 
@@ -188,7 +216,8 @@ public final class SagaExecutionSupport {
         @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
         if (!hasStarted && startEvent == null) {
             // A timeout never starts an instance, and a non-start event for an instance that has not started is skipped.
-            return Outcome.skip();
+            // An instance quarantined on its start event lands here first, and records the input like the skip below.
+            return current != null && current.isQuarantined() ? recordingSkip(current, meta, reorderWindow) : Outcome.skip();
         }
         if (current != null && current.isCompleted()) {
             return Outcome.skip();
@@ -196,12 +225,19 @@ public final class SagaExecutionSupport {
         if (current != null && current.isQuarantined()) {
             // A quarantined instance is inert. It skips every input addressed to it and its watermarks stay where they are.
             // Advancing one would record an input as handled that the instance never applied, and nothing afterwards can
-            // tell that the state has a gap in it.
-            return Outcome.skip();
+            // tell that the state has a gap in it. It records the input's key instead, which a release replays.
+            return recordingSkip(current, meta, reorderWindow);
         }
         if (current != null && classify(current, meta, reorderWindow) != Delivery.NEW) {
             return Outcome.skip();
         }
+        return apply(saga, sagaId, current, input, meta, now, OptionalInt.of(reorderWindow), hasStarted, startEvent);
+    }
+
+    // The input applied to the instance, past every reason to skip it.
+    private static <E, S extends @Nullable Object, C> Outcome<S, C> apply(Saga<E, S, C> saga, String sagaId, @Nullable SagaEnvelope<S> current,
+                                                                          SagaInput<E> input, EventMeta meta, Instant now, OptionalInt reorderWindow,
+                                                                          boolean hasStarted, @Nullable E startEvent) {
 
         boolean starting = !hasStarted;
         S previousState = hasStarted ? current.state() : saga.initialState();
@@ -269,8 +305,476 @@ public final class SagaExecutionSupport {
                 null,
                 true,
                 failureAfter(current, meta, terminal),
-                streamMarks);
+                streamMarks,
+                null);
         return Outcome.processed(next, commands, expectedVersion);
+    }
+
+    /**
+     * What a quarantined instance records for an input it skips, before it has the input's event in hand. The executor
+     * completes it into a {@link SkippedInput} with {@link #of(CloudEvent)}.
+     *
+     * @param seq the {@link SkippedInput#seq()} of the record
+     * @param key the {@link SkippedInput#key()} of the record
+     */
+    public record SkipToRecord(long seq, String key) {
+        public SkippedInput of(CloudEvent event) {
+            return new SkippedInput(seq, key, event);
+        }
+    }
+
+    private static <S extends @Nullable Object, C> Outcome<S, C> recordingSkip(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+        SkipToRecord toRecord = skipToRecord(current, meta, reorderWindow);
+        return toRecord == null ? Outcome.skip() : Outcome.skipToRecord(toRecord);
+    }
+
+    /**
+     * The record the quarantined instance {@code current} writes for the input {@code meta} describes, which it skips,
+     * or {@code null} when it records nothing. Its {@code seq} is {@link SagaEnvelope#quarantineSkipCount()}.
+     * <p>
+     * The executor saves {@link #withSkipCounted(SagaEnvelope)} and this record under
+     * {@link SagaEnvelope#quarantineId()} in one write, with
+     * {@code SagaStateStoreSkippedInputs.compareAndSaveSkipped(..., current.version(), ...)}. Raising the count takes the
+     * {@code seq} for this record and no other. A record of the key that is there already stays, and the new {@code seq}
+     * goes unused. A lost write reads the instance again and decides again, so an instance that turned active in between
+     * applies the input instead.
+     * <p>
+     * Nothing is recorded when the instance is not quarantined, was quarantined by 0.34.0 and has no quarantine id or
+     * no count, when the input is a timer or an event with no key, when the instance counts the input as applied
+     * already.
+     */
+    public static <S extends @Nullable Object> @Nullable SkipToRecord skipToRecord(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+        String key = meta.skipKey();
+        Long count = current.quarantineSkipCount();
+        if (current.quarantineId() == null || count == null || key == null) {
+            return null;
+        }
+        // An input the instance applied before it was quarantined is skipped as a redelivery anyway, so there is nothing
+        // to replay
+        if (classify(current, meta, reorderWindow) != Delivery.NEW) {
+            return null;
+        }
+        return new SkipToRecord(count, key);
+    }
+
+    /**
+     * The {@link SkippedInput#seq()} of the input an instance is quarantined on, which comes before every other record
+     * of the quarantine.
+     */
+    private static final long QUARANTINING_INPUT_SEQ = 0;
+
+    /**
+     * The record of the input a write quarantines the instance on, from the {@code event} that failed. Save it with
+     * {@code quarantined}, the envelope {@link #onFailure} gives for that write, with
+     * {@code SagaStateStoreSkippedInputs.compareAndSaveSkipped(..., quarantineId, ...)}, in one write. The record is the
+     * first of the quarantine, so a release replays the input first, and the skip count of {@code quarantined} is the
+     * one after it.
+     *
+     * @throws IllegalStateException when {@code quarantined} is not quarantined by a failure that has a quarantine id
+     */
+    public static <S extends @Nullable Object> SkippedInput quarantiningInput(SagaEnvelope<S> quarantined, CloudEvent event) {
+        SagaFailure failure = quarantined.failure();
+        if (!quarantined.isQuarantined() || failure == null || quarantined.quarantineId() == null) {
+            throw new IllegalStateException("Saga instance '" + quarantined.sagaId() + "' is not quarantined by a failure, so it has no input it was quarantined on.");
+        }
+        return new SkippedInput(QUARANTINING_INPUT_SEQ, failure.input(), event);
+    }
+
+    /**
+     * The quarantined instance {@code current} one version up with its {@link SagaEnvelope#quarantineSkipCount()}
+     * raised by one, and nothing else changed, so the watermarks and the stream marks stay where they are.
+     */
+    public static <S extends @Nullable Object> SagaEnvelope<S> withSkipCounted(SagaEnvelope<S> current) {
+        long count = Objects.requireNonNull(current.quarantineSkipCount(), "quarantineSkipCount");
+        return withBookkeeping(current, current.status(), current.updatedAt(), current.failure(), current.streamMarks(), count + 1);
+    }
+
+    /**
+     * The releasing instance {@code current} one version up and nothing else changed, which a release saves when it drops
+     * a record that {@link #replay} would not apply, so the record goes in a write that expects the version the release
+     * read.
+     */
+    public static <S extends @Nullable Object> SagaEnvelope<S> oneVersionUp(SagaEnvelope<S> current) {
+        return withBookkeeping(current, current.status(), current.updatedAt(), current.failure(), current.streamMarks(), current.quarantineSkipCount());
+    }
+
+    /**
+     * The quarantined instance {@code current} with a release started, or {@code null} when a release of it is running
+     * already, which the caller then goes on with. Save it with
+     * {@code SagaStateStore.compareAndSaveWithoutState(..., current.version())}. It writes no record, since the input
+     * the instance was quarantined on has the first record of the quarantine already.
+     * <p>
+     * The write sets {@link SagaFailure#releasedAt()} to {@code now}. It restarts the
+     * quarantine budget of the input the instance was quarantined on at {@code now}, on the failure record and on that
+     * input's pending entry, so a release that fails on it again gets a full budget.
+     *
+     * @throws IllegalStateException when the instance is not quarantined, or was quarantined by 0.34.0 and has no
+     *                               quarantine id
+     */
+    public static <S extends @Nullable Object> @Nullable SagaEnvelope<S> startRelease(SagaEnvelope<S> current, Instant now) {
+        if (!current.isQuarantined()) {
+            throw new IllegalStateException("Saga instance '" + current.sagaId() + "' is " + current.status() + ", not QUARANTINED, so there is nothing to release.");
+        }
+        SagaFailure failure = current.failure();
+        String quarantineId = current.quarantineId();
+        if (failure == null || quarantineId == null) {
+            throw cannotRelease(current, "it was quarantined by 0.34.0, which recorded none of the inputs it skipped");
+        }
+        if (failure.isReleasing()) {
+            return null;
+        }
+        SagaFailure releasing = new SagaFailure(failure.input(), failure.position(), now, failure.failureType(), failure.failureMessage(), now, quarantineId);
+        Map<String, StreamMarks> streamMarks = new LinkedHashMap<>(current.streamMarks());
+        if (SkippedInputKey.parse(failure.input()) instanceof SkippedInputKey.StreamKey(String streamId, long streamVersion)) {
+            StreamMarks marks = streamMarks.get(streamId);
+            if (marks != null && marks.pendingSince().containsKey(streamVersion)) {
+                Map<Long, Instant> pendingSince = new LinkedHashMap<>(marks.pendingSince());
+                pendingSince.put(streamVersion, now);
+                streamMarks.put(streamId, new StreamMarks(marks.floor(), marks.byType(), marks.pending(), marks.legacyFailed(), pendingSince));
+            }
+        }
+        return withBookkeeping(current, SagaStatus.QUARANTINED, now, releasing, streamMarks, current.quarantineSkipCount());
+    }
+
+    /**
+     * {@link #startRelease} with the marks trimmed to {@code reorderWindow}, the way a quarantine again during a release
+     * trims them. A release writes it when the store cannot write the start with every mark kept, and replays from it
+     * what a further release would replay after that quarantine again, see {@link #appliedAfterReleasingAgain}.
+     *
+     * @throws IllegalStateException as {@link #startRelease} does
+     */
+    public static <S extends @Nullable Object> @Nullable SagaEnvelope<S> startReleaseTrimmed(SagaEnvelope<S> current, Instant now, int reorderWindow) {
+        SagaEnvelope<S> releasing = startRelease(current, now);
+        if (releasing == null) {
+            return null;
+        }
+        return new SagaEnvelope<>(releasing.sagaId(), releasing.state(), releasing.status(), releasing.version(), releasing.timers(),
+                releasing.streamWatermarks(), releasing.positionWatermark(), releasing.createdAt(), releasing.updatedAt(), releasing.completedAt(),
+                releasing.currentStep(), releasing.started(), releasing.failure(), withinWindow(releasing.streamMarks(), reorderWindow),
+                releasing.quarantineSkipCount());
+    }
+
+    /**
+     * Why an instance cannot be released, with the way out that is left.
+     */
+    public static <S extends @Nullable Object> IllegalStateException cannotRelease(SagaEnvelope<S> current, String because) {
+        return new IllegalStateException("Saga instance '" + current.sagaId() + "' cannot be released, because " + because + ". "
+                                         + "Delete the instance with SagaStateStore.delete(\"" + current.sagaId() + "\"), which throws its state away.");
+    }
+
+    /**
+     * Apply {@code record}, the first record of a releasing instance, with the quarantined skip bypassed for that one
+     * input. {@code input} and {@code meta} describe the event the record holds, so the input is deduplicated by its
+     * stream marks like any other, and a record of an input the instance applied already is recognised. An event
+     * without a stream id and stream version has no marks to be recognised by, and is applied as it would have been
+     * live.
+     * <p>
+     * It applies the input through the same steps as {@link #process}. The instance stays {@link SagaStatus#QUARANTINED}
+     * and keeps its failure record, with {@link SagaFailure#releasedAt()}. The executor deletes the record in the write
+     * that applies it. An input that completes the instance ends the release with it.
+     * <p>
+     * The release reads and writes the marks with no reorder window, so every version it applies stays in them until the
+     * release ends, also one at or below the horizon of its type. With the configured window, an earlier record that
+     * raised the mark of its type would put a later record of that type behind the window, and the release would skip it.
+     * Every write that ends a release trims the marks to {@code reorderWindow}: the one that releases the instance, see
+     * {@link #withReleased}, an input that completes it, and a quarantine again, see {@link #onReleaseFailure}.
+     * <p>
+     * A record is written only while its input is new, and the write that applies a record's input is a compare-and-set
+     * on the version the release read the instance at. So a record whose input the marks show as applied names an input
+     * the instance applied, through another record of the same input, through a replay whose delete a crash prevented, or
+     * through another release of the same instance. A record behind the window names an input no release applied, since
+     * only the write that ends a release trims the marks, and a release that ended on a record had applied and deleted
+     * every record before it. So such a record is applied, and the version stays among the applied ones until the
+     * release ends.
+     * <p>
+     * A record whose input the marks show as applied, and a record that is not a start event of an instance that never started, which the instance would
+     * skip outside a release too, comes back as an outcome that is not {@link Outcome#processed()} and has no envelope,
+     * and the executor deletes the record in a write of {@link #oneVersionUp}.
+     *
+     * @throws IllegalStateException when the instance is not releasing
+     */
+    public static <E, S extends @Nullable Object, C> Outcome<S, C> replay(Saga<E, S, C> saga, String sagaId, SagaEnvelope<S> current,
+                                                                          SkippedInput record, SagaInput<E> input, EventMeta meta, Instant now,
+                                                                          int reorderWindow) {
+        if (!current.isReleasing()) {
+            throw new IllegalStateException("Saga instance '" + sagaId + "' is not releasing, so it cannot replay '" + record.key() + "'.");
+        }
+        boolean hasStarted = current.started();
+        @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
+        if (!hasStarted && startEvent == null || classify(current, meta, NO_REORDER_WINDOW) == Delivery.REDELIVERY) {
+            return Outcome.skip();
+        }
+        Outcome<S, C> applied = apply(saga, sagaId, current, input, meta, now, NO_REORDER_WINDOW, hasStarted, startEvent);
+        SagaEnvelope<S> next = Objects.requireNonNull(applied.envelope());
+        if (next.isCompleted()) {
+            SagaEnvelope<S> completed = new SagaEnvelope<>(next.sagaId(), next.state(), next.status(), next.version(), next.timers(),
+                    next.streamWatermarks(), next.positionWatermark(), next.createdAt(), next.updatedAt(), next.completedAt(), next.currentStep(),
+                    next.started(), next.failure(), withinWindow(next.streamMarks(), reorderWindow), next.quarantineSkipCount());
+            return Outcome.processed(completed, applied.commands(), applied.expectedVersion());
+        }
+        SagaEnvelope<S> releasing = new SagaEnvelope<>(next.sagaId(), next.state(), SagaStatus.QUARANTINED, next.version(), next.timers(),
+                next.streamWatermarks(), null, next.createdAt(), next.updatedAt(), next.completedAt(), next.currentStep(), next.started(),
+                current.failure(), next.streamMarks(), current.quarantineSkipCount());
+        return Outcome.processed(releasing, applied.commands(), applied.expectedVersion());
+    }
+
+    /**
+     * The releasing instance {@code current} released, {@link SagaStatus#ACTIVE} with no failure record, no quarantine
+     * id and no skip count. Save it with
+     * {@code SagaStateStoreSkippedInputs.compareAndSaveQuarantineEnded(..., current.version(), ...)}, and only when
+     * the {@code SagaStateStoreSkippedInputs.findWithFirstSkippedInput} or {@code findWithFirstSkippedInputKey} that
+     * returned {@code current} returned no record with it. The state is left out of that write, so {@code current} can
+     * be decoded without it. A skip records its input in a write that raises the version, so a skip recorded after that read makes
+     * this write lose, and the release reads again.
+     * <p>
+     * The released instance keeps no more applied versions per stream and event type than {@code reorderWindow}, as
+     * after a live write, since the release kept every version it applied.
+     *
+     * @throws IllegalStateException when the instance is not releasing
+     */
+    public static <S extends @Nullable Object> SagaEnvelope<S> withReleased(SagaEnvelope<S> current, Instant now, int reorderWindow) {
+        if (!current.isReleasing()) {
+            throw new IllegalStateException("Saga instance '" + current.sagaId() + "' is not releasing.");
+        }
+        return withBookkeeping(current, SagaStatus.ACTIVE, now, null, withinWindow(current.streamMarks(), reorderWindow), null);
+    }
+
+    // The marks with no more applied versions than reorderWindow keeps, the way a live write trims them. A release
+    // keeps every version it applies until it ends, see replay(..)
+    private static Map<String, StreamMarks> withinWindow(Map<String, StreamMarks> streamMarks, int reorderWindow) {
+        Map<String, StreamMarks> trimmed = new LinkedHashMap<>();
+        streamMarks.forEach((streamId, marks) -> {
+            Map<String, TypeMark> byType = new LinkedHashMap<>();
+            marks.byType().forEach((type, typeMark) -> {
+                long horizon = horizon(typeMark.horizon(), typeMark.mark(), OptionalInt.of(reorderWindow));
+                byType.put(type, new TypeMark(typeMark.mark(), typeMark.applied().stream().filter(version -> version > horizon).toList(), horizon));
+            });
+            trimmed.put(streamId, new StreamMarks(marks.floor(), byType, marks.pending(), marks.legacyFailed(), marks.pendingSince()));
+        });
+        return trimmed;
+    }
+
+    /**
+     * Whether {@code after}, read when a write computed from {@code before} lost its compare-and-set, differs from
+     * {@code before} only by inputs the instance skipped and recorded in between. That is a higher version with every
+     * other compared field equal. {@link SagaEnvelope#quarantineSkipCount()} isn't compared, since a skip raises it,
+     * and neither are the saga id, the current step and the deprecated position watermark. A release then writes
+     * what it computed again on top of {@code after}, see {@link #rebased}, rather than applying the input a second time.
+     * The state is compared with {@code equals}, so a state type without one never matches, and the input is applied
+     * again and its reaction dispatched again, as any lost write is.
+     */
+    public static <S extends @Nullable Object> boolean differsOnlyByRecordedSkips(SagaEnvelope<S> before, SagaEnvelope<S> after) {
+        return after.version() > before.version()
+               && Objects.equals(before.state(), after.state())
+               && before.status() == after.status()
+               && before.timers().equals(after.timers())
+               && before.streamWatermarks().equals(after.streamWatermarks())
+               && before.streamMarks().equals(after.streamMarks())
+               && Objects.equals(before.createdAt(), after.createdAt())
+               && Objects.equals(before.updatedAt(), after.updatedAt())
+               && Objects.equals(before.completedAt(), after.completedAt())
+               && before.started() == after.started()
+               && Objects.equals(before.failure(), after.failure());
+    }
+
+    /**
+     * {@code computed}, which a release computed from an instance that has since only recorded skipped inputs, moved on
+     * top of {@code after}. One version above it, and with its skip count while the instance stays quarantined. Save it
+     * the way {@code computed} was saved, expecting {@code after.version()}.
+     */
+    public static <S extends @Nullable Object> SagaEnvelope<S> rebased(SagaEnvelope<S> computed, SagaEnvelope<S> after) {
+        return new SagaEnvelope<>(computed.sagaId(), computed.state(), computed.status(), after.version() + 1, computed.timers(),
+                computed.streamWatermarks(), null, computed.createdAt(), computed.updatedAt(), computed.completedAt(), computed.currentStep(),
+                computed.started(), computed.failure(), computed.streamMarks(),
+                computed.isQuarantined() ? after.quarantineSkipCount() : computed.quarantineSkipCount());
+    }
+
+    /**
+     * What to write when the record {@code key} a release was applying failed, or {@code null} when nothing needs writing
+     * and the release simply stops for now. Save it with {@code compareAndSaveWithoutState(..., expectedVersion())}. The
+     * caller checks that {@code key} is still the first record of the instance.
+     * <p>
+     * The failure is recorded the way {@link #onFailure} records one, measured from when the input first failed, except
+     * that the instance stays {@link SagaStatus#QUARANTINED} and releasing. When the input's budget has run out, the
+     * instance is quarantined on it again, with the same quarantine id. The input becomes the failure record's input,
+     * {@link SagaFailure#releasedAt()} is cleared, and the record stays, so a later release replays the input first and
+     * then the records after it.
+     * <p>
+     * An event with no stream id and stream version, which a quarantined instance records only under
+     * {@link org.occurrent.dsl.saga.RedeliveryDetection#BEST_EFFORT}, is counted under its record's key, built from its
+     * CloudEvent id and source. The stream marks cannot hold it, so its clock is the failure record's alone, and the
+     * stream marks stay as they are. Its budget runs out like any other input's.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, EventMeta meta,
+                                                                                           Throwable failure, Instant now,
+                                                                                           Duration quarantineAfter, int reorderWindow) {
+        return onReleaseFailure(current, meta, failure, now, quarantineAfter, reorderWindow, false);
+    }
+
+    /**
+     * What to write when the store cannot write the instance a release computed for the record {@code meta} names, or
+     * {@code null} when the instance applied that record's input already, and the release deletes the record as it would
+     * anyway. Save it with {@code compareAndSaveWithoutState(..., expectedVersion())}.
+     * <p>
+     * The instance is quarantined again on the record, as {@link #onReleaseFailure} quarantines it when the input's
+     * budget has run out, whatever the budget, so quarantine turned off does not change it. The marks are trimmed to
+     * {@code reorderWindow}, the record and the ones after it stay, and a further release goes on from that record.
+     * {@code reason} says why in the failure record.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseTooLarge(SagaEnvelope<S> current, EventMeta meta,
+                                                                                            Throwable reason, Instant now, int reorderWindow) {
+        return onReleaseFailure(current, meta, reason, now, Duration.ZERO, reorderWindow, true);
+    }
+
+    /**
+     * The smallest write that stops a release on the record {@code meta} names, for when the store cannot write what
+     * {@link #onReleaseTooLarge} returns either, or {@code null} when that returns {@code null}. Save it with
+     * {@code compareAndSaveWithoutState(..., expectedVersion())}.
+     * <p>
+     * The instance is quarantined again on the record as {@code onReleaseTooLarge} quarantines it, with the marks
+     * trimmed to {@code reorderWindow}, but the marks get no pending entry for the record and the failure record holds
+     * no message. A further release does not need either. The marks show the input of every record as not applied from
+     * the write that records it on, the write that quarantines the instance included, see {@link #onFailureBare}, and
+     * only applying the input changes that, so a further release applies the record, see {@link #replay}. Leaving
+     * both out is the only difference between the two writes.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseTooLargeBare(SagaEnvelope<S> current, EventMeta meta,
+                                                                                                Throwable reason, Instant now, int reorderWindow) {
+        FailureRecord<S> full = onReleaseTooLarge(current, meta, reason, now, reorderWindow);
+        if (full == null) {
+            return null;
+        }
+        SagaFailure stoppedOn = Objects.requireNonNull(full.envelope().failure());
+        SagaFailure record = new SagaFailure(stoppedOn.input(), stoppedOn.position(), stoppedOn.firstFailedAt(), stoppedOn.failureType(), null,
+                null, stoppedOn.quarantineId());
+        return new FailureRecord<>(requarantined(current, now, record, current.streamMarks(), reorderWindow), current.version(), true);
+    }
+
+    /**
+     * The smallest write that records the failure of the input {@code meta} names, for when the store cannot write
+     * {@code full}, which {@link #onFailure} returned for {@code current}, or {@code null} when no smaller write records
+     * anything. Save it the way {@code full} is saved.
+     * <p>
+     * The failure record holds no message. The stream marks get no pending entry for the input when it is above the
+     * floor of its stream, or when they list it already, so the input's clock is then on the failure record alone, as
+     * it is for an input with no stream. A release ignores the failure record and applies such an input, because the
+     * marks don't show it as applied, see {@link #replay}. An input at or below the floor that the marks don't list keeps
+     * its pending entry, since without it a release would take the input for one the instance applied before the
+     * floor and delete its record unapplied. Then the message is the only difference between the two writes.
+     * <p>
+     * When {@code full} only lists an input the failure record names already as pending, nothing is left to write, and
+     * this returns {@code null}. A write that quarantines the instance still quarantines it.
+     */
+    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onFailureBare(@Nullable SagaEnvelope<S> current, EventMeta meta, FailureRecord<S> full) {
+        SagaEnvelope<S> written = full.envelope();
+        SagaFailure failure = written.failure();
+        if (failure == null || current != null && failure.equals(current.failure())) {
+            return null;
+        }
+        SagaFailure bare = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(), failure.failureType(), null,
+                failure.releasedAt(), failure.quarantineId());
+        // As withFailure builds them, without the pending entry
+        Map<String, StreamMarks> streamMarks = current == null ? Map.of()
+                : withReplacedFailure(current.streamMarks(), current.streamWatermarks(), currentFailure(current), meta);
+        // Except for an input at or below the floor of its stream that the marks do not list already. A release ignores
+        // the failure record, so without the entry it would take the input for one the instance applied and delete its
+        // record unapplied, see classify
+        if (current != null && isAtOrBelowFloor(current, meta) && !isOutstanding(streamMarks.get(meta.streamId()), meta)) {
+            streamMarks = written.streamMarks();
+        }
+        return new FailureRecord<>(new SagaEnvelope<>(written.sagaId(), written.state(), written.status(), written.version(), written.timers(),
+                written.streamWatermarks(), written.positionWatermark(), written.createdAt(), written.updatedAt(), written.completedAt(),
+                written.currentStep(), written.started(), bare, streamMarks, written.quarantineSkipCount()), full.expectedVersion(), full.quarantined());
+    }
+
+    /**
+     * The instance a further release would write for the record {@code meta} names, once {@code requarantined}, which
+     * {@link #onReleaseTooLarge} returned for it, is released again at {@code now}. That is {@code applied}, which the
+     * release computed for the record, with the trimmed marks and the failure record the further release starts from,
+     * and the record's version applied to those marks. Its version is {@code applied}'s, lower than the further release
+     * writes, which takes the same bytes. When the store cannot write this either, no further release gets past the
+     * record.
+     */
+    public static <S extends @Nullable Object> SagaEnvelope<S> appliedAfterReleasingAgain(SagaEnvelope<S> applied, SagaEnvelope<S> requarantined,
+                                                                                          EventMeta meta, Instant now, int reorderWindow) {
+        SagaEnvelope<S> releasing = Objects.requireNonNull(startRelease(requarantined, now));
+        Map<String, StreamMarks> streamMarks = new LinkedHashMap<>(releasing.streamMarks());
+        if (meta.streamId() != null && meta.streamVersion() != null) {
+            streamMarks.put(meta.streamId(), recorded(streamMarks.get(meta.streamId()), releasing.streamWatermarks().get(meta.streamId()), meta, NO_REORDER_WINDOW));
+        }
+        // As replay(..) builds it, which trims the marks of an input that completes the instance and keeps the failure
+        // record of one that does not
+        boolean completed = applied.isCompleted();
+        return new SagaEnvelope<>(applied.sagaId(), applied.state(), applied.status(), applied.version(), applied.timers(),
+                applied.streamWatermarks(), null, applied.createdAt(), applied.updatedAt(), applied.completedAt(), applied.currentStep(),
+                applied.started(), completed ? applied.failure() : releasing.failure(),
+                completed ? withinWindow(streamMarks, reorderWindow) : streamMarks,
+                completed ? applied.quarantineSkipCount() : releasing.quarantineSkipCount());
+    }
+
+    private static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseFailure(SagaEnvelope<S> current, EventMeta meta,
+                                                                                            Throwable failure, Instant now,
+                                                                                            Duration quarantineAfter, int reorderWindow,
+                                                                                            boolean tooLarge) {
+        String input = meta.skipKey();
+        if (input == null) {
+            return null;
+        }
+        SagaFailure existing = current.failure();
+        if (!current.isReleasing() || existing == null) {
+            return null;
+        }
+        boolean streamKeyed = meta.redeliveryKey() != null;
+        // As replay(..) reads the marks, since an input behind the window was never applied and its failure counts
+        if (streamKeyed && classify(current, meta, NO_REORDER_WINDOW) == Delivery.REDELIVERY) {
+            // Another writer applied it in between, so there is no failure left to record
+            return null;
+        }
+        Instant failingSince = failingSince(current, meta, now);
+        boolean budgetUsedUp = tooLarge || Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
+        // An input with no stream has its clock on the record alone, so the record naming it is enough
+        if (!budgetUsedUp && existing.input().equals(input) && (!streamKeyed || isPending(current.streamMarks().get(meta.streamId()), meta))) {
+            return null;
+        }
+        // The record named an input the release has applied by now, since a release applies its records in order. So
+        // unlike onFailure nothing of the replaced record is kept on the stream marks, which would make an applied input
+        // outstanding again
+        Map<String, StreamMarks> streamMarks = streamKeyed
+                ? withPending(current.streamMarks(), current.streamWatermarks(), meta, reorderWindow, failingSince)
+                : current.streamMarks();
+        if (budgetUsedUp) {
+            SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()),
+                    null, existing.quarantineId());
+            return new FailureRecord<>(requarantined(current, now, record, streamMarks, reorderWindow), current.version(), true);
+        }
+        SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()),
+                existing.releasedAt(), existing.quarantineId());
+        return new FailureRecord<>(withBookkeeping(current, SagaStatus.QUARANTINED, now, record, streamMarks, current.quarantineSkipCount()),
+                current.version(), false);
+    }
+
+    // Quarantined again during a release, under the same quarantine id. The skip count stays, since the records after
+    // the failing one stay. SagaCodec refuses to read a releasing instance without one, so 0 is only ever taken for
+    // an envelope built in code. The marks are trimmed to the window, as the write that releases the instance trims
+    // them. A record that stays names an input no release applied, and the next release applies one behind the
+    // window, see replay(..)
+    private static <S extends @Nullable Object> SagaEnvelope<S> requarantined(SagaEnvelope<S> current, Instant now, SagaFailure record,
+                                                                             Map<String, StreamMarks> streamMarks, int reorderWindow) {
+        Long count = current.quarantineSkipCount();
+        return withBookkeeping(current, SagaStatus.QUARANTINED, now, record, withinWindow(streamMarks, reorderWindow), count == null ? 0L : count);
+    }
+
+    // No reorder window, so the marks forget no version however far apart two versions are, see replay(..)
+    private static final OptionalInt NO_REORDER_WINDOW = OptionalInt.empty();
+
+    // The instance one version up with its status, failure record and quarantine bookkeeping replaced. The state,
+    // timers and watermarks stay as they are, and the position watermark is dropped, as everywhere else.
+    private static <S extends @Nullable Object> SagaEnvelope<S> withBookkeeping(SagaEnvelope<S> current, SagaStatus status, @Nullable Instant updatedAt,
+                                                                               @Nullable SagaFailure failure, Map<String, StreamMarks> streamMarks,
+                                                                               @Nullable Long quarantineSkipCount) {
+        return new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1, current.timers(),
+                current.streamWatermarks(), null, current.createdAt(), updatedAt, current.completedAt(), current.currentStep(),
+                current.started(), failure, streamMarks, quarantineSkipCount);
     }
 
     /**
@@ -373,7 +877,7 @@ public final class SagaExecutionSupport {
         SagaFailure existing = currentFailure(current);
         Instant failingSince = failingSince(current, meta, now);
         if (existing == null) {
-            SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()));
+            SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()), null, null);
             boolean budgetUsedUp = Duration.between(failingSince, now).compareTo(quarantineAfter) >= 0;
             return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp, meta, null, reorderWindow);
         }
@@ -392,7 +896,7 @@ public final class SagaExecutionSupport {
         // Name the input failing now, with the instant it first failed and what it is failing with. An input that fails
         // one way and then another is still the same input failing, and the later exception is the more useful one to
         // read.
-        SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()));
+        SagaFailure record = new SagaFailure(input, meta.position(), failingSince, failure.getClass().getName(), shortened(failure.getMessage()), null, null);
         return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp, meta, existing, reorderWindow);
     }
 
@@ -405,7 +909,7 @@ public final class SagaExecutionSupport {
             return pendingSince;
         }
         SagaFailure existing = currentFailure(current);
-        return existing != null && existing.input().equals(meta.redeliveryKey()) ? existing.firstFailedAt() : now;
+        return existing != null && existing.input().equals(meta.skipKey()) ? existing.firstFailedAt() : now;
     }
 
     // Only the input the record names clears it. Letting any successful input clear it lets a saga that re-arms a timer
@@ -455,8 +959,10 @@ public final class SagaExecutionSupport {
             // It holds the initial state and started = false, which is honestly what it is, an instance that failed
             // before it began. Start detection reads that flag rather than the document, so a later redelivery of the
             // start event still runs onStart.
+            boolean quarantining = status == SagaStatus.QUARANTINED;
             SagaEnvelope<S> inserted = new SagaEnvelope<>(sagaId, saga.initialState(), status, 1, List.of(), Map.of(),
-                    null, now, now, null, null, false, record, withPending(Map.of(), Map.of(), meta, reorderWindow, now));
+                    null, now, now, null, null, false, quarantining ? withNewQuarantineId(record) : record,
+                    withPending(Map.of(), Map.of(), meta, reorderWindow, now), quarantining ? 1L : null);
             return new FailureRecord<>(inserted, 0, quarantined);
         }
         return new FailureRecord<>(withFailure(current, record, status, now, meta, replaced, reorderWindow), current.version(), quarantined);
@@ -465,15 +971,26 @@ public final class SagaExecutionSupport {
     // Deliberately copies the stream watermarks and timers over untouched. A failure advances neither, because the input
     // was not handled, and a quarantined instance's timers stop because the store's due-timer query asks for ACTIVE ones.
     // The stream marks gain the failed version as pending and nothing else. The position watermark is dropped, as in
-    // process, since nothing reads it.
+    // process, since nothing reads it. The write that quarantines the instance gives it a new quarantine id and a skip
+    // count of 1, since the input it quarantines on takes seq 0, see quarantiningInput. The id is what tells it apart
+    // from an instance quarantined by 0.34.0
     private static <S extends @Nullable Object> SagaEnvelope<S> withFailure(SagaEnvelope<S> current, @Nullable SagaFailure record,
                                                                            SagaStatus status, Instant now,
                                                                            EventMeta meta, @Nullable SagaFailure replaced, int reorderWindow) {
+        boolean quarantining = status == SagaStatus.QUARANTINED;
         return new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1, current.timers(),
                 current.streamWatermarks(), null, current.createdAt(), now, current.completedAt(),
-                current.currentStep(), current.started(), record,
+                current.currentStep(), current.started(), quarantining && record != null ? withNewQuarantineId(record) : record,
                 withPending(withReplacedFailure(current.streamMarks(), current.streamWatermarks(), replaced, meta),
-                        current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)));
+                        current.streamWatermarks(), meta, reorderWindow, failingSince(current, meta, now)),
+                quarantining ? Long.valueOf(1L) : current.quarantineSkipCount());
+    }
+
+    // An instance that goes from active to quarantined starts a quarantine of its own, which the inputs it skips are
+    // recorded under. A release that quarantines it again keeps the id instead, see requarantined
+    private static SagaFailure withNewQuarantineId(SagaFailure record) {
+        return new SagaFailure(record.input(), record.position(), record.firstFailedAt(), record.failureType(), record.failureMessage(),
+                record.releasedAt(), UUID.randomUUID().toString());
     }
 
     // The stream marks after the version meta describes has failed. It is listed as pending among the versions of its
@@ -504,9 +1021,9 @@ public final class SagaExecutionSupport {
 
     // A failure record names one input, so a different input failing replaces it. A record written before pending
     // existed is then the only memory that its input was never applied, and its event type is not known. It is kept as a
-    // version of the stream, which a stream version identifies exactly. Only such records can get here unlisted, because a
-    // failure recorded now is pending in the same write, so this holds at most the record an instance carried over from
-    // before.
+    // version of the stream, which a stream version identifies exactly. Only two kinds of record get here unlisted, a
+    // record written before pending existed and a record onFailureBare wrote, because a failure recorded any other way is
+    // pending in the same write.
     private static Map<String, StreamMarks> withReplacedFailure(Map<String, StreamMarks> streamMarks, Map<String, Long> streamWatermarks,
                                                                @Nullable SagaFailure replaced, EventMeta meta) {
         if (replaced == null || replaced.input().equals(meta.redeliveryKey())) {
@@ -587,12 +1104,17 @@ public final class SagaExecutionSupport {
      * Skipping is wrong only for a version that was never applied, and a feed that delivers a version more than
      * {@code reorderWindow} behind the highest one, when that version did not fail, cannot be told from a replay, so the
      * version is lost. The exceptions are a pending version, which failed in the saga and so was not applied, and the
-     * input the instance's failure record names. Both stay new however far behind they are.
+     * input the instance's failure record names. Both stay new however far behind they are. A releasing instance keeps
+     * its failure record until the release ends, so there only the pending versions count.
      * <p>
      * An instance stored before 0.35.0 has a watermark per stream and no marks. Everything at or below that watermark
      * was applied, so it stays skipped whatever its type, and the type marks start from the next event.
      */
     public static <S extends @Nullable Object> Delivery classify(SagaEnvelope<S> current, EventMeta meta, int reorderWindow) {
+        return classify(current, meta, OptionalInt.of(reorderWindow));
+    }
+
+    private static <S extends @Nullable Object> Delivery classify(SagaEnvelope<S> current, EventMeta meta, OptionalInt reorderWindow) {
         if (meta.streamId() == null || meta.streamVersion() == null) {
             return Delivery.NEW;
         }
@@ -603,7 +1125,10 @@ public final class SagaExecutionSupport {
         if (version <= floor) {
             // A pending version or a failure record naming this input says it was never applied, whatever the floor says.
             // Later deliveries keep an unrelated failure record and only the save that applies the input clears it.
-            return isOutstanding(marks, meta) || namesFailureOf(current, meta) ? Delivery.NEW : Delivery.REDELIVERY;
+            // A release keeps the failure record while it replays, so a releasing instance goes by its pending versions
+            // alone, which the quarantine listed this input among and the replay that applies it removes it from.
+            return isOutstanding(marks, meta) || (!current.isReleasing() && namesFailureOf(current, meta))
+                    ? Delivery.NEW : Delivery.REDELIVERY;
         }
         TypeMark typeMark = marks == null ? null : marks.byType().get(typeKey(meta));
         if (typeMark == null || version > typeMark.mark()) {
@@ -617,13 +1142,14 @@ public final class SagaExecutionSupport {
             return Delivery.NEW;
         }
         // The horizon outlasts a window that is raised later, because the versions it forgot are not in applied any more.
-        if (version > Math.max(typeMark.horizon(), typeMark.mark() - reorderWindow)) {
+        if (version > horizon(typeMark.horizon(), typeMark.mark(), reorderWindow)) {
             return Delivery.NEW;
         }
         // A failure record naming this input says it was never applied, since the save that applies it clears the record.
         // It covers an instance written before pending existed, and skipping it as behind the window would acknowledge
-        // an event whose reaction never ran.
-        return namesFailureOf(current, meta) ? Delivery.NEW : Delivery.BEHIND_WINDOW;
+        // an event whose reaction never ran. A releasing instance keeps that record after its replay applied the input,
+        // so there the record says nothing and the pending versions checked above decide alone.
+        return !current.isReleasing() && namesFailureOf(current, meta) ? Delivery.NEW : Delivery.BEHIND_WINDOW;
     }
 
     /**
@@ -689,7 +1215,8 @@ public final class SagaExecutionSupport {
         }
         return new SagaEnvelope<>(current.sagaId(), current.state(), current.status(), current.version(), timers,
                 current.streamWatermarks(), null, current.createdAt(), current.updatedAt(),
-                current.completedAt(), current.currentStep(), current.started(), current.failure(), current.streamMarks());
+                current.completedAt(), current.currentStep(), current.started(), current.failure(), current.streamMarks(),
+                current.quarantineSkipCount());
     }
 
     // Pending, or a failure recorded before pending existed. Either says the version was handed to the saga and failed.
@@ -719,13 +1246,27 @@ public final class SagaExecutionSupport {
         return watermark != null ? watermark : Long.MIN_VALUE;
     }
 
+    // Whether the stream version meta describes is at or below the floor of its stream on current, where only an
+    // outstanding mark makes classify take it for new once the failure record stops counting, as it does in a release
+    private static <S extends @Nullable Object> boolean isAtOrBelowFloor(SagaEnvelope<S> current, EventMeta meta) {
+        String streamId = meta.streamId();
+        Long streamVersion = meta.streamVersion();
+        return streamId != null && streamVersion != null
+               && streamVersion <= floorOf(current.streamMarks().get(streamId), current.streamWatermarks().get(streamId));
+    }
+
     private static String typeKey(EventMeta meta) {
         return meta.eventType() == null ? "" : meta.eventType();
     }
 
+    // The highest version a type mark forgets, which with no reorder window is only the horizon it has already
+    private static long horizon(long horizon, long mark, OptionalInt reorderWindow) {
+        return reorderWindow.isPresent() ? Math.max(horizon, mark - reorderWindow.getAsInt()) : horizon;
+    }
+
     // The marks of one stream after recording the version meta describes. The floor is fixed when the stream first gets
     // marks, at the watermark the instance had then, which is what the pre-0.35.0 rule would have skipped up to.
-    private static StreamMarks recorded(@Nullable StreamMarks marks, @Nullable Long watermark, EventMeta meta, int reorderWindow) {
+    private static StreamMarks recorded(@Nullable StreamMarks marks, @Nullable Long watermark, EventMeta meta, OptionalInt reorderWindow) {
         long floor = floorOf(marks, watermark);
         long version = Objects.requireNonNull(meta.streamVersion());
         Map<String, TypeMark> byType = marks == null ? new LinkedHashMap<>() : new LinkedHashMap<>(marks.byType());
@@ -741,9 +1282,12 @@ public final class SagaExecutionSupport {
             applied.add(version);
             mark = previous.mark();
         }
-        // Past the window a version is skipped, so remembering it would only grow the state.
-        long horizon = Math.max(previous == null ? Long.MIN_VALUE : previous.horizon(), mark - reorderWindow);
-        applied.removeIf(earlier -> earlier <= horizon);
+        // Past the window a version is skipped, so remembering it would only grow the state. A release, which records with
+        // no window, keeps a version it applies behind the horizon until it ends, so that the record is not applied twice
+        long horizon = horizon(previous == null ? Long.MIN_VALUE : previous.horizon(), mark, reorderWindow);
+        if (reorderWindow.isPresent()) {
+            applied.removeIf(earlier -> earlier <= horizon);
+        }
         byType.put(typeKey(meta), new TypeMark(mark, List.copyOf(applied), horizon));
         // Applying a version settles it, so it stops being outstanding.
         Map<String, List<Long>> pending = marks == null ? new LinkedHashMap<>() : new LinkedHashMap<>(marks.pending());

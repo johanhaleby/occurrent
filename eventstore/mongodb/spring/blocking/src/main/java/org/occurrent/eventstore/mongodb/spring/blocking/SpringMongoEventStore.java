@@ -58,7 +58,7 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
@@ -169,7 +169,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final boolean streamPositionEnabled;
     private final boolean resumeFromMarkerVersions;
     private final boolean spreadTypeMarkerWrites;
-    private final Deployment deployment;
+    private final MongoDeployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -209,7 +209,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(mongoTemplate::executeCommand) : Deployment.OTHER;
+        this.deployment = dcbEnabled ? MongoDeployment.detect(mongoTemplate::executeCommand) : MongoDeployment.OTHER;
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -314,7 +314,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
         // With synchronization active the template reads in the session bound to it, or binds one, so only a read without synchronization needs a session of its own
-        if (deployment == Deployment.MONGOS && !TransactionSynchronizationManager.isSynchronizationActive()) {
+        if (deployment == MongoDeployment.MONGOS && !TransactionSynchronizationManager.isSynchronizationActive()) {
             return readInOwnSession(criteria, options);
         }
         return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(criteria, mongoTemplate), this::currentPosition, mongoTemplate, queryOptions);
@@ -395,7 +395,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
             }
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
-            return deployment == Deployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
+            return deployment == MongoDeployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
         }
         Object boundSession = TransactionSynchronizationManager.isSynchronizationActive() ? TransactionSynchronizationManager.getResource(mongoTemplate.getMongoDatabaseFactory()) : null;
         if (boundSession != null && BOUND_SESSIONS_WRITTEN_IN.contains(boundSession)) {
@@ -406,7 +406,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null);
         }
         if (options.confirmsAppendBeforeSaving() && TransactionSynchronizationManager.isSynchronizationActive()) {
-            if (deployment == Deployment.REPLICA_SET) {
+            if (deployment == MongoDeployment.REPLICA_SET) {
                 return readMarkerVersionsWith(mongoTemplate, criteria, options);
             }
             DcbEventStream eventStream = readInOwnTransaction(criteria, options);

@@ -18,13 +18,16 @@ package org.occurrent.subscription.synchronous.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.application.service.WriteRefusedException;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
+import org.occurrent.subscription.api.reactor.internal.SynchronousHandlersTestSwitch;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * The reactive counterpart of the blocking {@code SynchronousSubscriptionModel}: a register-only reactive
@@ -38,11 +41,27 @@ import java.util.List;
  * one's {@link Mono} completes). A handler error reaches the caller, so a reactive transaction it passes through can
  * roll the write back. Whether it also stops the handlers behind it depends on that second argument.
  * <p>
+ * The reactive application service asks {@link #beforeWrite()} before every write, which refuses the write while the
+ * model is stopped or when a paused subscription matches its events, since a handler that misses an event never sees
+ * it.
+ * <p>
+ * An event your code passes to {@link #dispatch(List)} or {@link #dispatch(List, boolean)} isn't refused. It reaches a
+ * handler whose filter matches it only while this model is running and that handler's subscription isn't paused.
+ * Otherwise the event is dropped for that handler, not held, so neither {@link #resumeSubscription(String)} nor
+ * {@link #start()} delivers it later. A subscription is paused after {@link #pauseSubscription(String)}, after
+ * {@link #stop()}, and when it registers while this model is stopped. {@link #resumeSubscription(String)} or
+ * {@link #start()} resumes it, and {@code start(false)} doesn't. Each event is checked as it is routed, once the
+ * returned {@link Mono} is subscribed, so a stop or a pause that applies partway through a list drops the events after
+ * it. A stop or a pause made while a write through the application service is open applies once that write closes, and
+ * until then an event passed in still reaches the handler. ADR 85 has the background.
+ * <p>
  * The register-and-route machinery lives in {@link RegisteringSubscribable}. This model adds the application-service
  * dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel}.
  */
 @NullMarked
-public class SynchronousSubscriptionModel extends RegisteringSubscribable implements ReactiveSynchronousEventDispatcher {
+public class SynchronousSubscriptionModel extends RegisteringSubscribable implements ReactiveSynchronousEventDispatcher, SynchronousHandlersTestSwitch {
+
+    private volatile boolean dropsEventsWhileStopped;
 
     /**
      * Several handlers, unlike the push models, which take one each. There is no broker and no acknowledgement to share
@@ -76,7 +95,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      * @return A {@link Mono} that completes when dispatch is done.
      */
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents) {
-        return route(writtenCloudEvents);
+        return routeWrittenEvents(() -> route(writtenCloudEvents));
     }
 
     /**
@@ -96,6 +115,53 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      */
     @Override
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
-        return transactional ? route(writtenCloudEvents) : routeIsolated(writtenCloudEvents);
+        return routeWrittenEvents(() -> transactional ? route(writtenCloudEvents) : routeIsolated(writtenCloudEvents));
+    }
+
+    /**
+     * Refuses a write while this model is stopped and has handlers registered, and returns a check that refuses one
+     * whose events a paused subscription matches. A handler skipped either way would never see those events, since
+     * this model has no replay. A {@link #stop()} or {@link #pauseSubscription(String)} that comes after this call is
+     * held back until the check is closed, so the subscriptions it let the write through for still get its events.
+     * <p>
+     * A write this call admits before a {@code subscribe} returns may not reach that subscription, whether the model is
+     * running or stopped with no handlers, since nothing orders the two.
+     *
+     * @throws WriteRefusedException when this model is stopped and has handlers registered
+     */
+    @Override
+    public WriteCheck beforeWrite() {
+        if (dropsEventsWhileStopped) {
+            return WriteCheck.NONE;
+        }
+        Runnable closeWindow = openWriteWindow();
+        if (closeWindow == null) {
+            if (hasSubscriptions()) {
+                throw WriteRefusedException.synchronousSubscriptionsStopped();
+            }
+            return WriteCheck.NONE;
+        }
+        return new WriteCheck() {
+            @Override
+            public void check(List<CloudEvent> newEvents) {
+                Set<String> paused = pausedSubscriptionsMatching(newEvents);
+                if (!paused.isEmpty()) {
+                    throw WriteRefusedException.synchronousSubscriptionsPaused(paused);
+                }
+            }
+
+            @Override
+            public void close() {
+                closeWindow.run();
+            }
+        };
+    }
+
+    /**
+     * Internal, for test support only. See {@link SynchronousHandlersTestSwitch}.
+     */
+    @Override
+    public void dropEventsWhileStopped() {
+        dropsEventsWhileStopped = true;
     }
 }

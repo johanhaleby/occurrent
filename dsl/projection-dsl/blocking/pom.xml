@@ -119,6 +119,14 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- The catch-up-then-push model a recording projection is wired to, for the test that feeds it from the
+             in-memory store's write path. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-push-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-synchronous-blocking</artifactId>

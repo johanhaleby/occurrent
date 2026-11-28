@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -74,7 +75,7 @@ class StoredTimerNameTest {
         Saga<LobbyEvent, FlowState<LobbyEvent>, LobbyCommand> saga = lobbySaga();
         SagaStateStore<FlowState<LobbyEvent>> store = SagaStateStore.inMemory();
         FlowState<LobbyEvent> awaitingPlayers = saga.evolve(saga.initialState(), SagaInput.event(new GameCreated("game-1")));
-        store.compareAndSave("game-1", storedWith(awaitingPlayers, "game-1", STORED_STEP_TIMER), 0);
+        SagaEnvelopes.of(store, converter).compareAndSave("game-1", storedWith(awaitingPlayers, "game-1", STORED_STEP_TIMER), 0);
         List<LobbyCommand> dispatched = new ArrayList<>();
 
         execution(saga, store, dispatched::add).pollTimers();
@@ -83,7 +84,7 @@ class StoredTimerNameTest {
         // ran. Consuming a fired timer is checked on the two core DSL timers, which stay active after firing.
         assertAll(
                 () -> assertThat(dispatched).as("the stored step timer still reaches the step's timeout reaction").containsExactly(new CancelGame("game-1")),
-                () -> assertThat(store.find("game-1")).hasValueSatisfying(e -> assertThat(e.isCompleted()).isTrue())
+                () -> assertThat(SagaEnvelopes.of(store, converter).find("game-1")).hasValueSatisfying(e -> assertThat(e.isCompleted()).isTrue())
         );
     }
 
@@ -91,14 +92,14 @@ class StoredTimerNameTest {
     void a_core_dsl_timer_stored_without_a_namespace_fires_and_is_consumed() {
         Saga<LobbyEvent, String, LobbyCommand> saga = coreSaga(STORED_TIMER_WITHOUT_A_NAMESPACE);
         SagaStateStore<String> store = SagaStateStore.inMemory();
-        store.compareAndSave("game-2", storedWith("waiting", "game-2", STORED_TIMER_WITHOUT_A_NAMESPACE), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("game-2", storedWith("waiting", "game-2", STORED_TIMER_WITHOUT_A_NAMESPACE), 0);
         List<LobbyCommand> dispatched = new ArrayList<>();
 
         execution(saga, store, dispatched::add).pollTimers();
 
         assertAll(
                 () -> assertThat(dispatched).containsExactly(new CancelGame("game-2")),
-                () -> assertThat(store.find("game-2")).hasValueSatisfying(e -> assertThat(e.timers()).isEmpty())
+                () -> assertThat(SagaEnvelopes.of(store, null).find("game-2")).hasValueSatisfying(e -> assertThat(e.timers()).isEmpty())
         );
     }
 
@@ -109,26 +110,26 @@ class StoredTimerNameTest {
         // change that read one side differently would stop this timer firing with nothing thrown anywhere.
         Saga<LobbyEvent, String, LobbyCommand> saga = coreSaga(STORED_TIMER_CONTAINING_A_COLON);
         SagaStateStore<String> store = SagaStateStore.inMemory();
-        store.compareAndSave("game-3", storedWith("waiting", "game-3", STORED_TIMER_CONTAINING_A_COLON), 0);
+        SagaEnvelopes.of(store, null).compareAndSave("game-3", storedWith("waiting", "game-3", STORED_TIMER_CONTAINING_A_COLON), 0);
         List<LobbyCommand> dispatched = new ArrayList<>();
 
         execution(saga, store, dispatched::add).pollTimers();
 
         assertAll(
                 () -> assertThat(dispatched).containsExactly(new CancelGame("game-3")),
-                () -> assertThat(store.find("game-3")).hasValueSatisfying(e -> assertThat(e.timers()).isEmpty())
+                () -> assertThat(SagaEnvelopes.of(store, null).find("game-3")).hasValueSatisfying(e -> assertThat(e.timers()).isEmpty())
         );
     }
 
     private <S> SagaExecution<LobbyEvent, S, LobbyCommand> execution(Saga<LobbyEvent, S, LobbyCommand> saga,
                                                                      SagaStateStore<S> store,
                                                                      CommandDispatcher<LobbyCommand> dispatcher) {
-        return new SagaExecution<>("stored-timer-name", saga, store, dispatcher, converter, SagaRunnerConfig.defaults(), event -> true);
+        return new SagaExecution<>("stored-timer-name", saga, store, dispatcher, converter, SagaRunnerConfig.defaults());
     }
 
     private static <S> SagaEnvelope<S> storedWith(S state, String sagaId, String storedTimerName) {
         return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, 1, List.of(new TimerEntry(storedTimerName, LONG_OVERDUE)),
-                Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null);
+                Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null, true, null, Map.of(), null);
     }
 
     private static Saga<LobbyEvent, FlowState<LobbyEvent>, LobbyCommand> lobbySaga() {

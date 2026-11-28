@@ -30,6 +30,7 @@ import org.occurrent.dsl.decider.DeciderApplicationService;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.codec.SagaCodec;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
@@ -122,7 +123,7 @@ class OrderFulfillmentSagaTest {
 
             await().untilAsserted(() -> assertThat(commandEvents(commandEventStore, orderId))
                     .containsExactly(new PaymentReservationRequested(orderId, 42.0), new OrderShipped(orderId)));
-            SagaEnvelope<OrderSagaState> envelope = stateStore.find(orderId).orElseThrow();
+            SagaEnvelope<OrderSagaState> envelope = stateStore.find(orderId).map(SagaCodec.of(stateStore.stateCodec(), null)::decode).orElseThrow();
             assertAll(
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.timers()).isEmpty()

@@ -97,9 +97,15 @@ public interface CheckpointStorage {
      * {@link UnsupportedOperationException}.
      * <p>
      * Answer {@code true} only when {@link #save(String, Checkpoint, CheckpointWriteCondition)} accepts and refuses
-     * both as documented, and {@code any()} carries a stored version forward untouched. The default is {@code false},
-     * so a storage that writes unconditionally needs to say nothing. A caller that depends on a conditional write can
-     * ask before it wires anything up, rather than finding out from an exception on the first write.
+     * both as documented, and {@code any()} keeps a stored version as it is. The default is {@code false}.
+     * A durable subscription that has to record its first position in a storage answering {@code false} for its id,
+     * such as one that starts at the subscription-model default with no checkpoint stored, is then refused with
+     * {@code IllegalStateException} before anything is written. Two nodes recording a first position at the same
+     * moment could otherwise overwrite each other's and lose the events between the two positions. To start anyway and
+     * accept that loss, set {@code startWhenFirstPositionCanBeOverwritten(true)} on the durable subscription model's
+     * config, or {@code occurrent.subscription.start-when-first-position-can-be-overwritten=true} with a Spring Boot
+     * starter. See ADR 184. A caller that depends on a conditional write can ask before it wires anything up, rather
+     * than finding out from an exception on the first write.
      *
      * @return {@code true} if both {@code notOlderThan} and {@code ifAbsent} are evaluated, {@code false} if either of
      * them is refused

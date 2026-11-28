@@ -16,21 +16,19 @@
 
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
-import com.mongodb.MongoCommandException;
-import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken.MarkerObservation;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
+import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Function;
 
 /**
  * The check of a conditional append with a consistency token on the MongoDB stores (ADR 149). It compares what the read
@@ -40,27 +38,7 @@ import java.util.function.Function;
 @NullMarked
 public final class DcbAppendConditionCheck {
 
-    private static final int COMMAND_NOT_FOUND = 59;
-
     private DcbAppendConditionCheck() {
-    }
-
-    /**
-     * What a store's deployment answers to {@code hello}.
-     */
-    public enum Deployment {
-        /**
-         * A replica set.
-         */
-        REPLICA_SET,
-        /**
-         * A mongos, or a load balancer in front of one.
-         */
-        MONGOS,
-        /**
-         * Anything else, such as a standalone server.
-         */
-        OTHER
     }
 
     /**
@@ -88,7 +66,7 @@ public final class DcbAppendConditionCheck {
          *
          * @param deployment the store's deployment
          */
-        public static Scope of(Deployment deployment) {
+        public static Scope of(MongoDeployment deployment) {
             return switch (deployment) {
                 case REPLICA_SET -> REPLICA_SET;
                 case MONGOS -> SNAPSHOT_THROUGH_MONGOS;
@@ -165,7 +143,7 @@ public final class DcbAppendConditionCheck {
      * @param token            the token of the condition
      * @param criteria         the criteria of the condition
      * @param current          the marker observation of every marker key of {@code criteria}
-     * @param scope            what the check may assume, see {@link Scope#of(Deployment)}
+     * @param scope            what the check may assume, see {@link Scope#of(MongoDeployment)}
      * @throws IllegalArgumentException if the token doesn't hold exactly the marker keys of {@code criteria}, which means
      *                                  this store's read didn't create it
      */
@@ -205,37 +183,6 @@ public final class DcbAppendConditionCheck {
             items.add(new ItemQuery(item, selectionKeys.stream().map(key -> new KeySelection(key, read.get(key).version())).toList()));
         }
         return items.isEmpty() ? new Pass() : new QueryEvents(items);
-    }
-
-    /**
-     * The deployment the store runs on, asked once when the store is created. A mongos answers {@code msg} isdbgrid, also
-     * through a load balancer, and a replica set member answers a {@code setName}. Every failure except a server that
-     * doesn't know {@code hello} propagates.
-     *
-     * @param runCommand runs a command against the store's database
-     */
-    public static Deployment deployment(Function<Document, Document> runCommand) {
-        Document answer = Objects.requireNonNull(helloOrIsMaster(runCommand), "The server sent no answer to hello or isMaster");
-        if ("isdbgrid".equals(answer.get("msg"))) {
-            return Deployment.MONGOS;
-        }
-        return answer.get("setName") != null ? Deployment.REPLICA_SET : Deployment.OTHER;
-    }
-
-    // An old server, such as MongoDB 4.2.8, doesn't know hello. The Spring templates wrap the driver's exception, so the
-    // causes are walked.
-    private static Document helloOrIsMaster(Function<Document, Document> runCommand) {
-        try {
-            return runCommand.apply(new Document("hello", 1));
-        } catch (RuntimeException e) {
-            Throwable cause = e;
-            for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
-                if (cause instanceof MongoCommandException commandException && commandException.getErrorCode() == COMMAND_NOT_FOUND) {
-                    return runCommand.apply(new Document("isMaster", 1));
-                }
-            }
-            throw e;
-        }
     }
 
     private static boolean saw(MarkerObservation atRead) {

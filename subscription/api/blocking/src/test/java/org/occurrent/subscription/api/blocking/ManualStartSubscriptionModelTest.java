@@ -674,6 +674,21 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_storage_that_cannot_evaluate_if_absent_for_the_subscription_id_refuses_the_registration_rather_than_having_the_first_position_written_unconditionally() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ConditionRefusingForTheIdCheckpointStorage storage = new ConditionRefusingForTheIdCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+
+        Throwable thrown = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+
+        assertThat(thrown).as("[the registration]").isInstanceOf(IllegalArgumentException.class);
+        assertThat(storage.checkpoints).as("[checkpoints written by the refused registration]").isEmpty();
+        assertThat(model.subscriptionIds()).as("[subscriptions registered after the refusal]").isEmpty();
+    }
+
+    @Test
     void a_position_source_that_answers_nothing_refuses_the_registration_rather_than_recording_none() {
         // Answering null is the source reporting a problem it cannot resolve, so there is no position to hold this
         // registration to. Letting it through would start the subscription from wherever the feed has reached once it
@@ -1981,6 +1996,52 @@ class ManualStartSubscriptionModelTest {
             }
             checkpoints.put(subscriptionId, checkpoint);
             conditions.put(subscriptionId, condition);
+            return checkpoint;
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return OptionalLong.empty();
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            checkpoints.remove(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return checkpoints.containsKey(subscriptionId);
+        }
+    }
+
+    // Faithful to SpringRedisCheckpointStorage in Redis Cluster mode for a subscription id it cannot align to one slot,
+    // which answers true from evaluatesWriteConditions() and false from evaluatesWriteConditionsFor(id), and refuses a
+    // conditional write for that id with an IllegalArgumentException, while accepting an unconditional one.
+    private static final class ConditionRefusingForTheIdCheckpointStorage implements CheckpointStorage {
+        final Map<String, Checkpoint> checkpoints = new HashMap<>();
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
+
+        @Override
+        public boolean evaluatesWriteConditionsFor(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            return checkpoints.get(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used with a conditional write");
+            }
+            checkpoints.put(subscriptionId, checkpoint);
             return checkpoint;
         }
 

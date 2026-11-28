@@ -27,7 +27,6 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
@@ -37,6 +36,7 @@ import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,7 +46,6 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -64,9 +63,14 @@ import java.util.stream.Stream;
  * <ul>
  *   <li><strong>Catch-up</strong> is Occurrent's job and runs once per subscription id. On subscribe this model
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
- *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during a
- *       replay that runs to the end, while the buffer has room, is delivered either by the replay or by the buffered
- *       feed, and a full buffer refuses it. The overlap is de-duplicated by the
+ *       time via {@link PositionOrderedReader}, then delivers what it buffered and goes live. A write to the in-memory
+ *       event store waits on the writing thread while those buffered events are delivered, so the catch-up goes live
+ *       however fast events are written. So a handler must not wait for a lock that the writing thread holds, or for
+ *       another thread that writes to the event store, such as a write it submits to an executor. An event that commits during a replay that runs to the end, while the buffer has room, is delivered either by the
+ *       replay or by the buffered feed. One that finds the buffer full fails the catch-up, which writes no marker,
+ *       and the write that found it full throws once the store has committed the event. The same goes for one that
+ *       finds it full before the replay has started. The overlap between the replay and the
+ *       buffered feed is de-duplicated by the
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
  *       reconcile pass is needed. A catch-up that fails on an interrupted thread is not a failed catch-up. This model
@@ -114,8 +118,15 @@ import java.util.stream.Stream;
  *       {@link #cancelSubscription(String)} deletes the marker, as clean-up. It deletes the marker before anything
  *       else, so a delete that throws cancels nothing, and the cancel can be tried again. A delete the store loses, or
  *       a marker write it applies after the delete, leaves a marker stored, and the next subscribe of the id then skips
- *       its replay. So a projection that has to be rebuilt, or whose filter changes, subscribes under a new id. ADR 179
- *       decides that the reactor stack reads its marker as a position to resume after instead of as done.</li>
+ *       its replay. So a projection that has to be rebuilt, or whose filter changes, subscribes under a new id.
+ *       Under a new id the subscription starts from the beginning of the history and repeats everything its handler
+ *       does, the records it writes, the commands it dispatches and the messages it sends. Stop every instance on the
+ *       old id before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one
+ *       instance, what else a new id needs depends on where each instance keeps what it builds and which broker queue
+ *       or consumer group it consumes, as
+ *       <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+ *       upgrade guide</a> describes.
+ *       ADR 179 decides that the reactor stack reads its marker as a position to resume after instead of as done.</li>
  * </ul>
  * Only stream and capability-agnostic subscription filters can be replayed (their plain {@link Filter} drives the
  * position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.
@@ -124,57 +135,7 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions, HistoryRetainingSubscriptions {
-
-    /**
-     * Whether the store this model replays from holds {@code event}, asked of the store rather than assumed from the
-     * fact that this model replays one. The reader and the live feed are independent, so an event may arrive over the
-     * feed and be in the store, or arrive and not be, and where it was produced does not settle which. An event
-     * another service published is in this store if something here persisted it and absent if nothing did, and
-     * nothing about this model's construction says which happened.
-     * <p>
-     * Reads the event's own position first, where it has one, so the ordinary case costs one lookup instead of a
-     * scan. That position comes from whoever produced the event though, and a local write assigns its own, so a miss
-     * there is not an answer and the identity is looked for across the store before giving up. The caller is expected
-     * to ask this rarely.
-     * <p>
-     * Fails closed. An event missing either half of its identity, and a read that throws, both answer {@code false},
-     * because a caller uses this to decide whether it may stop retrying an event and a question that cannot be
-     * answered has to cost the event nothing. A reader with no position needs no branch here, since the constructor
-     * already refuses one.
-     */
-    @Override
-    public boolean retains(CloudEvent event) {
-        String id = event.getId();
-        URI source = event.getSource();
-        if (id == null || source == null) {
-            return false;
-        }
-        // Matched on source as well as id, since a CloudEvent is identified by the pair. An id alone would let a local
-        // event from another source stand in for the one that arrived over the feed, which is the reading that loses it.
-        Filter identity = Filter.cloudEvent(id, source);
-        try {
-            // Read inside the try, because an external producer can put anything in the extension and an unreadable
-            // one is only a lost optimization. Letting it throw would refuse an event the identity lookup would find.
-            long position = readablePosition(event);
-            // The position the event arrives with belongs to whoever produced it, and a local write assigns its own, so
-            // the two disagree for an event that reached the feed from elsewhere and was stored here as well. Reading
-            // the one position first keeps the common case off a scan, and finding nothing there proves nothing.
-            boolean present = (position > 0 && found(identity, PositionRange.between(position - 1, position)))
-                    || found(identity, PositionRange.fromBeginning());
-            // Cleared here rather than inside the read, so a narrow read that succeeds and finds nothing does not
-            // report the store healthy while the wider read behind it is still failing.
-            retentionReadFailureLogged.set(false);
-            return present;
-        } catch (RuntimeException e) {
-            // Said once per outage rather than per attempt. A caller asks again on every redelivery, which is what
-            // notices the store coming back, so without this the same failure is logged at the retry cadence.
-            if (retentionReadFailureLogged.compareAndSet(false, true)) {
-                log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it, and this is logged once until a check succeeds again.", id, e);
-            }
-            return false;
-        }
-    }
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions {
 
     private static long readablePosition(CloudEvent event) {
         try {
@@ -184,21 +145,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         }
     }
 
-    private boolean found(Filter identity, PositionRange range) {
-        try (Stream<CloudEvent> stored = reader.readInPositionOrder(identity, range)) {
-            return stored.findAny().isPresent();
-        }
-    }
-
     // Named so subscribe(..) can build the action before taking the monitor and register it inside, rather than
     // spelling a multi-line lambda out in the middle of a synchronized block.
     private interface RoutingSubscribeAction extends RegisteringSubscribable.RoutingAction {
     }
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
-
-    // Whether the store being unreadable has already been reported, cleared by the next read that works.
-    private final AtomicBoolean retentionReadFailureLogged = new AtomicBoolean();
 
     // How often in a row a replay that failed on an interrupt is retried when no attempt reads further into the
     // history than the ones before it, and how long it waits before the first of those retries. Each one waits twice
@@ -348,8 +300,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         BlockingHandover<CloudEvent, CloudEventKey> handover = BlockingHandover.create(action, CloudEventKey::of, options, "subscription", subscriptionId);
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
-        // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
-        // exactly as before, while PushSubscriptionModel.acceptOrDefer(..) (a broker path that can redeliver,
+        // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) buffers during
+        // the replay and waits while the catch-up delivers what it held, while PushSubscriptionModel.acceptOrDefer(..) (a broker path that can redeliver,
         // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED. Both branches
         // wrap only a BlockingHandover.PreDispatchRefusalException as RoutingAction.Refusal, never every
         // IllegalStateException the call could throw, since the handler itself can throw one too (deliverOutsideLock
@@ -407,7 +359,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * projection, rather than only being buffered against a replay still in flight or not yet started. Delegates
      * straight to the {@link BlockingHandover} this subscription's catch-up owns. See
      * {@link BlockingHandover#isReadyForLiveDelivery()} for exactly what that answers and why. In short, {@code true}
-     * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
+     * only once the catch-up has reached live, {@code false} while replaying or delivering the events it held, and
      * {@code false} forever after a catch-up failure on a thread that was not interrupted.
      * <p>
      * A CloudEvent-level broker source that feeds the live {@link PushSubscriptionModel} this model wraps through
@@ -554,7 +506,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // no one.
                 log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
                         + "refuses every event, so the source redelivers rather than losing them. Cancel the "
-                        + "subscription and subscribe again once the cause is fixed.", subscriptionId, e);
+                        + "subscription and subscribe again once the cause is fixed. "
+                        + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, e);
                 // Dropped before the replay entry, so a start(true) racing this never sees a launcher with no replay
                 // running and relaunches a catch-up that failed. By identity, never by key alone, so this replay's
                 // own completion can never evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...)
@@ -585,8 +538,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             // By identity, for the same reason the failure path above is: this replay's own completion must never
             // evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...) already put there. Forgetting
             // the entry and applying the pending pause are one guarded step with markCaughtUp's own check, so a
-            // cancelSubscription(id) plus subscribe(id, ...) landing between the post-loop keepReplaying() check
-            // inside catchUp(..) and here still finds this replay's ownership already gone and does neither.
+            // cancelSubscription(id) plus subscribe(id, ...) landing between the last keepReplaying() check inside
+            // catchUp(..), the one right before the handover goes live, and here still finds this replay's ownership
+            // already gone and does neither.
             interruptibleReplays.remove(subscriptionId, ownLaunch.get());
             // Package-private and a no-op in production. Lets a test stand immediately before the guarded
             // completion step, which is where a lifecycle call racing it has to be ordered against it.
@@ -709,7 +663,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     // The ownership check and the id-scoped write or side effect it guards have to be one step, or a stale replay's
     // own late completion can still act on an id a cancelSubscription(id) plus subscribe(id, ...) already gave to a
-    // newer one, even though the per-payload and post-loop keepReplaying() checks inside catchUp(..) both passed.
+    // newer one, even though every keepReplaying() check inside catchUp(..) passed.
     // Synchronized on the same monitor launchReplay's own replayingSubscriptions.put(..) and cancelSubscription's
     // replayingSubscriptions.remove(..) use, for the same reason relaunchInterruptedReplay already is: lifecycle
     // calls are rare enough that the lock costs nothing.
@@ -844,8 +798,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * and the subscription it belongs to is caught up rather than replayed again, since the attempt that wrote it
      * had read the whole history and held the id when the write began.
      * <p>
-     * The events buffered during the replay are delivered before the marker is written, so a stop arriving while
-     * they are being delivered is still early enough to be refused.
+     * The events buffered during the replay are delivered before the marker is written, and the delivery asks whether
+     * this model is stopped before each event and once more before it goes live. A stop it finds ends the delivery and
+     * writes no marker. The events not yet delivered stay buffered for the catch-up {@link #start(boolean)} runs.
      * <p>
      * Live events fed while stopped are dropped rather than refused, the dropped-not-deferred contract every stopped
      * subscription model has (ADR 85). That is bounded here only because the stop is reversible: the window closes at

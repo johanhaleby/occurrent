@@ -22,18 +22,35 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReadScope;
+import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
+import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
+import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.internal.StartPositionPin;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.aop.framework.AopProxyUtils;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.BeanCreationException;
+import org.springframework.beans.factory.BeanCurrentlyInCreationException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 
@@ -43,7 +60,12 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -54,13 +76,145 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
  * start knobs into a {@link StartAt}/{@link DcbStartAt} (with the replay-then-resume behavior), decides whether a
  * subscription should block until started, and applies the Spring startup workarounds. The reactive stack rejects
  * time-based start positions, so this logic is deliberately not shared with it.
+ * <p>
+ * It also holds the start boundary of the application context, the live start the event store reports when its bean
+ * is created. A first start that goes straight to live begins there, so an event written while the application starts
+ * reaches it. A bean built after startup begins at a boundary read when it is created.
  */
 class StartPositionSupport {
 
+    private record Boundary(UnaryOperator<@Nullable String> reader, @Nullable String liveStart) {
+    }
+
+    private static final Logger log = LoggerFactory.getLogger(StartPositionSupport.class);
+
     private final ApplicationContext applicationContext;
+    // The boundary each unproxied bean that opens catch-up read scopes reported when it was created, by bean name
+    private final Map<String, Boundary> boundaries = new ConcurrentHashMap<>();
+    private final AtomicBoolean boundaryStoreRequested = new AtomicBoolean();
+    // The boundary of each subscription a bean built after startup registers, in place of the context's
+    private final Map<String, String> lateLiveStarts = new ConcurrentHashMap<>();
 
     StartPositionSupport(ApplicationContext applicationContext) {
         this.applicationContext = applicationContext;
+    }
+
+    // Read from the bean itself, so reading the boundary invokes no advice and looks nothing up by name. A proxy with a
+    // single target is read through that target, and any other proxy is skipped with a warning. Every such bean records
+    // its own, and the store the subscription model reads decides which one counts, so a store with no live start, such
+    // as the in-memory one, can't stand in for it. A failed read fails the bean, since starting without the boundary
+    // would skip what is written during startup.
+    //
+    // Holds no lock, since creating the store below waits for a thread already creating it, and that thread enters
+    // here from the store's own callback.
+    void recordStartBoundaryOf(Object bean, String beanName) {
+        if (boundaries.containsKey(beanName)) {
+            return;
+        }
+        @Nullable Object target = unproxied(bean, beanName);
+        if (target == null) {
+            return;
+        }
+        @Nullable UnaryOperator<@Nullable String> reader = liveStartReaderOf(target);
+        if (reader == null) {
+            return;
+        }
+        boundaries.putIfAbsent(beanName, new Boundary(reader, reader.apply(null)));
+        createBoundaryStoreOnce();
+    }
+
+    private static @Nullable Object unproxied(Object bean, String beanName) {
+        if (!AopUtils.isAopProxy(bean)) {
+            return bean;
+        }
+        @Nullable Object target = AopProxyUtils.getSingletonTarget(bean);
+        if (target == null && (bean instanceof CatchupReads || bean instanceof DcbCatchupReads)) {
+            log.warn("The event store bean {} is a proxy without a single target, so the annotated subscriptions that start live can't begin where the event store was when it was " +
+                     "created, and start where the event store is when they subscribe, as in 0.34.0. An event written while the application starts can then be missed.", beanName);
+        }
+        return target;
+    }
+
+    // Another store on the same collection can write while the application starts, before the store the model reads
+    // exists. Creating that store at the first store's callback reads its boundary before such a write can happen.
+    // Spring refuses to create the bean whose callback this is a second time, which is the usual case of one store, and
+    // a store that depends on that bean, and both record their boundary as their own creation finishes.
+    private void createBoundaryStoreOnce() {
+        if (!boundaryStoreRequested.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            boundaryStoreName();
+        } catch (BeanCreationException e) {
+            if (!e.contains(BeanCurrentlyInCreationException.class)) {
+                throw e;
+            }
+        }
+    }
+
+    // The store the subscription model reads, picked the way Spring resolves the model's EventStoreQueries parameter
+    // and DcbEventStore provider, the only one or the @Primary one. Resolving it creates it. Null when there is none,
+    // or several and none of them @Primary, where the model's own wiring fails as well.
+    private @Nullable String boundaryStoreName() {
+        Set<EventStoreCapability> capabilities = applicationContext.getBeanProvider(OccurrentProperties.class).getIfAvailable(OccurrentProperties::new).getEventStore().getCapabilities();
+        @Nullable String name = capabilities.contains(EventStoreCapability.STREAM) ? uniqueOrPrimaryBeanName(EventStoreQueries.class) : null;
+        return name == null && capabilities.contains(EventStoreCapability.DCB) ? uniqueOrPrimaryBeanName(DcbEventStore.class) : name;
+    }
+
+    private @Nullable String uniqueOrPrimaryBeanName(Class<?> type) {
+        try {
+            return applicationContext.getAutowireCapableBeanFactory().resolveNamedBean(type).getBeanName();
+        } catch (NoSuchBeanDefinitionException e) {
+            return null;
+        }
+    }
+
+    private @Nullable Boundary boundaryOfTheStore() {
+        @Nullable String name = boundaryStoreName();
+        return name == null ? null : boundaries.get(name);
+    }
+
+    private static @Nullable UnaryOperator<@Nullable String> liveStartReaderOf(Object bean) {
+        if (bean instanceof CatchupReads reads) {
+            return notBefore -> {
+                try (CatchupReadScope scope = requireScope(reads.openCatchupReadScope(notBefore), bean, "openCatchupReadScope")) {
+                    return scope.liveStart();
+                }
+            };
+        } else if (bean instanceof DcbCatchupReads reads) {
+            return notBefore -> {
+                try (DcbCatchupReadScope scope = requireScope(reads.openDcbCatchupReadScope(notBefore), bean, "openDcbCatchupReadScope")) {
+                    return scope.liveStart();
+                }
+            };
+        }
+        return null;
+    }
+
+    // The Mongo and in-memory event stores always open a scope. A Mockito mock returns null, and the failure says so.
+    private static <S> S requireScope(@Nullable S scope, Object bean, String method) {
+        if (scope == null) {
+            throw new IllegalStateException(("The event store %s returned no scope from %s, so the start boundary of the annotated subscriptions can't be read. " +
+                    "A mocked event store has to return a scope from %s.").formatted(bean.getClass().getName(), method, method));
+        }
+        return scope;
+    }
+
+    // The boundary for a bean built after startup, read from the same event store, or null when there is none. A store
+    // that reports one never returns one earlier than notBefore
+    @Nullable String readLateLiveStart(@Nullable String notBefore) {
+        @Nullable Boundary boundary = boundaryOfTheStore();
+        return boundary == null ? null : boundary.reader().apply(notBefore);
+    }
+
+    void startAtLateBoundary(String subscriptionId, @Nullable String liveStart) {
+        if (liveStart != null) {
+            lateLiveStarts.put(subscriptionId, liveStart);
+        }
+    }
+
+    void forgetLateBoundary(String subscriptionId) {
+        lateLiveStarts.remove(subscriptionId);
     }
 
     // TODO Also check resume behavior if subscription exists!
@@ -92,10 +246,97 @@ class StartPositionSupport {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> nowThenResume(resumeBehavior);
-            case DEFAULT -> StartAt.subscriptionModelDefault();
+            case NOW -> liveOnlyStart(subscriptionId, true, resumeBehavior);
+            case DEFAULT -> liveOnlyStart(subscriptionId, false, resumeBehavior);
             case BEGINNING -> replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), resumeBehavior);
         };
+    }
+
+    // A first start at NOW, or at DEFAULT with nothing stored, goes straight to live, so it begins at the start
+    // boundary instead of wherever the feed has reached when the model subscribes (issue 979). NOW under
+    // SAME_AS_START_AT stores nothing and starts the live model at the boundary. Every other one pins the boundary as
+    // the first checkpoint and starts at the model default, which resumes from it. Without a boundary, or with a
+    // checkpoint already stored, the start is the one it was before.
+    private StartAt liveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
+        @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
+        if (boundary != null) {
+            if (now && resumeBehavior == ResumeBehavior.SAME_AS_START_AT) {
+                return StartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : StartAt.checkpoint(boundary));
+            }
+            if (pinnedOverNothingStored(subscriptionId, boundary)) {
+                return StartAt.subscriptionModelDefault();
+            }
+        }
+        return now ? nowThenResume(resumeBehavior) : StartAt.subscriptionModelDefault();
+    }
+
+    private DcbStartAt dcbLiveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
+        @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
+        if (boundary != null) {
+            if (now && resumeBehavior == ResumeBehavior.SAME_AS_START_AT) {
+                String checkpoint = boundary.asString();
+                return DcbStartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : DcbStartAt.checkpoint(checkpoint));
+            }
+            if (pinnedOverNothingStored(subscriptionId, boundary)) {
+                return DcbStartAt.subscriptionModelDefault();
+            }
+        }
+        return now ? dcbNowThenResume(resumeBehavior) : DcbStartAt.subscriptionModelDefault();
+    }
+
+    // Null when there is no boundary, when the store starter cannot turn it into a checkpoint, and when the
+    // application's SubscriptionResumePoints answers for the subscription, since that answer is an explicit start
+    private @Nullable Checkpoint startBoundaryFor(String subscriptionId) {
+        @Nullable String liveStart = lateLiveStarts.get(subscriptionId);
+        if (liveStart == null) {
+            @Nullable Boundary boundary = boundaryOfTheStore();
+            liveStart = boundary == null ? null : boundary.liveStart();
+        }
+        if (liveStart == null) {
+            return null;
+        }
+        @Nullable SubscriptionResumePoints resumePoints = applicationContext.getBeanProvider(SubscriptionResumePoints.class).getIfAvailable();
+        if (resumePoints != null && resumePoints.resumePointFor(subscriptionId) != null) {
+            return null;
+        }
+        @Nullable LiveStartCheckpoints checkpoints = applicationContext.getBeanProvider(LiveStartCheckpoints.class).getIfUnique();
+        return checkpoints == null ? null : checkpoints.checkpointOf(liveStart);
+    }
+
+    // Pinned whether or not something is stored, since another node may have pinned its own later boundary, and
+    // StartPositionPin settles that race by order. Only a pin over nothing changes the start. Where a checkpoint was
+    // stored already, the subscription resumes from whatever governs, as it did before.
+    private boolean pinnedOverNothingStored(String subscriptionId, Checkpoint boundary) {
+        @Nullable CheckpointStorage checkpointStorage = applicationContext.getBeanProvider(CheckpointStorage.class).getIfUnique();
+        if (checkpointStorage == null) {
+            return false;
+        }
+        boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
+        if (!checkpointAlreadyExisted && !checkpointStorage.evaluatesWriteConditionsFor(subscriptionId) && !startWhenFirstPositionCanBeOverwritten()) {
+            throw firstPositionCanBeOverwritten(checkpointStorage, subscriptionId);
+        }
+        StartPositionPin.pinOrSaveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
+        return !checkpointAlreadyExisted;
+    }
+
+    // Refused before the pin writes anything, where the first checkpoint could only be written unconditionally. The
+    // durable model refuses the same subscription the same way when no boundary is pinned
+    private IllegalStateException firstPositionCanBeOverwritten(CheckpointStorage checkpointStorage, String subscriptionId) {
+        return new IllegalStateException("Checkpoint storage " + checkpointStorage.getClass().getName() + " does not evaluate " +
+                                         "write conditions for subscription " + subscriptionId + ", so the start boundary " +
+                                         "pinned as its first checkpoint could only be written unconditionally. Two nodes " +
+                                         "starting it at the same moment could then overwrite each other's first checkpoint " +
+                                         "and lose the events between the two positions. The subscription is therefore " +
+                                         "refused before anything is written. Use a CheckpointStorage that evaluates " +
+                                         "CheckpointWriteCondition.ifAbsent() and answers true from " +
+                                         "evaluatesWriteConditionsFor(String) for this subscription, or set " +
+                                         "occurrent.subscription.start-when-first-position-can-be-overwritten=true to start " +
+                                         "anyway, accepting that loss.");
+    }
+
+    private boolean startWhenFirstPositionCanBeOverwritten() {
+        return applicationContext.getBeanProvider(OccurrentProperties.class).getIfAvailable(OccurrentProperties::new)
+                .getSubscription().isStartWhenFirstPositionCanBeOverwritten();
     }
 
     // The competing consumer layer lets the instances compete and the durable layer stores and reads a position. A
@@ -170,8 +411,8 @@ class StartPositionSupport {
             return replayThenResume(subscriptionId, DcbStartAt.afterPosition(startAtDcbPosition), resumeBehavior);
         }
         return switch (startPosition) {
-            case NOW -> dcbNowThenResume(resumeBehavior);
-            case DEFAULT -> DcbStartAt.subscriptionModelDefault();
+            case NOW -> dcbLiveOnlyStart(subscriptionId, true, resumeBehavior);
+            case DEFAULT -> dcbLiveOnlyStart(subscriptionId, false, resumeBehavior);
             case BEGINNING -> replayThenResume(subscriptionId, DcbStartAt.beginning(), resumeBehavior);
         };
     }
@@ -253,9 +494,9 @@ class StartPositionSupport {
                         }
                     }
                 };
-                case NOW -> nowThenResume(resumeBehavior);
+                case NOW -> liveOnlyStart(subscriptionId, true, resumeBehavior);
                 // The model default at every layer, as in agnosticStartAt
-                case DEFAULT -> StartAt.subscriptionModelDefault();
+                case DEFAULT -> liveOnlyStart(subscriptionId, false, resumeBehavior);
             };
         };
     }

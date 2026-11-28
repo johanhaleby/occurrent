@@ -17,6 +17,9 @@
 package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
 import java.util.List;
@@ -26,13 +29,22 @@ import java.util.Optional;
  * Persistence for saga instances. Unlike a read-model {@code ViewStateRepository}, a saga store must support a
  * compare-and-set save: two threads (a subscription delivering an event and the timer poller firing a timeout) can touch
  * one instance concurrently, so the executor detects a lost update and retries rather than silently overwriting. The
- * store is also queried for instances with a due timer, since timers live in the envelope rather than an external
+ * store is also queried for instances with a due timer, since timers live in the instance rather than an external
  * scheduler.
  * <p>
- * This is the minimal contract the executor needs. Two of its six methods are {@code default}, and both are about
- * reading and writing an instance without its application state, which is how the executor quarantines an instance
- * whose state no longer decodes. A store inherits them and works, and only a store that overrides them lets such an
- * instance be considered for quarantine at all.
+ * A store keeps {@link StoredSaga} values and never sees a {@link SagaEnvelope}. Occurrent encodes and decodes the
+ * instance with {@link SagaCodec}, so it owns every bookkeeping field, and the store persists the id, the version, the
+ * encoded form and the index of each {@link StoredSaga}. A store decides only how the user state is represented,
+ * which it supplies as {@link #stateCodec()}.
+ * <p>
+ * Two methods read and write an instance without its application state, which is how the executor quarantines an
+ * instance whose state no longer decodes. A store implements both, since each is the whole read or write with the state
+ * left out.
+ * <p>
+ * Quarantine needs a second capability. A store that also implements {@link SagaStateStoreSkippedInputs} records the
+ * events a quarantined instance skips and lets the instance be released. The runner refuses to start a saga with
+ * quarantine on when its store does not implement it, and {@code SagaRunnerConfig.disableQuarantine()} runs the saga
+ * without quarantine on such a store.
  * <p>
  * Observing instances is an optional capability layered on top. A store that also implements
  * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A
@@ -42,44 +54,38 @@ import java.util.Optional;
  */
 public interface SagaStateStore<S extends @Nullable Object> {
 
-    /** The stored envelope for {@code sagaId}, or empty if none exists yet. */
-    Optional<SagaEnvelope<S>> find(String sagaId);
+    /** How this store represents the user state of its saga. */
+    SagaStateCodec<S> stateCodec();
 
     /**
-     * The stored envelope for {@code sagaId} without its application state, or empty if none exists yet. This is what
+     * The stored instance for {@code sagaId}, or empty if none exists yet.
+     * <p>
+     * An empty result has to hold every write acknowledged before the call started. The executor skips an input
+     * addressed to no instance without writing anything, so no compare-and-set catches an instance this read misses, and
+     * the input is acknowledged unapplied. A store that can't give that answer, such as a read at a transaction snapshot
+     * that began before the write, throws instead of returning empty. An instance this returns may be an older version than the stored one, since
+     * the executor writes it back with a compare-and-set that such a version loses. {@link #findWithoutState(String)}
+     * answers under the same rule.
+     */
+    Optional<StoredSaga> find(String sagaId);
+
+    /**
+     * The stored instance for {@code sagaId} without its application state, or empty if none exists yet. This is what
      * the executor reads when it has to decide whether a failing input has used up its quarantine budget, a decision
      * that needs the status, the failure record and the dedup watermarks and never needs the state.
      * <p>
-     * A store that can answer this without decoding the state must do so, because the instance a quarantine exists to
-     * suspend is very often the instance whose state no longer decodes. A renamed event class, a converter change, or
-     * state written by a version of the application nobody runs any more all leave an instance that throws on
-     * {@link #find(String)} while the rest of its document reads perfectly well. Such an instance used to keep failing
-     * without ever recording that it was failing, so it never reached its budget.
-     * <p>
-     * A caller therefore must not read {@link SagaEnvelope#state()} off the result. A store that answers without
-     * decoding leaves it {@code null} even for a healthy instance, exactly as a
-     * {@link SagaStateStoreQueries#findByStatus} result does, while the default below hands back whatever {@code find}
-     * gave, so which of the two you get is the store's business and not something to branch on. Every other member is
-     * populated either way. Use {@link #find(String)} when the state itself is wanted.
-     * <p>
-     * The default reads the whole instance through {@link #find(String)}, so a store written against 0.33.0 keeps
-     * compiling and keeps behaving as it did, which means an instance it cannot decode still never reaches its
-     * budget. The executor cannot read an instance without its state on a store that only reads it whole.
-     * <p>
-     * A store that overrides this must override {@link #compareAndSaveWithoutState(String, SagaEnvelope, long)} too.
-     * The executor saves what it read, so a store that hands back a {@code null} state here and then writes the
-     * envelope whole would erase the state it was careful not to decode.
+     * A store must answer this without reading the state, because the instance a quarantine exists to suspend is very
+     * often the instance whose state no longer decodes. The result needs {@link SagaCodec#fieldsWithoutState()} and
+     * nothing else, and it may hold the state, which the caller ignores.
      */
-    default Optional<SagaEnvelope<S>> findWithoutState(String sagaId) {
-        return find(sagaId);
-    }
+    Optional<StoredSaga> findWithoutState(String sagaId);
 
     /**
-     * Save {@code envelope} only if the currently stored version equals {@code expectedVersion} (use {@code 0} to insert a
+     * Save {@code saga} only if the currently stored version equals {@code expectedVersion} (use {@code 0} to insert a
      * new instance). Returns {@code false} on a version conflict, so the caller can reload and retry. Returns {@code true}
      * on success.
      * <p>
-     * Store the version in {@code envelope}. It is usually {@code expectedVersion + 1}, but the write that marks a
+     * Store the version in {@code saga}. It is usually {@code expectedVersion + 1}, but the write that marks a
      * failed timer (see {@link #findWithDueTimers(Instant, int)}) holds {@code expectedVersion} itself, so it doesn't
      * make an event that read the instance before it lose its compare-and-set. A store that refuses a save at the same
      * version refuses every mark. For each failed fire the executor then reads the instance twice, tries the mark once
@@ -88,35 +94,33 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * too. An event that read the instance before the mark then loses its compare-and-set, and one that takes longer than
      * the poll interval can lose it on every attempt.
      */
-    boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion);
+    boolean compareAndSave(StoredSaga saga, long expectedVersion);
 
     /**
-     * Save {@code envelope} under the same compare-and-set rule as
-     * {@link #compareAndSave(String, SagaEnvelope, long)}, leaving the stored application state where it is rather
-     * than taking it from {@code envelope}. The executor records a failure and a quarantine through this, so neither
-     * half of that decision decodes the state, and the state the instance stopped on is still there afterwards for
-     * whoever repairs the converter.
+     * Save {@code saga} under the same compare-and-set rule as {@link #compareAndSave(StoredSaga, long)}, leaving the
+     * stored application state where it is. {@code saga} holds no state. The store sets the fields in
+     * {@link SagaCodec#fieldsExceptState()} from it and removes the ones it has no value for, and touches no other
+     * field. The executor records a failure and a quarantine through this, so neither half of that decision decodes the
+     * state, and the state the instance stopped on is still there afterwards for whoever repairs the converter.
      * <p>
-     * An insert, meaning an {@code expectedVersion} of {@code 0}, writes the whole envelope including its state,
-     * because there is no stored state to leave alone. That case is an instance whose very first input failed.
-     * <p>
-     * The default writes the envelope whole through {@code compareAndSave}, which is right for any store whose
-     * {@link #findWithoutState(String)} hands the state back anyway, the default included. See that method for why the
-     * two are overridden together.
+     * An insert, meaning an {@code expectedVersion} of {@code 0}, goes through {@link #compareAndSave(StoredSaga, long)}
+     * with the whole instance, because there is no stored state to leave alone. A store throws
+     * {@link IllegalArgumentException} for an {@code expectedVersion} of {@code 0} here, since {@code saga} holds no state
+     * to insert.
      */
-    default boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
-        return compareAndSave(sagaId, envelope, expectedVersion);
-    }
+    boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion);
 
     /**
      * {@link SagaStatus#ACTIVE} instances that have at least one timer due at or before {@code now}, at most
      * {@code limit} of them. The executor's timer poller uses this to fire
-     * timeouts. A returned instance may have several due timers.
+     * timeouts. A returned instance may have several due timers. The result needs {@link SagaCodec#instanceFields()}
+     * and nothing else.
      * <p>
      * Active, not merely unfinished. A {@link SagaStatus#QUARANTINED} instance must not be returned. Its timers stay
-     * armed rather than dropped, and firing one would advance its state across the input it stopped on.
+     * armed rather than dropped, and firing one would advance its state across the input it stopped on. A store matches
+     * the stored statuses of {@link SagaCodec#storedStatuses(SagaStatus)} for {@code ACTIVE}.
      * <p>
-     * The instances come earliest first, ordered by {@link SagaEnvelope#earliestDueAtEpochMilli()}, and {@code limit}
+     * The instances come earliest first, ordered by {@code SagaIndex.nextTimerDueAtEpochMilli()}, and {@code limit}
      * keeps the first ones in that order. Instances due at the same instant come back in no particular order. When a
      * timer's fire throws, the executor makes that timer due again one millisecond after the poll that tried it, which
      * moves the instance behind every instance that was due at that poll. So instances whose timers keep failing take
@@ -125,7 +129,7 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * A store that ignores the order gives up that guarantee. Once {@code limit} instances keep failing, such a store
      * can return the same ones on every poll, and the saga's other instances never get their timers fired.
      */
-    List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
+    List<StoredSaga> findWithDueTimers(Instant now, int limit);
 
     /**
      * Remove the instance, for retention tooling. Most deployments keep completed instances (with a TTL) instead, and that
@@ -135,6 +139,15 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * event recreate the instance from its start event and run the process a second time. Delete an instance only once its
      * source can no longer redeliver any of its events, until then let a TTL expire it, so a late redelivery still finds
      * the terminal instance and is skipped rather than resurrecting it.
+     * <p>
+     * A store that implements {@link SagaStateStoreSkippedInputs} also deletes the records under the quarantine id the
+     * deleted instance had, in the same atomic write as the instance. A record of a quarantined instance can be the only
+     * copy of an input the subscription has already acknowledged, so deleting such an instance discards the inputs it
+     * skipped, and no release can replay them. A TTL index or any job that removes instances from the database without
+     * this method deletes none of their records, so no release can replay those inputs, and the records stay in the
+     * database with no instance. For the MongoDB store they are in the
+     * collections named after the instances with {@code _skipped_inputs} and {@code _skipped_input_chunks} appended. So
+     * leave quarantined instances out of such a job, or clean those two collections in it.
      */
     void delete(String sagaId);
 

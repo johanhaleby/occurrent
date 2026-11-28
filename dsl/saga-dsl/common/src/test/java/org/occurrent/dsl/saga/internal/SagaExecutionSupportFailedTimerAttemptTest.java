@@ -48,7 +48,7 @@ class SagaExecutionSupportFailedTimerAttemptTest {
     }
 
     private static SagaEnvelope<String> envelope(SagaStatus status, List<TimerEntry> timers) {
-        return new SagaEnvelope<>("s1", "state", status, 7, timers, Map.of("stream", 3L), 11L, CREATED, UPDATED, null, null);
+        return new SagaEnvelope<>("s1", "state", status, 7, timers, Map.of("stream", 3L), 11L, CREATED, UPDATED, null, null, true, null, Map.of(), null);
     }
 
     @Test
@@ -127,9 +127,9 @@ class SagaExecutionSupportFailedTimerAttemptTest {
 
     @Test
     void writes_nothing_when_the_instance_is_quarantined() {
-        SagaFailure failure = new SagaFailure("s@7", 7L, CREATED, IllegalStateException.class.getName(), "boom");
+        SagaFailure failure = new SagaFailure("s@7", 7L, CREATED, IllegalStateException.class.getName(), "boom", null, null);
         SagaEnvelope<String> quarantined = new SagaEnvelope<>("s1", "state", SagaStatus.QUARANTINED, 7, List.of(FAILED), Map.of(), null,
-                CREATED, UPDATED, null, null, true, failure);
+                CREATED, UPDATED, null, null, true, failure, Map.of(), null);
 
         assertThat(SagaExecutionSupport.withFailedTimerAttempt(quarantined, FAILED, ATTEMPTED_AT)).isNull();
     }

@@ -12,6 +12,9 @@ other sections compile fine and behave differently, so read them first.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   `SagaEnvelope` gains a 14th record component and `SagaRunnerConfig` a 6th. **Breaks the build** if you use a record
   pattern over either.
+- [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
+  `SagaFailure` gains a 6th and a 7th record component, and `SagaEnvelope` a 15th. **Breaks the build** if you use a
+  record pattern over either.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due).
   `SagaEnvelope.TimerEntry` gains a third record component. **Breaks the build** if you use a record pattern over it.
 - [The deprecated `accept(..)` on the projection feeds is removed](#the-deprecated-accept-on-the-projection-feeds-is-removed). `DomainEventFeed` and
@@ -27,6 +30,9 @@ other sections compile fine and behave differently, so read them first.
   record component. **Breaks the build** if you use a record pattern over it.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
+- [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+  **Breaks the build** if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself,
+  and an implementation compiled against 0.34.0 throws `AbstractMethodError`.
 - [A record pattern over `NativeMongoSubscription` stops compiling](#a-record-pattern-over-nativemongosubscription-stops-compiling).
   `NativeMongoSubscription` gains a third record component. **Breaks the build** if you use a record pattern over it.
 - [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
@@ -38,12 +44,20 @@ other sections compile fine and behave differently, so read them first.
 - [`ComposedDefaultStartPosition` and its bean are removed](#composeddefaultstartposition-and-its-bean-are-removed).
   **Breaks the build** if you inject the `occurrentComposedDefaultStartPosition` bean, name the type, or call or
   override `occurrentCompetingDurableSubscriptionModel(..)`.
+- [`HistoryRetainingSubscriptions` is removed](#historyretainingsubscriptions-is-removed). **Breaks the build** if you
+  implement it, name the type, or call `retains(..)`, `retainsEveryEvent()` or `HistoryRetainingSubscriptions.findIn(..)`.
 - [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
   **Breaks the build** if you refer to `SubscriptionAnnotations`, `PushCatchupStatusImpl`, `AsynchronousSubscribables`,
   `AppliedAppendRecordingRegistry` or `PolledCatchupSignals`, and `UpgradeToOccurrent_0_35` rewrites the references.
 - [A held event is withdrawn instead of delivered without the lease](#a-held-event-is-withdrawn-instead-of-delivered-without-the-lease).
   `AttemptNotMade` moves from the nested `org.occurrent.retry.internal.RetryExecution.AttemptNotMade` to
   `org.occurrent.retry.AttemptNotMade`. **Breaks the build** if you name the nested class.
+- [A `SagaStateStore` stores an encoded saga](#a-sagastatestore-stores-an-encoded-saga). `SagaStateStore` and
+  `SagaStateStoreQueries` take and return `StoredSaga` instead of `SagaEnvelope`, and `SagaStateStore` gains
+  `stateCodec()`. **Breaks the build** if you implement a `SagaStateStore`, or call one of its reads directly.
+- [The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed).
+  **Breaks the build** if you call the 13- or 11-argument `SagaEnvelope` constructor, or the 5-argument `SagaFailure`
+  one.
 
 ### Sagas
 
@@ -52,13 +66,38 @@ other sections compile fine and behave differently, so read them first.
   under the default `REQUIRED`, and an unreadable `streamid` or `streamversion` fails the delivery. Compiles unchanged.
 - [A saga applies a stream version that arrives after a higher one](#a-saga-applies-a-stream-version-that-arrives-after-a-higher-one).
   A saga keeps the highest applied version per stream and event type, and applies a late version instead of skipping
-  it. Saga instances store a new `streamMarks` field. Breaks the build only for a record pattern over `SagaEnvelope` or
-  `SagaRunnerConfig`.
+  it. Saga instances store a new `streamMarks` field, and an `ACTIVE` instance that holds it is stored as
+  `ACTIVE_MARKED`, which 0.34.0 can't read and a query of your own for `status: "ACTIVE"` doesn't find. Stop every
+  0.34.0 node that runs sagas before any 0.35.0 node starts, and run one update before going back to 0.34.0. Breaks the build only for a record pattern over `SagaEnvelope` or `SagaRunnerConfig`.
 - [A saga's quarantine budget runs per failing event](#a-sagas-quarantine-budget-runs-per-failing-event). Each failing
   event keeps its own clock. Compiles unchanged.
+- [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
+  A saga quarantines an instance after 5 minutes unless you turn quarantine off, and `SagaSubscription.release(sagaId)`
+  brings a quarantined instance back. Every saga quarantines, a push saga included, and a quarantined instance holds
+  the events of the inputs it skips, so deleting it deletes them. Stop every 0.34.0 node that runs sagas before any 0.35.0 node
+  starts, since a 0.34.0 node fails on every event for an instance that 0.35.0 quarantined. On MongoDB such an
+  instance is stored as `QUARANTINED_RECORDING`, so a query of your own for `status: "QUARANTINED"`, such as the
+  0.34.0 runbook's, no longer finds it. `SpringMongoSagaStateStore` refuses a collection name that ends in
+  `_skipped_inputs` or `_skipped_input_chunks`, creates two collections next to its own, and reads instances from the
+  primary, with quarantine on or off. Breaks the build only for a record pattern over `SagaFailure` or `SagaEnvelope`.
+- [A saga input whose instance the store cannot write fails before it dispatches](#a-saga-input-whose-instance-the-store-cannot-write-fails-before-it-dispatches).
+  Such an input dispatches nothing on that attempt and fails with an `IllegalStateException` instead of the store's
+  own exception. Compiles unchanged.
 - [A saga timer that keeps failing waits behind the timers already due](#a-saga-timer-that-keeps-failing-waits-behind-the-timers-already-due). A failed
   timer is tried again after every instance that was already due. Compiles unchanged unless you use a record pattern
   over `TimerEntry`.
+- [A `SagaStateStore` stores an encoded saga](#a-sagastatestore-stores-an-encoded-saga). Occurrent encodes and decodes
+  a saga instance with `SagaCodec`, and a store persists the `StoredSaga` it's given. `SpringMongoSagaStateStore` keeps
+  its document layout, so nothing needs migrating. Breaks the build for a `SagaStateStore` of your own and for code that
+  reads an instance from a store directly.
+- [Saga writes on MongoDB wait for a majority to journal them](#saga-writes-on-mongodb-wait-for-a-majority-to-journal-them).
+  `SpringMongoSagaStateStore` writes every saga instance at `majority` with `j: true` whatever your write concern, and
+  quarantine on MongoDB needs a replica set. On a standalone server a saga with quarantine on refuses to start, and one
+  with quarantine off works. On a replica set of a primary, a secondary and an arbiter, every saga
+  write fails while the secondary is down. Compiles unchanged, and a store built on a `MongoOperations` that isn't a
+  `MongoTemplate` fails at construction.
+- [The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed).
+  Only the canonical constructors remain.
 
 ### DCB
 
@@ -88,8 +127,11 @@ other sections compile fine and behave differently, so read them first.
   keeps a position and reads after it through `readInPositionOrder(..)` or `afterPosition(..)` still compiles, and can
   skip an event.
 - [A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint).
-  `RepositionableSubscriptions.findIn(durableModel)` finds the durable model, which stores the position before it
-  resumes there. Compiles unchanged.
+  `RepositionableSubscriptions.findIn(durableModel)` finds the durable model, which stores a position the model it
+  wraps restarts at before it resumes there. Compiles unchanged.
+- [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
+  A `CheckpointStorage` of your own that answers `false` from `evaluatesWriteConditionsFor` fails a new subscription
+  at the model default, where 0.34.0 wrote its first position unconditionally with a warning. Compiles unchanged.
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
@@ -134,7 +176,13 @@ other sections compile fine and behave differently, so read them first.
   A cancel made while the function runs returns first, and that subscribe subscribes nothing. Compiles unchanged.
 - [A blocking cancel no longer promises a rebuild](#a-blocking-cancel-no-longer-promises-a-rebuild).
   `cancelSubscription(id)` on the blocking `CatchupThenPushSubscriptionModel` still deletes the catch-up marker, but a
-  rebuild takes a new subscription id. Compiles unchanged.
+  rebuild takes a new subscription id. Under a new id the subscription starts from the beginning of the history and
+  repeats everything its handler does, the records it writes, the commands it dispatches and the messages it sends.
+  Stop every instance on the old id before the first one on the new id starts. Stopping them doesn't prevent the
+  repeats. With more than one instance, what else a new id needs depends on where each instance keeps what it builds
+  and which broker queue or consumer group it consumes, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes. Compiles unchanged.
 - [A blocking catch-up's cancel and stop wait for a replayed event in the action](#a-blocking-catch-ups-cancel-and-stop-wait-for-a-replayed-event-in-the-action).
   The call waits up to a second for an action the replay already started, and logs a `WARN` past that. Compiles unchanged.
 - [A dynamic `StartAt.now()` over `ReactorDurableSubscriptionModel` fails when the wrapped model answers nothing](#a-dynamic-startatnow-over-reactordurablesubscriptionmodel-fails-when-the-wrapped-model-answers-nothing).
@@ -173,12 +221,30 @@ other sections compile fine and behave differently, so read them first.
   A reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` start that reads a stored
   marker replays the events after it instead of skipping its replay, and a cancel no longer promises a rebuild.
   Compiles unchanged.
+- [A blocking catch-up holds live events until it has delivered what it held](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held).
+  `acceptOrDefer(..)` answers `DEFERRED` until the events held during the replay are delivered, where 0.34.0 went live
+  before that, and a write to the in-memory event store and a `goLive()` wait meanwhile. An `acceptAndWait(..)` from
+  the handler of another blocking catch-up throws while the feed isn't live. Compiles unchanged.
+- [A full live buffer fails a blocking catch-up push subscription](#a-full-live-buffer-fails-a-blocking-catch-up-push-subscription).
+  An event written once the buffer is full fails the catch-up, where 0.34.0 refused the event and went live without
+  it. Compiles unchanged.
+- [A blocking catch-up stopped while it delivers what it held ends there](#a-blocking-catch-up-stopped-while-it-delivers-what-it-held-ends-there).
+  A stop that comes after the last replayed event writes no marker, where 0.34.0 still wrote it or still went live.
+  Compiles unchanged.
+- [A recording callback that throws fails only its own event on a blocking catch-up](#a-recording-callback-that-throws-fails-only-its-own-event-on-a-blocking-catch-up).
+  A throw from `alreadyDeliveredByReplay(..)` for a held event fails that event alone, where 0.34.0 failed the whole
+  catch-up. Compiles unchanged.
 - [The reactor `HistoryLossReportingSubscriptions` gains a method](#the-reactor-historylossreportingsubscriptions-gains-a-method).
   **Breaks the build** if you implement the interface yourself.
 - [A failure after the write doesn't run the command again](#a-failure-after-the-write-doesnt-run-the-command-again). A
   handler of a synchronous subscription that fails now makes `execute` throw, where a retry could run the command again.
 
 ### Spring Boot starter
+
+- [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
+  A `CheckpointStorage` bean of your own that answers `false` from `evaluatesWriteConditionsFor` fails startup when the
+  starter would store a live start as a subscription's first checkpoint, or fails the creation of a handler bean built
+  after startup. Compiles unchanged.
 
 - [A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself). A context whose
   `EventStoreQueries`, event store or `DcbEventStore` bean is a decorator, a mock or your own implementation fails at
@@ -224,11 +290,35 @@ other sections compile fine and behave differently, so read them first.
   static method that hides an annotated static factory method of a superclass fails at startup the same way. A
   handler declared with a type variable gets only the type the bean's class gives it, which can narrow a handler that
   ran in 0.34.0, one of the bridge kind or one on a JDK proxy that can't be unwrapped. Compiles unchanged.
+- [A write through the application service is refused while the application starts](#a-write-through-the-application-service-is-refused-while-the-application-starts).
+  A blocking write from a `@PostConstruct` method, an `InitializingBean` or a `@Bean` method fails startup with
+  `WriteRefusedException`, and so does a reactive one whose error reaches that method, for example because it blocks
+  on the `Mono`. A reactive write subscribed without an error consumer stores nothing, and the application starts. A
+  context whose event store bean is a Mockito mock fails startup with an `IllegalStateException`. Under `MANUAL` the
+  synchronous handlers run from the start on writes through the application service. A handler that starts live,
+  `@Projection` and `@Saga` by default among them, can get what is written directly to the event store while the
+  application starts, except in the cases that section lists. A write while the
+  synchronous subscription model is stopped, or one a paused synchronous subscription matches, is refused, also
+  without a starter. Compiles unchanged.
+- [A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+  **Breaks the build** if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself,
+  and an implementation compiled against 0.34.0 throws `AbstractMethodError`.
+- [A synchronous handler the startup scan can't see fails the creation of its bean](#a-synchronous-handler-the-startup-scan-cant-see-fails-the-creation-of-its-bean).
+  A `@Lazy` bean whose declared type hides its synchronous handler, created after the startup scan, throws an
+  `IllegalStateException`. Compiles unchanged.
 - [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
   `SubscriptionAnnotations`, `PushCatchupStatusImpl`, `AsynchronousSubscribables`, `AppliedAppendRecordingRegistry`
   and `PolledCatchupSignals` move to `org.occurrent.springboot.common.internal`, and `UpgradeToOccurrent_0_35` rewrites
   the references. Code that calls `invokeDescriptorFactory`, `runsImplementationOf` or `resolveTypeFilter` directly
   sees the changes the starters make to find inherited handlers. **Breaks the build** if you refer to one of the five.
+- [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
+  `occurrent.saga.quarantine-after` defaults to 5 minutes, so a `@Saga` quarantines unless you set
+  `occurrent.saga.quarantine-enabled=false`. A blank value fails startup and names `quarantine-enabled=false`. The
+  `sagaSubscription-<id>` bean releases an instance. Compiles unchanged.
+
+- [The MongoDB starter adds two health contributors for competing consumers](#the-mongodb-starter-adds-two-health-contributors-for-competing-consumers).
+  With Spring Boot Actuator, `/actuator/health` is down when a competing consumer subscription was given up or keeps
+  failing, or when the lease refresh keeps failing. Compiles unchanged.
 
 ### Brokers
 
@@ -277,6 +367,13 @@ the dependency is 0.35.0 no type has that name, so they change nothing.
   [Five types the Spring Boot starters share move to an internal package](#five-types-the-spring-boot-starters-share-move-to-an-internal-package).
 - No recipe rewrites a `DcbConsistencyToken` or the streams that create one. See
   [A consistency token holds the criteria it was read with](#a-consistency-token-holds-the-criteria-it-was-read-with).
+- No recipe rewrites a record pattern over `SagaFailure` or `SagaEnvelope`, and none changes
+  how quarantine is configured. See
+  [A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default).
+- No recipe ports a `SagaStateStore` of your own, or adds the components the removed `SagaEnvelope` and `SagaFailure`
+  constructors filled in. See [A `SagaStateStore` stores an encoded saga](#a-sagastatestore-stores-an-encoded-saga)
+  and
+  [The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed).
 
 ## A global position is no longer a saga redelivery key
 
@@ -302,7 +399,8 @@ read. 0.34.0 treated an unreadable value as absent.
 | Has a `streamid` or `streamversion` that cannot be read | Refused with `SagaRedeliveryDetectionException` | Refused with `SagaRedeliveryDetectionException` |
 
 An event the saga applies without a key can no longer be quarantined, since quarantine identifies the event it stopped
-on by its key.
+on by its key. Releasing a quarantined instance can apply such an event again, when the instance applied the same event
+before it was quarantined.
 
 ### What to do
 
@@ -321,8 +419,11 @@ A saga instance saved by 0.31.0 to 0.34.0 may hold a `positionWatermark`. 0.35.0
 is gone from that instance's document after its next save. A document without the field reads as `null`, and
 `SagaEnvelope.positionWatermark()` is deprecated.
 
-A 0.34.0 node reads a document that 0.35.0 saved, and the other way round. A rolling upgrade works, and so does going
-back to 0.34.0.
+0.35.0 reads a document that 0.34.0 saved. 0.34.0 can't read an instance that 0.35.0 stored as `ACTIVE_MARKED`, and
+going back to 0.34.0 needs one step for those, as
+[the stored saga state for late versions](#stored-saga-state-1) describes. Stop every 0.34.0 node that runs
+sagas before any 0.35.0 node starts, and stop every 0.35.0 node before 0.34.0 starts again, as
+[Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) says.
 
 A failure record whose input is `position:N` was written for a position-only event. On an `ACTIVE` instance 0.35.0
 treats it as no record, so the next failure starts a fresh budget and the next successful delivery clears it.
@@ -376,14 +477,16 @@ durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34
 position or the quiet save. That section stays as it was released, and over a durable model it no longer holds.
 
 A blocking catch-up model with checkpoint storage that resumes a subscription at a checkpoint or at now also replaces a
-stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate. So a
-`resumeSubscription(subscriptionId)` after a later pause doesn't replay from that position, as it could in 0.34.0. At
-now it stores the present position, and throws `IllegalStateException` when it can read none. At a time after the
-beginning without a live start, a stream catch-up stores that time with the present position as its live start, in the
-`position:time;v:2;` form that
+stored position a catch-up replays from, such as the one its replay stored, whatever its live delegate, when a restart
+can start from what it stores instead. So a `resumeSubscription(subscriptionId)` after a later pause doesn't replay
+from that position, as it could in 0.34.0. At now it stores the present position, and throws `IllegalStateException`
+when it can read none. At a time after the beginning without a live start, a stream catch-up stores that time with the
+present position as its live start, in the `position:time;v:2;` form that
 [A catch-up keeps its live start in the checkpoints it stores](#a-catch-up-keeps-its-live-start-in-the-checkpoints-it-stores)
 describes, and 0.34 refuses that form. While a replay that `subscribe(..)` started is still running for a subscription
 paused during that replay, it stores nothing and reads no present position.
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) lists
+the positions such a resume stores and the ones it doesn't.
 
 There is nothing to change in your code unless it depends on the checkpoint staying where it was after a resume at a
 position. A `DurableSubscriptionModel` over a repositionable subscription model you wrote yourself stores nothing on a
@@ -393,6 +496,76 @@ time a stream catch-up stores in the `;v:2;` form, nothing stored changes format
 this. See
 [ADR 151](../architecture/decisions/0151-a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper.md) and
 [#1253](https://github.com/johanhaleby/occurrent/issues/1253).
+
+## A first position a checkpoint storage can only write unconditionally is refused
+
+A durable subscription that starts at the model default, with no checkpoint stored, records its first position before
+anything is delivered. `DurableSubscriptionModel` and `ReactorDurableSubscriptionModel` write it with
+`CheckpointWriteCondition.ifAbsent()`, so of two nodes recording one at the same moment, only one write is stored. Both
+models record one for a `StartAt.dynamic(..)` that answers `StartAt.subscriptionModelDefault()` too, and the Spring
+Boot starters store a live start as the first checkpoint the same way.
+
+### Who is affected
+
+An application with a `CheckpointStorage` of its own that answers `false` from `evaluatesWriteConditionsFor(String)`,
+which every implementation does unless it overrides `evaluatesWriteConditions()` or `evaluatesWriteConditionsFor`.
+The `UpgradeToOccurrent_0_33` recipe from the 0.33.0 upgrade, through its `AddCheckpointStorageConditionalWriteStubs`
+step, adds stubs that keep `evaluatesWriteConditions()` at `false`, so a storage it migrated is affected until it implements the conditions.
+
+Every `CheckpointStorage` Occurrent ships answers `true` apart from `SpringRedisCheckpointStorage` for two kinds of
+id. In Cluster-safe mode it answers `false` for an id Redis Cluster can't put in one slot with its version key, such
+as `{}orders`, and its javadoc says no id an application would choose is built like that by accident. It also answers
+`false` for an id in the reserved namespace of its version key, but its `read(..)`, `exists(..)` and `save(..)` refuse
+such an id with `IllegalArgumentException`. Occurrent reads the stored checkpoint before it decides on a first
+position, so a subscription with such an id fails on that read, as it did in 0.34.0.
+
+### What changes
+
+In 0.34.0 such a storage got the first position written unconditionally, and the model logged a warning. Two nodes
+recording a first position at the same moment could then overwrite each other's and lose the events between the two
+positions for good.
+
+From 0.35.0 the subscription is refused with `IllegalStateException` before anything is written for it:
+
+* `DurableSubscriptionModel` throws from `subscribe(..)`, where it refuses a subscription that has no start position to
+  record. When a cancel on another node deletes the stored checkpoint before the subscription first starts, the
+  subscription starts from the checkpoint read during `subscribe(..)` and records no first position, so it can deliver
+  events again but skips none.
+* `ReactorDurableSubscriptionModel` signals it on `Subscription.waitUntilStarted()`.
+* Both Spring Boot starters fail startup when they would store a live start as the subscription's first checkpoint.
+  For a handler on a bean built after startup, the creation of that bean fails instead.
+
+Under `CompetingConsumerSubscriptionModel`, the exception reaches `subscribe(..)` on a node that holds the lease when
+the subscription is made, and on every node whose model is stopped then. Every other node logs it as a warning when it
+gets the lease and gives the lease back, and does that again each time it gets the lease.
+
+A subscription that records no first position isn't refused, whatever the storage answers. That covers a checkpoint
+already stored, a `StartAt` of your own that doesn't resolve to the model default, `StartAt.now()` and a dynamic one
+answering it included, and a starter subscription at `NOW` with `resumeBehavior = SAME_AS_START_AT`.
+
+### What to do
+
+Make the storage evaluate `CheckpointWriteCondition.ifAbsent()` and answer `true` from `evaluatesWriteConditions()`,
+or from `evaluatesWriteConditionsFor(String)` for the ids it evaluates conditions for. Or use one of the storages
+Occurrent ships.
+
+To keep the 0.34.0 behaviour and accept the loss, configure
+
+```java
+new DurableSubscriptionModelConfig(EveryN.everyEvent()).startWhenFirstPositionCanBeOverwritten(true)
+```
+
+or the same method on `ReactorDurableSubscriptionModelConfig`. With a Spring Boot starter, set
+
+```properties
+occurrent.subscription.start-when-first-position-can-be-overwritten=true
+```
+
+The starter reads only the property before it stores a first checkpoint, so the config method alone doesn't stop that
+refusal. The MongoDB starters pass the property to the durable subscription model they build, so the property is all
+that model needs. An application that defines its own `SubscriptionModel` bean gets no durable model from the starter,
+and the one it builds reads only its own config, so it needs the config method as well as the property. There is no OpenRewrite recipe for this. See
+[ADR 184](../architecture/decisions/0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
 
 ## A capability that acts on a subscription is not found past a wrapper
 
@@ -405,8 +578,7 @@ subscription next to the node that did.
 
 From 0.35.0 a wrapper is unwrapped only for a capability that a wrapper's own state doesn't depend on:
 
-* `IntrospectableSubscriptions`, `ReplayAwareSubscriptions` and `HistoryRetainingSubscriptions`, which answer questions
-  about subscriptions.
+* `IntrospectableSubscriptions` and `ReplayAwareSubscriptions`, which answer questions about subscriptions.
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions.
 * `Pushable`, which takes events in at the bottom of the stack.
 * `HistoryLossReportingSubscriptions`, which a catch-up model reaches under a durable model.
@@ -598,7 +770,9 @@ report is [#1305](https://github.com/johanhaleby/occurrent/issues/1305).
 ### Who is affected
 
 A saga fed through a broker or a partitioner that does not keep a stream's events in version order. A saga fed straight
-from an Occurrent event store, in order, behaves as before.
+from an Occurrent event store, in order, applies events as before. Every saga on `SpringMongoSagaStateStore` is
+affected by how 0.35.0 stores its instances, whatever feeds it. Stop every 0.34.0 node that runs sagas before any
+0.35.0 node starts, and run an `updateMany` before you go back to 0.34.0, as [the stored saga state for late versions](#stored-saga-state-1) describes.
 
 ### What changes
 
@@ -648,18 +822,104 @@ A saga instance document gains a `streamMarks` field. It holds, per stream, a `f
 each type has its highest applied `mark`, the `applied` versions below it and a `horizon`, the highest version it has
 stopped remembering, and a `pending` list of event types with the `versions` of each that failed. A document without
 `pending` reads as nothing pending. A `legacyFailed` list of stream versions, kept per stream beside `floor`, holds the
-failures described above, and a document without it reads as an empty list. `pending` is a list rather than a map because
+failures described above, and a document without it reads as an empty list. It also holds the version of a 0.35.0
+failure record that the store couldn't take in full, once another input's failure replaces it while `pending`
+doesn't list its version. The saga writes such a record without its message and lists its version as pending only
+when it is at or below `floor`, or when a later failure of the same event could write the listing. `pending` is a list rather than a map because
 stream ids and event types can contain dots. An instance holds at most 256 `applied` versions per stream and event
 type, so a document grows by some kilobytes for an instance that listens to a few streams, and every save rewrites them.
+A release of a quarantined instance also keeps every version it applies, and the write that ends the release, which
+makes the instance `ACTIVE`, completes it or quarantines it again, trims them back to the reorder window.
 
 A document saved by 0.31.0 to 0.34.0, or by an earlier 0.35.0 build, has no `streamMarks`. It reads as a floor equal to
 each stream's watermark, so everything the instance has already seen stays skipped, and a version above the watermark
 is applied as before. Late versions are recognised from the instance's next save on.
 
-`streamWatermarks` is still written with the highest version of each stream. A 0.34.0 node reads a document that
-0.35.0 saved, ignores `streamMarks`, and replaces the document without it on its next save. The next 0.35.0 node then
-reads it as an old document. A rolling upgrade works, and so does going back to 0.34.0, which loses late events on that
-stretch as it did before.
+`streamWatermarks` is still written with the highest version of each stream. 0.34.0 knows nothing of `streamMarks`,
+and a 0.34.0 save that applies an event replaces the whole document and drops them. The next 0.35.0 node would then skip a
+version that failed and waits to be applied again, or a late version, as applied already. To stop that, 0.35.0 stores
+an `ACTIVE` instance that holds `streamMarks` with the status `ACTIVE_MARKED` (`SpringMongoSagaStateStore.ACTIVE_MARKED`)
+and reads it back as `SagaStatus.ACTIVE`. Every event with a stream version adds marks, so that is every instance a
+0.35.0 node has handled such an event for, and the instance keeps the status while it holds marks. 0.34.0 decodes the
+status with `SagaStatus.valueOf` and throws on `ACTIVE_MARKED`, so a 0.34.0 node fails on such an instance instead of
+saving it. The subscription, or the source's delivery failure policy, decides what then happens to the event.
+
+`ACTIVE_MARKED` is there so that a deploy that runs a 0.34.0 node next to a 0.35.0 node fails loudly instead of
+dropping the marks, and it doesn't make that deploy safe. A 0.34.0 node can park or lose the event, as the rest of
+this section describes, and nothing a 0.35.0 node does stops that. So stop every 0.34.0 node that runs sagas before any
+0.35.0 node starts, which takes the service that hosts the sagas down between the two, as
+[Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) says.
+
+If a 0.34.0 node runs anyway, a saga fed from a Kafka or RabbitMQ source gets that failure in its handler on that node, and the source's
+`DeliveryFailurePolicy` decides what happens to the message. With `REDELIVER`, the default, the source delivers the
+message again once per poll for as long as a 0.34.0 node consumes it, and the messages behind it on that partition or
+queue wait. With `PARK`, the source publishes the message to its parking topic or exchange and acknowledges it, so the
+instance never gets it. Occurrent has no tool that moves a parked message back. Once every saga node runs 0.35.0,
+publish each parked message again to the topic or exchange the saga consumes, with the headers and body it was parked
+with. A message with a stream id and version that the instance applied already is skipped, as on any
+redelivery. A 0.34.0 node recorded nothing for a message it parked, so 0.35.0 handles the republished message like any
+late version. When its version is `reorderWindow` (256 by default) or more behind what the instance has applied of
+that stream and event type, the saga skips it and logs a warning once per stream. So republish soon after the
+deploy. An event that a 0.35.0 node parked after it failed in the saga is different, since that failure recorded it
+as pending, and the saga applies it whenever it arrives again.
+
+What a 0.34.0 node that runs next to a 0.35.0 node does with an event for an `ACTIVE_MARKED` instance depends on what
+feeds the saga:
+
+- An Occurrent subscription, or a Kafka or RabbitMQ source with `REDELIVER`, delivers the event again and again, so the
+  saga's subscription, or the partition or queue, stalls on it, the same way it stalls on a quarantined instance, as
+  [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
+  With a competing-consumer strategy, or a partition or queue that a 0.35.0 consumer takes over, the stall ends once a
+  0.35.0 node gets the event. Without competing consumers every node gets every event, so the 0.34.0 node's own
+  subscription stalls until that node stops. Stopping every 0.34.0 node ends it either way.
+- A Kafka or RabbitMQ source with `PARK` parks the event and acknowledges it, as the previous paragraph says. It parks
+  every event it gets for such an instance, which is every instance a 0.35.0 node has handled an event with a stream
+  version for. In a Kafka consumer group each restart rebalances the partitions, so a partition a 0.35.0 node consumed
+  can move to a 0.34.0 consumer, which then parks every event for the instances that 0.35.0 node handled. Publish the
+  parked messages again once every saga node runs 0.35.0. A message whose version is `reorderWindow` or more behind
+  what the instance has applied is skipped with a warning.
+- A `PushSubscriptionModel` that your own code pushes events into throws the exception back to that code. When your
+  code doesn't push the event again, the instance never gets it. Push each event that failed again once every saga
+  node runs 0.35.0. One whose version is `reorderWindow` or more behind what the instance has applied is skipped with a
+  warning.
+
+A 0.34.0 node's timer poller asks for `ACTIVE` instances only, so the timers of an `ACTIVE_MARKED` instance wait while a 0.34.0 node
+holds the timer lease.
+
+`findByStatus(ACTIVE, ..)` matches both strings. A query you wrote by hand for `status: "ACTIVE"`, and an alert built
+on one, doesn't find an `ACTIVE_MARKED` instance, so match both strings:
+
+```javascript
+db.getCollection("saga-order-fulfilment")
+  .find({ status: { $in: ["ACTIVE", "ACTIVE_MARKED"] } }, { state: 0 })
+```
+
+With quarantine on, which is the default, an instance may be stored as `QUARANTINED_RECORDING` too, so go back to
+0.34.0 with the steps in
+[Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it), which include
+the ones here. To go back to 0.34.0, stop every 0.35.0 node. Then list the `ACTIVE_MARKED` instances that hold a version
+that failed and waits to be applied again, in `pending` or `legacyFailed`. 0.34.0 skips every version at or below the
+stream's watermark, so it never applies such a version once a later version of its stream was applied. The query lists
+every instance that holds such a version, so it lists more instances than the ones that lose one:
+
+```javascript
+db.getCollection("saga-order-fulfilment")
+  .find({ status: "ACTIVE_MARKED", $or: [
+      { "streamMarks.pending.versions.0": { $exists: true } },
+      { "streamMarks.legacyFailed.0": { $exists: true } } ] }, { state: 0 })
+```
+
+Give every `ACTIVE_MARKED` instance back its plain status before a 0.34.0 node starts:
+
+```javascript
+db.getCollection("saga-order-fulfilment")
+  .updateMany({ status: "ACTIVE_MARKED" }, { $set: { status: "ACTIVE" } })
+```
+
+0.34.0 ignores the marks, and a 0.34.0 save that applies an event replaces the whole document and drops them. A version
+that failed and waits to be applied again is then skipped when a later version of its stream was applied, and a late
+version below the stream's watermark is skipped too, as on 0.34.0. Upgrading again reads an instance whose marks were
+dropped as an old document.
 
 ### A record pattern over `SagaEnvelope` or `SagaRunnerConfig` stops compiling
 
@@ -674,15 +934,15 @@ case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detectio
 case SagaRunnerConfig(var pollInterval, var batchLimit, var maxCas, var detection, var quarantineAfter, var reorderWindow) -> ...
 ```
 
-The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding, and to an
-`instanceof` pattern as much as a `switch` case. `SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` are new types
-and only matter to a `SagaStateStore` implemented outside this repository, which has to persist `streamMarks`. A store
-that ignores it keeps working, and every instance then reads as it did before 0.35.0, so late versions are not
-recognised.
+The same applies to `SagaEnvelope`, which needs a `var streamMarks` after its `failure` binding and a
+`var quarantineSkipCount` after that, and to an `instanceof` pattern as much as a `switch` case. `SagaCodec` stores
+`SagaEnvelope.StreamMarks` and `SagaEnvelope.TypeMark` with the rest of the instance, so a `SagaStateStore` needs
+nothing for them.
 
-Constructor calls are not affected. The 13-argument `SagaEnvelope` constructor and the five-argument
-`SagaRunnerConfig` constructor stay, and fill in no marks and a window of 256. `SagaExecutionSupport.EventMeta` gains an
-`eventType` component too, and it lives in an `internal` package.
+The five-argument `SagaRunnerConfig` constructor stays and fills in a window of 256. The 13-argument `SagaEnvelope`
+constructor is removed, as
+[The shorter `SagaEnvelope` and `SagaFailure` constructors are removed](#the-shorter-sagaenvelope-and-sagafailure-constructors-are-removed)
+describes. `SagaExecutionSupport.EventMeta` gains an `eventType` component too, and it lives in an `internal` package.
 
 ### Why there is no recipe
 
@@ -726,11 +986,534 @@ Each pending version records when it first failed, in a `pendingSince` list besi
 document without it falls back to the failure record's `firstFailedAt` for the event the record names, and any other
 event starts its clock on its next failure.
 
-A `SagaStateStore` implemented outside this repository has to save `StreamMarks.pendingSince()` and read it back in
-`compareAndSave` and `find`, and in `compareAndSaveWithoutState` and `findWithoutState` too when it overrides them. A store that saves only the
-other marks, or rebuilds them with the four-argument `StreamMarks` constructor, loses the instants. An instance whose
-failures alternate between two events, such as versions 7, 8, 7, 8 of one stream, then starts each event's clock again
-on every failure and never reaches its budget.
+## A quarantined saga instance can be released, and quarantine is on by default
+
+In 0.34.0 nothing brought a quarantined saga instance back, so `SagaStateStore.delete(sagaId)` was the only way out, and
+that is why quarantine was off by default. 0.35.0 adds `SagaSubscription.release(sagaId)`, which replays what the
+instance skipped, and turns quarantine on by default again. The design is in
+[ADR 178](../architecture/decisions/0178-a-quarantined-saga-instance-records-what-it-skips-and-is-released-by-replaying-it.md),
+and the issue is [#1259](https://github.com/johanhaleby/occurrent/issues/1259).
+
+### Who is affected
+
+- A saga that never configured quarantine, built from `SagaRunnerConfig.defaults()`, run with a `SagaRunner.run`
+  overload that takes no `SagaRunnerConfig`, or a `@Saga` with `occurrent.saga.quarantine-after` left out. It now
+  quarantines an instance whose event keeps failing.
+- A Spring Boot application with at least one `@Saga` that set `occurrent.saga.quarantine-after` blank to keep
+  quarantine off. It fails at startup unless it sets `occurrent.saga.quarantine-enabled=false`.
+- A saga fed by a push feed, such as a `PushSubscriptionModel` or a Kafka or RabbitMQ source, with or without a
+  `CatchupThenPushSubscriptionModel` in front of it. 0.34.0 never quarantined it, and now it quarantines like any other
+  saga.
+- A saga on a standalone MongoDB server, with no replica set or sharded cluster, when quarantine is on. It refuses to
+  start, so set `occurrent.saga.quarantine-enabled=false` or call `SagaRunnerConfig.disableQuarantine()`.
+- An application that erases or redacts events with the `deleteEventStream`, `deleteEvent`, `delete` or `updateEvent`
+  methods of `EventStoreOperations`, such as for a GDPR request. A quarantined instance now keeps a copy of every event
+  it skips, in `<collection>_skipped_inputs` and `<collection>_skipped_input_chunks`, and erasing the event from the
+  event store doesn't delete that copy. Release or delete the quarantined instances that hold an event before you
+  erase it, as [the quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes.
+- A `SagaStateStore` of your own.
+- An instance that 0.34.0 quarantined.
+- A record pattern over `SagaFailure` or `SagaEnvelope`.
+- A `SpringMongoSagaStateStore` on a collection whose name ends in `_skipped_inputs` or `_skipped_input_chunks`, which
+  includes a `@Saga` whose id makes the default `saga-<id>` name end in either. The constructor throws an
+  `IllegalArgumentException`, with quarantine on or off.
+- A `SpringMongoSagaStateStore` whose `MongoOperations` reads from secondaries. The store now reads saga instances and
+  skipped inputs from the primary.
+- Every `SpringMongoSagaStateStore`, which creates a `<collection>_skipped_inputs` collection with two indexes on it,
+  and a `<collection>_skipped_input_chunks` collection with one, when it is constructed, with quarantine on or off.
+- An upgrade from 0.34.0, which stops every 0.34.0 node that runs sagas before any 0.35.0 node starts, and a rollback
+  to 0.34.0, as [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
+
+### What changes
+
+`SagaRunnerConfig.defaults()` quarantines an instance once one event has kept failing for 5 minutes. The Spring Boot
+starter does the same when `occurrent.saga.quarantine-after` is left out, and
+`occurrent.saga.quarantine-enabled=false` turns it off. In 0.34.0 both left quarantine off. The 3- and 4-argument
+`SagaRunnerConfig` constructors still never quarantine. With quarantine on, a 0.34.0 node that runs next to a 0.35.0
+node can stall a saga's subscription or lose an event, so every 0.34.0 node that runs sagas stops before any 0.35.0
+node starts, as [Upgrading from 0.34.0 and rolling back to it](#upgrading-from-0340-and-rolling-back-to-it) describes.
+Turning quarantine off doesn't make it safe to run a 0.34.0 node next to a 0.35.0 node, since a 0.34.0 node also fails
+on every `ACTIVE_MARKED` instance, as [the stored saga state for late versions](#stored-saga-state-1) describes.
+
+A blank `occurrent.saga.quarantine-after` kept quarantine off in 0.34.0. In 0.35.0 the application fails at startup
+on one, and the message says to set `occurrent.saga.quarantine-enabled=false` to keep quarantine off.
+
+Quarantine applies on every subscription model. 0.34.0 turned it off with a `WARN` on a model that couldn't guarantee
+it holds every event it delivers, which was every push feed. In 0.35.0 a push saga
+quarantines an instance like any other saga, with or without a catch-up in front of the feed.
+
+The write that quarantines an instance records the event the instance stopped on. While it is quarantined, the
+instance records the events of the inputs it skips, in the order they arrive. A skip used to write nothing, and now
+writes the instance and the record together, in one transaction on MongoDB. The records are kept outside the
+instance's document, so a quarantine can record any number of inputs.
+
+`SagaSubscription.release(sagaId)` applies the event the instance stopped on from its record, and then does the same
+for each recorded input, in order. It reads nothing from the event store. The instance stays `QUARANTINED` while that runs, and becomes
+`ACTIVE` once no recorded input is left. It returns a `SagaSubscription.ReleaseResult`, and
+[the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#5-you-release-the-instance) says what each one
+means and what to do next. In Spring Boot the saga's `SagaSubscription` is the `sagaSubscription-<id>` bean.
+
+The timer poller goes on with a release that failed on an input or was interrupted. One poll replays at most
+`timerBatchLimit` records, 100 by default, shared evenly among the releasing instances it lists, at least one each, and
+the next poll goes on where the last one stopped. A `release` call has no such bound. The poller goes on with an
+instance only once its `updatedAt` is a whole `timerPollInterval` old. A release writes the instance for every input it
+applies and the first time an input fails, and an input the instance skips doesn't change `updatedAt`, so the poller
+skips a release that is still running on any node. The poller and a release, or two polls, can still replay the same
+input and dispatch its commands twice, in five cases, which
+[the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#5-you-release-the-instance) lists:
+
+- A release takes longer than `timerPollInterval` over one input.
+- A poller's clock is `timerPollInterval` or more ahead of the clock of the node that wrote.
+- A `release` call made while the poller replays the instance goes on beside the poller.
+- A release spends longer than `timerPollInterval` on inputs the stream marks show as applied. Its writes for them
+  leave `updatedAt` as it is, so the poller goes on beside it, though neither dispatches anything until the first input
+  that isn't applied.
+- Two polls read the instance at the same time and both go on with it. Without a competing-consumer strategy every
+  node polls, and with one, two nodes can poll at once while the timer lease moves from one to the other.
+
+A timer that came due while the instance was quarantined fires after every recorded input has been replayed, because a
+saga's timers run on processing time. For a saga that uses a timer as a deadline, a replayed input from after the
+deadline that cancels or re-arms the timer means the timeout never fires.
+
+The records are the only copy of the skipped events that the saga keeps. Deleting a quarantined instance with
+`SagaStateStore.delete(sagaId)` deletes its records with it, so release the instance first when the events it skipped
+matter. The MongoDB store logs a `WARN` with the number of records it deletes. Inside a MongoDB transaction of yours,
+it logs it before you commit, so a rollback can leave a `WARN` for a delete that was never kept. When the store throws
+on a commit of its own whose result MongoDB can't tell, it logs none. A TTL index or a retention job that
+removes quarantined instances from the collection deletes none of their records. The records stay with no instance,
+where no release can replay them and nothing deletes them, so keep quarantined instances out of such a job. Erasing an event from the event store doesn't erase its copy in a
+record, so release or delete the quarantined instances before you erase an event.
+
+`release` throws an `IllegalStateException` for an instance that 0.34.0 quarantined, since it recorded none of the
+inputs it skipped, and for an instance whose state no longer decodes, with a message that names the decoding failure.
+An instance whose state stops decoding while it is releasing stays releasing, and each poll that fails to read it
+counts against the budget of the record the release is on, the way an input that fails again does. Once the budget
+runs out, it's quarantined again on that record. A held record whose event no longer decodes counts against its own
+budget the same way. The runbook covers the instances quarantined again on such a record.
+
+When the replay that saved a state that no longer decodes applied the last record, no record is left to count the
+failure against. The release then ends the quarantine and returns `RELEASED`. It writes no state, so the stored state
+stays as the replay saved it. The next input to the instance fails on the decoding the way it does for any `ACTIVE` instance.
+
+### Stored saga state for a release
+
+`SagaCodec` stores a release in three fields, `failureReleasedAt`, `failureQuarantineId` and `quarantineSkipCount`,
+which `SpringMongoSagaStateStore` writes as top-level fields of the instance's document. The skipped inputs are documents in a collection
+of their own, named after the saga collection with `_skipped_inputs` appended, one per skipped input and one for the
+input the instance stopped on, each with `sagaId`, `quarantineId`, `seq`, `key` and `event`, and `extensions`,
+`dataDocument`, `data` and `dataClass` when the event has them. A record too large for one document holds `chunks` and
+`size` in place of the event, and the event is in a collection named after the saga collection with
+`_skipped_input_chunks` appended. A document 0.34.0 wrote has none of these fields, and reads as an instance that is
+not releasing, with no quarantine id. The constructor now throws an `IllegalArgumentException` for a saga collection
+whose name ends in `_skipped_inputs` or `_skipped_input_chunks`, because a store on the name without that suffix would
+keep its skipped inputs or their chunks in the same collection. Rename such a collection before you upgrade.
+
+`event` holds the event's attributes as a CloudEvents JSON string, and `extensions` its extensions. A `URI`, an
+`OffsetDateTime`, a `Byte`, a `Short`, a `Float`, a `BigInteger` and a `BigDecimal` extension is stored as a string
+with a tag that names the class. A `String` with an unpaired surrogate is stored as its UTF-16 code units with the tag
+`utf16`. A subclass of `BigInteger` or `BigDecimal` is stored with the `bigInteger` or `bigDecimal` tag, and a `Number` of any other
+class than those and `Integer`, `Long`, `Double` and `Decimal128`, such as an `AtomicLong`, with the tag `number` and
+the name of its class. Any other extension is stored as it is. Data delivered
+as a map, which is how the MongoDB event store delivers a JSON object, is held in `dataDocument`, with its bytes in
+`data` unless they are the document's own JSON. Other data is held in `data` as its bytes in BSON binary, and a release
+hands it to the converter as a `BytesCloudEventData`.
+
+A release hands back every extension as it was delivered, except a subclass of `BigInteger` or `BigDecimal` and one
+stored with the tag `number`. A subclass comes back as a plain `BigInteger` or `BigDecimal` with its value, and a `BigDecimal` keeps its scale. One
+stored with the tag `number` comes back with its value as a `Long` when the value is an integer that fits in one,
+otherwise as a `BigDecimal` with its value and scale, and as a `Double` when the number's `toString` isn't a decimal,
+such as for `NaN` or an infinity. The value is the decimal the number's `toString` writes, and a `Double` is the
+number's `doubleValue`. Once the record is written, the store logs a `WARN` that names the instance, the input, the
+extension, the delivered class and the class a release hands back. It logs nothing for an event it refuses, a write
+that loses its compare-and-set, or an event whose key it has recorded already. Inside a MongoDB transaction of yours,
+it logs once the record is written in that transaction, before you commit it. When you then roll back, the `WARN` is for a
+record that was never kept, and the store logs one again only when a redelivery records the event. Outside such a
+transaction, it logs once its own transaction commits. When MongoDB can't tell whether that commit took effect, and the
+commit still fails after the retries the store's `RetryStrategy` allows, the store throws and logs no `WARN`. When that
+commit took effect, a redelivery finds the key recorded and logs none either. The MongoDB event store never delivers such an extension,
+so it comes from an in-memory event store or one of your own. `InMemorySagaStateStore` hands such an extension back by
+the same rule and logs the same `WARN`, and it hands a `Decimal128` extension back as the same `Decimal128`.
+
+Before it writes anything, `compareAndSaveSkipped` checks the record with a round trip. It encodes the record to BSON
+the way MongoDB stores it, decodes it, and reads the event back the way a release does. It writes the copy of the
+record it checked, decoded from the record's BSON, so a change your application makes to the delivered event after the
+check doesn't reach the record. It reads each extension once and checks a copy of a `byte[]`, so an extension your
+application changes during the check is recorded as it was first read. When the data read back isn't
+the data that was delivered, or doesn't encode at all, the record holds the data's bytes in `data` instead and the
+name of the data's class in `dataClass`, and once the record is written the store logs a `WARN` that names the
+instance, the input and the difference. It logs that `WARN` at the same point as the `WARN` for a number, inside a
+MongoDB transaction of yours and outside one, and logs neither when it throws on a commit of its own whose result MongoDB can't
+tell. A `BigDecimal` in a map comes back as a `Decimal128`, a map at any depth with a key that isn't a `String`
+doesn't encode, and the `JsonCloudEventData` the CloudEvents JSON format reads a JSON object into comes back as a
+`BytesCloudEventData`, so all three are held this way. A release hands the converter a `JsonCloudEventData` read from
+those bytes when `dataClass` names one, and a `BytesCloudEventData` for data of any other class, so a converter that
+reads a map or an object from the data gets its bytes instead. The bytes are read the way a `JsonFormat` with its
+default options reads them, so a JSON format you register with `withForceJsonDataToBase64()` doesn't turn the
+`JsonCloudEventData` into a `BytesCloudEventData`. When a `double` can't hold one of the decimal numbers in the data,
+such as `1234567890.123456789`, every decimal number in it is read as a `BigDecimal`, so each number comes back with
+its value, though `1.10` may come back as `1.1`.
+
+A record that doesn't fit in the 16 MiB MongoDB stores in one document is split into chunks of 8 MiB in
+`<sagaCollection>_skipped_input_chunks`, each with `sagaId`, `quarantineId`, `key`, `chunk` and `bytes`. The record
+then holds `chunks`, the number of chunks, and `size`, their total size in bytes, in place of the event, and a release
+joins the chunks again.
+
+`compareAndSaveSkipped` throws an `IllegalStateException`, so the instance and its records stay as they were, only when
+an attribute or an extension doesn't come back as it was delivered, such as a `UUID` that a `CloudEventExtension` sets
+as an extension, when the record doesn't encode even with the data held as its bytes, when JSON data reads back from its bytes as
+another value, such as a binary value that comes back as its base64 text, or when the saga id, the quarantine id and the
+key take about 8 MiB between them and leave no room for a chunk. The message names the instance, the input and, when
+it's known, where in the event the difference is. A subscription that retries such an event stops on it.
+
+An instance that 0.35.0 quarantined is stored with the status `QUARANTINED_RECORDING` instead of `QUARANTINED`. Both
+read back as `SagaStatus.QUARANTINED`, and the store's own queries match both. A query you wrote by hand for
+`status: "QUARANTINED"`, and an alert built on one, doesn't find such an instance, so match both strings:
+
+```javascript
+db.getCollection("saga-order-fulfilment")
+  .find({ status: { $in: ["QUARANTINED", "QUARANTINED_RECORDING"] } }, { state: 0 })
+```
+
+Quarantine needs a store that implements the new interface `SagaStateStoreSkippedInputs` next to `SagaStateStore`.
+The in-memory store and `SpringMongoSagaStateStore` implement it. `SagaRunner.run` throws an `IllegalStateException`
+when quarantine is on and the saga's store doesn't implement it, whatever subscription model feeds the saga. The
+message names the interface and `SagaRunnerConfig.disableQuarantine()`. On the annotation path, a `@Saga` with
+quarantine on whose `SagaStateStore` bean doesn't implement it fails at startup with a message that names the
+interface and `occurrent.saga.quarantine-enabled=false`.
+
+A store that implements it keeps the skipped inputs, each with its event, and returns the event from
+`findSkippedInputs` and `findWithFirstSkippedInput`. A release converts the event again, so a store returns the event as it was delivered, with the
+same attributes, the same data class, the same values of the same Java classes at any depth and the same extension
+classes. A map or a list inside the data may come back as another implementation of `Map` or `List`. A store that
+can't hold the data that way may hold its bytes instead, and then returns a `JsonCloudEventData` read from those bytes
+with the same JSON value for data that was one, and a `BytesCloudEventData` with the same bytes for data of any other
+class. A number in the JSON keeps its value but may come back as another node class, such as `1.10` as `1.1`. A store whose
+writes have a size limit splits a record that goes over it. A store throws an `IllegalStateException` from
+`compareAndSaveSkipped` before it writes anything for an event it can't hold even so.
+`SpringMongoSagaStateStore` finds out what it can hold with a round trip, as
+[Stored saga state for a release](#stored-saga-state-for-a-release) describes. Apart from `delete(sagaId)`, it changes the records only in three
+compare-and-sets on the instance, `compareAndSaveSkipped`, `compareAndSaveReplayed` and
+`compareAndSaveQuarantineEnded`. Each writes the instance and its records in one atomic write, and on a version
+conflict returns `false` and writes neither. `compareAndSaveReplayed` also returns `false` and writes neither when
+the record it replays is gone or has another `seq`, since another release applied that input already. When the
+instance it saves is completed, it deletes every record under the quarantine id. `compareAndSaveQuarantineEnded`
+returns `false` and writes neither while a record is under the quarantine id. It's given an instance without its state
+and saves it under the rule of `compareAndSaveWithoutState`, so it doesn't change the stored state, and a release ends
+the quarantine on an instance whose state no longer decodes too. The write that quarantines an instance is a `compareAndSaveSkipped` too,
+and with an expected version of 0 it inserts an instance the store doesn't hold yet. In `delete(sagaId)` it deletes the records under
+the quarantine id of the instance it removes, in the same atomic write as the instance. A call that returns normally
+has to have made its write survive a failover, since the runner acknowledges the input right after it. It implements
+`findWithFirstSkippedInput(sagaId)`, which a release reads with. It returns the instance and the first record under
+its quarantine id, by `seq` and then by `key`, as one write left them, so a read of the instance followed by a read of
+its records doesn't do, since each can miss a different write. A store that keeps both in one table can read them in
+one transaction that sees both as they were at the same moment. An empty result has to hold every write acknowledged before the call started, as for
+`find`. A store that can't read the two from one moment where it is called throws a `SagaReadRefusedException` instead,
+before it reads anything, as `SpringMongoSagaStateStore` does inside a MongoDB transaction of the caller's and inside a
+Spring transaction of another resource that synchronizes its resources. `release`
+throws that exception as it is. For a plain `IllegalStateException` it reads the instance again first, to tell whether
+its state decodes. It implements `findWithFirstSkippedInputKey(sagaId)`, which reads as `findWithFirstSkippedInput`
+under the same rules but returns only the `seq` and `key` of the first record and may leave out the instance's state. A
+release reads with it when the read with the event failed, such as on a record whose event no longer decodes, so it
+can count the failure against that record, or end the quarantine when no record is left. It implements `findReleasingSagaIds(after, limit)`, which returns the ids of the instances that are `QUARANTINED` with `releasedAt`
+set, in ascending order, after the id `after` (all of them when it is `null`), and at most `limit` of them. The timer
+poller asks for them on every poll and goes on with their release, starting each poll after the last id the previous
+one listed and from the first id again once a poll lists fewer than `limit`. It implements `requireAtomicTransitions()`,
+which `SagaRunner.run` calls when quarantine is on, before the saga gets its first input. It throws an
+`IllegalStateException` when the store can't make those writes atomic in the database it's connected to, and does
+nothing otherwise. It implements `fits(candidate)`, which a release calls before every write it makes that writes the
+whole instance, and for the write that applies a record before it dispatches the record's commands. A live input calls it too, for
+the write that applies the input, on every compare-and-set attempt before that attempt dispatches the input's commands.
+When it returns `false` there, that attempt dispatches nothing and the input fails like any other failing input, see
+[a saga input whose instance the store cannot write fails before it dispatches](#a-saga-input-whose-instance-the-store-cannot-write-fails-before-it-dispatches). An
+earlier attempt can have dispatched its commands already and then lost its compare-and-set. A live input that fails also calls
+it before a failure record that inserts the instance. It returns `false`
+when the store can't write `candidate`, such as an instance whose write would go over a size limit of the store's, and
+`true` otherwise, without reading the database. A store with a limit that returns `true` anyway makes a live input or
+a release dispatch the commands of an input whose write then fails, on every attempt. It implements
+`fitsWithoutState(saga, expectedVersion)`, which a release calls before every write that leaves the stored state where
+it is, the one that ends the quarantine included. A live input that fails calls it before its failure record, the
+write that lists it as pending and the write that quarantines the instance, unless that write inserts the instance. It returns what `fits` returns for the instance as stored with the
+fields `compareAndSaveWithoutState` sets taken from `saga`, and `true` when no instance is stored under the id or it is
+stored at another version than `expectedVersion`. It may read the database for that, and it doesn't decode the stored
+state, since a release calls it after a read of the instance failed to decode, and a throw there would leave the
+instance releasing with nothing counted. A store with no size limit returns `true` from both, as the in-memory store
+does. None of the methods has a default.
+
+A store that keeps the `StoredSaga` it's given as it is keeps the quarantine id and the skip count with it. A store
+that maps each field to a column of its own has to persist both, or reading an instance it quarantined throws an
+`IllegalStateException` that names the missing field.
+
+### What to do
+
+If you don't want quarantine, turn it off with `SagaRunnerConfig.defaults().disableQuarantine()` or
+`occurrent.saga.quarantine-enabled=false`. A blank `occurrent.saga.quarantine-after` no longer keeps it off, and an
+application with at least one `@Saga` fails at startup on one while quarantine is enabled.
+
+When your sagas run on a standalone MongoDB server, set `occurrent.saga.quarantine-enabled=false` in Spring Boot, or
+call `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner` you build yourself, or run MongoDB as a replica set,
+which can have a single member. A saga with quarantine off works on a standalone server, and one with quarantine on
+refuses to start there, as
+[Saga writes on MongoDB wait for a majority to journal them](#saga-writes-on-mongodb-wait-for-a-majority-to-journal-them)
+describes.
+
+When you have a `SagaStateStore` of your own and quarantine on, implement `SagaStateStoreSkippedInputs` on it, as [Stored saga state for a release](#stored-saga-state-for-a-release) describes,
+or turn quarantine off with `SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false`.
+Otherwise the application refuses to start.
+
+An instance that 0.34.0 quarantined can't be released. Delete it as
+[the quarantined saga runbook](../runbooks/quarantined-saga-instance.md#6-you-delete-the-instance-once-you-have-decided-not-to-recover-it)
+describes, once you have decided not to recover it.
+
+Add the new bindings to a record pattern over `SagaFailure` or `SagaEnvelope`. No recipe does it.
+
+Rename a `SpringMongoSagaStateStore` collection whose name ends in `_skipped_inputs` or `_skipped_input_chunks`, or
+the `@Saga` id behind it. Let the MongoDB user the store connects with create the `<collection>_skipped_inputs` and
+`<collection>_skipped_input_chunks` collections and their indexes. When you
+sent saga reads to secondaries to spare the primary, expect that load on the primary now.
+
+### Upgrading from 0.34.0 and rolling back to it
+
+Upgrade the nodes that run sagas with a stop-then-start deploy. Stop every 0.34.0 node that runs sagas before any
+0.35.0 node starts. That takes the service that hosts the sagas down between the two.
+
+A 0.35.0 node can quarantine an instance and store it as `QUARANTINED_RECORDING`. A 0.34.0 node throws on every event
+addressed to such an instance, because it decodes the status with `SagaStatus.valueOf`. Its timer poller never selects
+such an instance, since it asks for `ACTIVE` ones only, and `findByStatus` on 0.34.0 never returns one, while
+`SagaInstances.find(sagaId)` throws for it. The same holds for an `ACTIVE_MARKED` instance, which
+`findByStatus(ACTIVE, ..)` on 0.34.0 never returns. Both statuses are there so that a deploy that breaks the rule
+fails loudly on the 0.34.0 node, instead of that node skipping the input without a record or dropping the instance's
+stream marks, but neither keeps the input. When the instance gets its events from a Kafka or RabbitMQ source with
+`PARK`, the source parks the event the 0.34.0 node fails on and acknowledges it. A `PushSubscriptionModel` throws the
+failure back to the code that pushed the event, and the instance never gets it unless that code pushes it again. The
+0.34.0 node records nothing, so a release doesn't replay such an event. Publish each parked message again, or push
+each event that failed again, once every saga node runs 0.35.0, as
+[the stored saga state for late versions](#stored-saga-state-1) describes.
+
+The rest of this section says what happens when a 0.34.0 node runs next to a 0.35.0 node anyway, and after a rollback.
+A MongoDB subscription model writes its position or checkpoint only after the action returns,
+so the event the 0.34.0 node fails on, and everything after it, is still ahead of the stored position and is delivered
+again. What a push feed does with that event is in the paragraph on `PARK` above.
+
+On a live MongoDB subscription the 0.34.0 node retries the event in place with the subscription model's retry
+strategy, which by default backs off from 100 ms to 2 s and never gives up. In a catch-up replay that a subscribe
+started, the replay fails and the subscription doesn't go live on that node until the node restarts, which its
+upgrade does. A replay that a resume started runs again from its last stored checkpoint with the same backoff.
+
+The 0.34.0 node keeps the saga's competing-consumer lease while it retries, because the lease is refreshed on a
+schedule of its own whatever the subscription is doing, so the saga's subscription stalls. The node gives the lease up
+when it is stopped for its upgrade, but the next node to take it may still run 0.34.0 and stall on the same event, so
+the stall ends once a 0.35.0 node holds the lease. It also ends when a 0.35.0 node deletes the instance, because the
+0.34.0 node reads the instance again on every retry and a deleted one is not there to decode. A release doesn't end
+it, because a released instance keeps the stream marks of every event with a stream version it has handled, so it is stored
+as `ACTIVE_MARKED`, which 0.34.0 can't decode either, as [the stored saga state for late versions](#stored-saga-state-1) describes. A catch-up
+replay that a subscribe started is not retried, so a node whose replay failed doesn't go live until it restarts,
+whatever happens to the instance.
+
+Without a competing-consumer strategy every node runs the saga's subscription. The 0.35.0 nodes handle the event, and
+only the 0.34.0 node's own subscription stalls, until the node is upgraded or the instance is deleted.
+
+The subscription delivers one event at a time, so the stall holds up every later event of that saga subscription, for
+every instance of the saga, not only the events of the quarantined instance.
+
+After a rollback to 0.34.0 there is no 0.35.0 node left to take the lease, so the stall lasts until the instance is
+stored with a status 0.34.0 reads, as step 6 does, or deleted, with competing consumers or without. It ends then
+because the 0.34.0 node reads the instance again on every retry, and no 0.35.0 node is left to store it as
+`QUARANTINED_RECORDING` or `ACTIVE_MARKED` again. A node whose catch-up stopped on the event also has to restart before
+its subscription goes live. To downgrade without that stall, do steps 1 to 5 while the nodes run 0.35.0:
+
+1. Turn quarantine off on every node, with `SagaRunnerConfig.disableQuarantine()` or
+   `occurrent.saga.quarantine-enabled=false`, and have that running on every node before step 2. A node that still has
+   quarantine on can quarantine another instance after you have listed them.
+2. List the quarantined instances and call `release` on each whose failure record has a quarantine id. On MongoDB,
+   `db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED_RECORDING" }, { _id: 1 })`, with your saga's
+   collection, lists exactly those, and its cursor reaches every one. On another store,
+   `findByStatus(QUARANTINED, ..)` returns at most `limit` instances and has no cursor, so you know a call listed them
+   all only when it returns fewer than its `limit`. Raise the limit until it does.
+3. When a release returns `STILL_RELEASING`, an input failed again. With quarantine off there is no budget to run out,
+   so the instance stays releasing and the timer poller retries the input until it succeeds. Fix what makes the input
+   fail and call `release` again. When the release's `ERROR` says instead that the store can't write the instance,
+   nothing moves that release on, and the instance counts as one that keeps failing in step 5. Don't delete the instance while a 0.35.0 node runs. `SagaStateStore.delete(sagaId)`
+   takes no expected version, so a delete that reaches the store after the poller has finished the release deletes
+   the released instance.
+4. When a release throws, the instance stays quarantined. Fix the cause the exception names, such as a state that no
+   longer decodes, and release the instance again.
+5. Repeat steps 2 to 4 until every instance step 2 lists has a release that returned `RELEASED`, or that keeps
+   failing for a cause you can't fix. With quarantine off, a release returns `QUARANTINED_AGAIN` only when the store
+   couldn't write the instance with the next input applied, or with that input's failure recorded, and its `ERROR` says
+   what to do. When it says
+   to release the instance again, call `release` again on that instance, since after step 6 nothing replays the inputs
+   it still holds recorded. When it says a further release stops on that input too, the instance can't be released and
+   stays quarantined through the downgrade, like an instance that keeps failing. Every instance that keeps failing
+   still holds records of inputs that were acknowledged and never applied, and after step 6 no release replays them.
+6. Stop every 0.35.0 node. Before you change any instance, dump every record still in
+   `<sagaCollection>_skipped_inputs`, and every chunk in `<sagaCollection>_skipped_input_chunks`, with `mongodump`.
+   Those records are the only copy of the inputs the instances that keep failing never applied, so handle them by hand
+   from that dump. On MongoDB, run this for each saga's collection, with your own connection string, which names the
+   database the saga collection is in:
+
+   ```
+   mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_inputs" --out skipped-inputs-dump
+   mongodump --uri "<connection string>" --collection "saga-order-fulfilment_skipped_input_chunks" --out skipped-inputs-dump
+   ```
+
+   `mongodump` writes the records as BSON to `skipped-inputs-dump/<database>/saga-order-fulfilment_skipped_inputs.bson`,
+   and the chunks to `saga-order-fulfilment_skipped_input_chunks.bson` next to it, where `<database>` is the database
+   in your connection string. BSON keeps the type of every value, so the dump is the copy to keep and to rebuild events
+   from. It holds personal data when the events hold any, so keep it where such data
+   may be kept.
+
+   Don't rebuild events from a JSON export, such as the one `mongoexport` writes, also with `--jsonFormat=canonical`.
+   Extended JSON writes a `Long` as `{"$numberLong": "42"}`, and it writes a map in the data that holds the key
+   `$numberLong` the same way, so a parser of Extended JSON, such as `Document.parse` in the Java driver, reads that map
+   back as a `Long`. A map with the key `$date` or `$binary` reads back as a date or as binary data in the same way.
+
+   To read the records, restore the dump into a database of its own, here `skipped-inputs`, with a connection string
+   that names no database:
+
+   ```
+   mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_inputs" \
+     --nsFrom "<database>.saga-order-fulfilment_skipped_inputs" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_inputs" \
+     skipped-inputs-dump
+   mongorestore --uri "<connection string without a database>" --nsInclude "<database>.saga-order-fulfilment_skipped_input_chunks" \
+     --nsFrom "<database>.saga-order-fulfilment_skipped_input_chunks" --nsTo "skipped-inputs.saga-order-fulfilment_skipped_input_chunks" \
+     skipped-inputs-dump
+   ```
+
+   `--nsInclude` names the one collection to restore. Without it `mongorestore` restores every collection in
+   `skipped-inputs-dump`, and `--nsFrom` and `--nsTo` only rename the one they match. A dump of another saga's
+   collection in the same directory, or of a collection you have deleted since, would then be written back into the
+   database it came from.
+
+   Read the restored collection with a MongoDB driver that has the UUID representation of the application's client,
+   such as the one `spring.mongodb.representation.uuid` sets. With another one, the Java driver reads a UUID in the data
+   as an `org.bson.types.Binary`. Each record holds `sagaId` and `quarantineId`, and `seq` and then `key` give the order
+   the instance would have applied them in. A record holds its event in up to five fields:
+
+   | Field | What it holds |
+   | --- | --- |
+   | `event` | The attributes, such as `id`, `source`, `type` and `time`, as a CloudEvents JSON string, with no data and no extensions. |
+   | `extensions` | The extensions, when the event has any. |
+   | `dataDocument` | The data, when it was delivered as a map. |
+   | `data` | The data as bytes. A record with `dataDocument` has `data` only when the delivered bytes differ from the JSON of `dataDocument`. |
+   | `dataClass` | The class of the data, when the record holds as bytes data it couldn't hold as it was delivered. |
+
+   A record too large for one document holds `chunks` and `size` in place of those fields. Its chunks are the
+   documents in the restored `saga-order-fulfilment_skipped_input_chunks` with the record's `sagaId`, `quarantineId` and
+   `key`. Take those whose `chunk` is below `chunks`, in order of `chunk`, and join their `bytes`, read as bytes the
+   way binary data in an extension is. The joined bytes, `size` of them, are a BSON document that holds the record's
+   `seq` and the five fields above. Decode it, such as with `new RawBsonDocument(bytes).decode(codec)` in the Java
+   driver, and rebuild the event from that document. A record whose chunks are missing, or whose joined bytes aren't
+   `size` long, can't be rebuilt from this dump.
+
+   Rebuild each event from its record the way a release in `SpringMongoSagaStateStore` reads it:
+
+   - Read the attributes from `event` with the CloudEvents JSON format.
+   - Add each entry of `extensions` as an extension. A string, a 32-bit or 64-bit integer, a double, a decimal128 or a
+     boolean is the value of the extension as it is, and the Java driver reads a decimal128 as an
+     `org.bson.types.Decimal128`. Binary data is its bytes. The Java driver reads it as an
+     `org.bson.types.Binary`, and its bytes are `getData()`. A value the driver gives as a `byte[]` is those bytes. A
+     document holds a value in `value` and its class in `type`. For `uri`, `timestamp`, `byte`, `short`, `float`,
+     `bigInteger` and `bigDecimal` the value is a string, and the extension is a `URI`, an `OffsetDateTime`, a `Byte`, a
+     `Short`, a `Float`, a `BigInteger` or a `BigDecimal` of it.
+   - For `utf16` the value is binary, and the extension is the `String` whose UTF-16 code units, big-endian, are its
+     bytes. Read them without a charset decoder, such as with `ByteBuffer.wrap(bytes).asCharBuffer().toString()`, since
+     a decoder replaces an unpaired surrogate.
+   - For `number` the extension is the one a release hands back. A 64-bit integer is a `Long`, a double a `Double`,
+     and a string a `BigDecimal` of it.
+   - When the record has `dataClass`, the data is `data`, read as bytes the way binary data in an extension is. When
+     `dataClass` is `io.cloudevents.jackson.JsonCloudEventData`, it is a `JsonCloudEventData` of those bytes read as
+     JSON, the way the CloudEvents JSON format reads the data of an event whose `datacontenttype` is JSON. When a
+     `double` can't hold one of its decimal numbers, read it with Jackson's `USE_BIG_DECIMAL_FOR_FLOATS` instead, so
+     the number keeps its value. Data of any other class is a `BytesCloudEventData` of those bytes.
+   - When the record has `dataDocument`, the data is a `PojoCloudEventData` of that document. Its bytes are `data` when
+     the record has it, read as bytes the way binary data in an extension is, and otherwise the document as the Java
+     driver's `Document.toJson()` writes it, in UTF-8.
+   - When the record has `data` and neither `dataDocument` nor `dataClass`, the data is those bytes, read as bytes the
+     same way.
+   - A record with neither field holds an event without data.
+
+   Then, from a process that runs no `SagaRunner`, store every instance that is still
+   `QUARANTINED_RECORDING` as `QUARANTINED`, without its quarantine id, skip count and release time, and every
+   `ACTIVE_MARKED` instance as `ACTIVE`. A released instance is `ACTIVE_MARKED` when it holds stream marks. On MongoDB,
+   run this on each saga's collection:
+
+   ```
+   db.getCollection("saga-order-fulfilment").updateMany(
+     { status: "QUARANTINED_RECORDING" },
+     { $set: { status: "QUARANTINED" }, $unset: { failureQuarantineId: "", quarantineSkipCount: "", failureReleasedAt: "" } })
+   db.getCollection("saga-order-fulfilment").updateMany({ status: "ACTIVE_MARKED" }, { $set: { status: "ACTIVE" } })
+   ```
+
+   Before the second update, list the instances that hold a version 0.34.0 may never apply, with the query in
+   [the stored saga state for late versions](#stored-saga-state-1), which also says what else 0.34.0 loses. A store of your own needs the
+   same change in the form it stores. With no `SagaRunner` running, nothing releases an instance or delivers it an
+   input while the updates run.
+7. Start the 0.34.0 nodes.
+
+No step deletes an instance. 0.34.0 reads an instance that step 6 updated as one it quarantined itself, with its state
+and the input it stopped on. It skips every input addressed to the instance and fires none of its timers, and the
+instance stays quarantined until you delete it, as in 0.34.0. After a later upgrade to 0.35.0, `release` refuses it,
+because 0.34.0 skipped inputs without recording them. The records of the inputs it skipped on 0.35.0 stay in
+`<sagaCollection>_skipped_inputs`, with their chunks in `<sagaCollection>_skipped_input_chunks`. Each one holds a full
+copy of the event it stands for, personal data included when the event holds any, and 0.34.0 never reads or deletes
+them. Step 6 removed the quarantine ids they are filed under, so no release can replay them either, also after a later
+upgrade to 0.35.0. Delete them once step 6 has run, and only when the collections restored from the dump in step 6
+hold as many records as `<sagaCollection>_skipped_inputs` and as many chunks as
+`<sagaCollection>_skipped_input_chunks`, since the delete removes the last copy of every input that was never applied.
+A JSON export is not such a copy. Rebuild the events you still need from the restored records first, as step 6
+describes:
+
+```javascript
+db.getCollection("saga-order-fulfilment_skipped_inputs").deleteMany({})
+db.getCollection("saga-order-fulfilment_skipped_input_chunks").deleteMany({})
+```
+
+## A saga input whose instance the store cannot write fails before it dispatches
+
+Up to 0.34.0 a saga dispatched an input's commands and then saved the instance. When the save failed, such as for an
+instance of more than 16 MiB on `SpringMongoSagaStateStore`, the commands had gone out for an input the instance never
+stored, and every redelivery dispatched them again. The report is
+[#1583](https://github.com/johanhaleby/occurrent/issues/1583).
+
+### Who is affected
+
+- Code that catches the exception a saga state store throws when it can't write an instance, such as the driver's
+  `BsonMaximumSizeExceededException` from `SpringMongoSagaStateStore`, in a `RetryStrategy`, an error handler or a
+  source that decides whether to offer the event again.
+- A `SagaStateStore` of your own that implements `SagaStateStoreSkippedInputs`, since the runner now asks its `fits`
+  for every live input, not only in a release.
+- A `SagaCodec` of your own that can throw on encode.
+
+### What changes
+
+- On every compare-and-set attempt of a live input, the runner asks the store's `fits` whether it can write the
+  instance with the input applied, before that attempt dispatches. When the answer is `false`, the attempt dispatches
+  nothing and the input fails with an `IllegalStateException` that names the instance and has no cause, with
+  quarantine on or off. The store is never asked to make the write, so it doesn't throw its own exception.
+- The message says how many commands the earlier attempts of this delivery of the event, or this poll of the timer,
+  dispatched before they lost their compare-and-set to another writer. An earlier delivery or poll can have dispatched
+  them too.
+- An event that fails this way fails like any other failing event, so with quarantine on the instance is quarantined
+  once the event's budget runs out. A timeout never quarantines the instance. Its timer stays due and later polls try
+  it again.
+- When the store can't take the failure record either, the runner writes it without its message, and when it can't
+  take that, it writes nothing and logs an `ERROR` that names the event, at most once per quarantine budget for that
+  event, see
+  [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md).
+- The runner encodes the instance before it dispatches, on every store, so a codec that throws on encode fails the
+  input before any command goes out.
+- A store that doesn't implement `SagaStateStoreSkippedInputs` isn't asked, and the runner dispatches before the
+  store's save fails, as 0.34.0 did.
+
+### What to do
+
+- Where code catches the store's exception for an instance it can't write, catch the `IllegalStateException` too.
+  When `fits` answers `false`, that's the exception the input fails with.
+- In a store of your own with a size limit, answer `false` from `fits` for an instance whose write would go over it,
+  as [the stored saga state for a release](#stored-saga-state-for-a-release) describes. A store that answers `true`
+  anyway keeps the 0.34.0 behaviour for that input.
+- For an instance that keeps failing this way, follow the section on writes that don't fit in
+  [the quarantined saga runbook](../runbooks/quarantined-saga-instance.md).
 
 ## A saga timer that keeps failing waits behind the timers already due
 
@@ -756,17 +1539,16 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
   time across the instance's timers. For a timer that keeps failing that is its last failed attempt, not its `firesAt`.
 - `SagaInstance.nextTimerAt()` still returns the earliest `firesAt`, so an instance stuck on a failing timer still
   shows a time in the past.
-- The write that records a failed timer keeps the instance's version. It reaches `compareAndSaveWithoutState`, or
-  `compareAndSave` through its default, with an envelope whose version equals `expectedVersion`. Every other save
-  still raises the version by one.
+- The write that records a failed timer keeps the instance's version. It reaches `compareAndSaveWithoutState` with a
+  `StoredSaga` whose version equals `expectedVersion`. Every other save still raises the version by one.
 
 ### What to do
 
 - Add the third component to a record pattern over `TimerEntry`. The two-argument constructor still compiles and
   sets it to null.
-- In a store of your own, persist the new component and return `findWithDueTimers` ordered by
-  `SagaEnvelope.earliestDueAtEpochMilli()`. A store that does neither keeps working, with the 0.34.0 order.
-- In a store of your own, store the version in the envelope as it comes, even when it equals `expectedVersion`. A
+- In a store of your own, return `findWithDueTimers` ordered by `SagaIndex.nextTimerDueAtEpochMilli()`. A store that
+  ignores the order keeps working, with the 0.34.0 order.
+- In a store of your own, store the version of the `StoredSaga` as it comes, even when it equals `expectedVersion`. A
   store that refuses that save refuses every record of a failed timer, so the poller logs a `WARN` for each failed fire
   and the instance keeps the 0.34.0 order. A store that sets the version itself, for example with a JPA `@Version`
   column, raises it on the record too, and an event that takes longer than the poll interval between its read and its
@@ -777,9 +1559,311 @@ report is [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
 ### Stored saga state
 
 Nothing to migrate. A 0.34.0 document has no `nextAttemptAtEpochMilli`, which reads as a timer that has not failed,
-and its `nextTimerFiresAt` is already the earliest due time. During a rolling deploy 0.34.0 reads only `name` and
+and its `nextTimerFiresAt` is already the earliest due time. 0.34.0 reads only `name` and
 `firesAtEpochMilli` from a timer subdocument, so it ignores the new field, and a 0.34.0 write drops it, which gives
-that instance the 0.34.0 order again.
+that instance the 0.34.0 order again. A 0.34.0 node never saves an instance stored as `ACTIVE_MARKED`, see
+[the stored saga state for late versions](#stored-saga-state-1).
+
+## A `SagaStateStore` stores an encoded saga
+
+Up to 0.34.0 a `SagaStateStore` took a `SagaEnvelope` and decided how to write each of its fields. Every field a
+release added, such as the stream marks and the quarantine id of 0.35.0, was then one more field a store of your own
+had to save and read back. In 0.35.0 `SagaCodec` turns the instance into a `StoredSaga`, and the store persists that
+as it is. The design is in
+[ADR 180](../architecture/decisions/0180-occurrent-owns-the-stored-form-of-a-saga-instance.md).
+
+### Who is affected
+
+- A `SagaStateStore` of your own. Its methods take and return `StoredSaga` instead of `SagaEnvelope`, and it has to
+  implement the new `stateCodec()`, so it stops compiling.
+- Code that calls `find`, `findWithoutState`, `findWithDueTimers` or `SagaStateStoreQueries.findByStatus` on a store
+  directly, for example a test that reads an instance back from `SagaStateStore.inMemory()`. These return `StoredSaga`.
+- Code that calls `compareAndSave` or `compareAndSaveWithoutState` on a store directly, for example a test that seeds
+  an instance. These take a `StoredSaga`, and `compareAndSaveWithoutState` throws an `IllegalArgumentException` at
+  version 0, where 0.34.0 inserted the instance. Insert it with `compareAndSave`.
+- A flow saga on `SagaStateStore.inMemory()`.
+- A test on `SagaStateStore.inMemory()` that compares an instance's timestamps with a clock finer than a millisecond.
+  The store now keeps `createdAt`, `updatedAt`, `completedAt` and the failure's timestamps to the millisecond, and
+  `findByStatus` doesn't return an instance updated in the same millisecond as `updatedBefore`.
+- A flow saga on a `SpringMongoSagaStateStore` you build yourself with a `CloudEventConverter` other than the runner's.
+  0.34.0 wrote the received events with the store's converter, and 0.35.0 reads them with the runner's, so an instance
+  0.34.0 wrote is read through a converter that never wrote it. The Spring Boot starter gives both the same converter
+  bean.
+- A saga whose initial state is a `FlowState` of your own, which `SagaRunner.run` now refuses.
+
+An application that only hands `SpringMongoSagaStateStore` or `SagaStateStore.inMemory()` to the runner compiles
+unchanged.
+
+### What changes
+
+`SagaCodec` is in the `org.occurrent.dsl.saga.codec` package of `occurrent-saga-dsl-common`. Occurrent encodes every
+instance with it before a save and decodes it after a read, on every store. A `StoredSaga` has four components:
+
+| Component | What it holds |
+| --- | --- |
+| `sagaId` | The saga instance id |
+| `version` | The compare-and-set version |
+| `encoded` | An `EncodedSaga`, the fields of the instance by name, in the order a store should write them |
+| `index` | A `SagaIndex`, the values a store queries on, `storedStatus`, `nextTimerDueAtEpochMilli`, `updatedAtEpochMilli`, `releasing` and `quarantineId` |
+
+A store decides only how the state of a core saga is represented, and returns that as a `SagaStateCodec` from
+`stateCodec()`. `SagaCodec` writes the state of a flow saga itself, with its received events as `CloudEvent` values
+that the runner's `CloudEventConverter` makes.
+
+The methods change like this:
+
+| 0.34.0 | 0.35.0 |
+| --- | --- |
+| No such method | `SagaStateCodec<S> stateCodec()` |
+| `Optional<SagaEnvelope<S>> find(String sagaId)` | `Optional<StoredSaga> find(String sagaId)` |
+| `default Optional<SagaEnvelope<S>> findWithoutState(String sagaId)` | `Optional<StoredSaga> findWithoutState(String sagaId)`, with no default |
+| `boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion)` | `boolean compareAndSave(StoredSaga saga, long expectedVersion)` |
+| `default boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<S> envelope, long expectedVersion)` | `boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion)`, with no default |
+| `List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit)` | `List<StoredSaga> findWithDueTimers(Instant now, int limit)` |
+| `List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit)` on `SagaStateStoreQueries` | `List<StoredSaga> findByStatus(SagaStatus status, Instant updatedBefore, int limit)` |
+
+`delete(String sagaId)` is unchanged.
+
+`SagaStateStore.inMemory()` keeps the state object as it is and every other field in the form `SagaCodec` gives it. A
+flow saga on it converts every received event to a `CloudEvent` on each save and back on each read, so a step that
+keeps many events costs more per save than in 0.34.0.
+
+`SagaRunner.run` throws an `IllegalArgumentException` for a saga whose initial state is a `FlowState` other than the
+one the flow executor creates, before it subscribes, on `SagaStateStore.inMemory()` too. 0.34.0 ran such a saga on the
+in-memory store.
+
+The `CloudEventConverter` you pass to the `SpringMongoSagaStateStore` constructor only marks the store as a flow
+saga's store. The runner's converter writes and reads the received events. A `null` converter with `FlowState.class`
+as the state type still throws an `IllegalArgumentException`.
+
+`SagaCodec` logs the warning for a flow saga instance that retains 1,000 received events, so you get it on every store.
+A logger setting for that warning goes on `org.occurrent.dsl.saga.codec.SagaCodec`, not on `SpringMongoSagaStateStore`.
+
+### What to do
+
+Port a store of your own in these steps. `InMemorySagaStateStore` and `SpringMongoSagaStateStore` implement each of
+them.
+
+1. Implement `stateCodec()`. Return `SagaStateCodec.identity()` when the store keeps the state object as it is, or a
+   codec that turns the state into a value your database can write and back, the way `SpringMongoSagaStateStore` does
+   with the application's `MongoConverter`. The codec must not return `null` for a state, because a save whose codec
+   does throws a `NullPointerException` before anything is stored.
+2. In `compareAndSave`, keep the compare-and-set rule, where an `expectedVersion` of 0 inserts. Store `saga.sagaId()`,
+   `saga.version()` and every field of `saga.encoded().fields()`. Store the version as it comes, also when it equals
+   `expectedVersion`.
+3. Store each value so it reads back as the same type. A value is a `String`, `Integer`, `Long`, `Boolean`, `Instant`
+   or `CloudEvent`, or a `List` or `Map` of those, and the `state` field holds whatever your `SagaStateCodec` returned.
+4. In `compareAndSaveWithoutState`, under the same compare-and-set rule, set each field of
+   `SagaCodec.fieldsExceptState()` that `saga` has a value for, remove the ones it has none for, and touch no other
+   field. The stored state and `currentStep` stay as they are. Throw an `IllegalArgumentException` for an
+   `expectedVersion` of 0, since the runner inserts with `compareAndSave`.
+5. Build what you read as `new StoredSaga(sagaId, version, encoded, SagaCodec.indexOf(encoded))`. `find` reads every
+   field. `findWithoutState` needs only `SagaCodec.fieldsWithoutState()`, and `findWithDueTimers` and `findByStatus`
+   need only `SagaCodec.instanceFields()`, so those three can leave the state unread.
+6. Query on the index. `findWithDueTimers` returns the instances whose `storedStatus` is in
+   `SagaCodec.storedStatuses(SagaStatus.ACTIVE)` and whose `nextTimerDueAtEpochMilli` is at or before `now`, earliest
+   first. `findByStatus` matches `SagaCodec.storedStatuses(status)`, with the same `updatedBefore` filter and order as
+   before. `findReleasingSagaIds` returns the instances whose `releasing` is `true`, and `delete` removes the skipped
+   inputs under the deleted instance's `quarantineId`.
+
+Each index value comes from one or two of the encoded fields, so a store can index and query those fields instead.
+`SagaCodec.indexOf` shows which ones, and `SagaCodec` has a constant for each field name, such as `SagaCodec.STATUS`
+and `SagaCodec.NEXT_TIMER_FIRES_AT`.
+
+Code that read an instance from a store directly can read its lifecycle through `SagaInstances` instead. When it needs
+the `SagaEnvelope`, decode the `StoredSaga` with a codec built from the store:
+
+```java
+SagaCodec<OrderFulfilment> codec = SagaCodec.of(stateStore.stateCodec(), null);
+Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711").map(codec::decode);
+```
+
+Code that wrote an envelope to a store directly encodes it with the same codec first:
+
+```java
+stateStore.compareAndSave(codec.encode(envelope), 0);
+```
+
+`encode` throws an `IllegalStateException` for an envelope quarantined with a quarantine id and no `quarantineSkipCount`, with the
+message a read of such an instance gives, since no read could take that instance back.
+
+For a flow saga, pass the application's `CloudEventConverter` instead of `null`. A codec built with `null` throws
+`IllegalArgumentException` when it encodes a `FlowState`.
+
+### Stored saga state
+
+`SpringMongoSagaStateStore` writes the same document as before, with the same field names, value types and field
+order, so there's nothing to migrate. A store of your own that holds data in a layout of its own has to read that data
+into the fields `SagaCodec` expects, or migrate it.
+
+### Why there is no recipe
+
+`UpgradeToOccurrent_0_35` doesn't port a store, since how a store keeps the fields and queries the index depends on its
+database.
+
+## Saga writes on MongoDB wait for a majority to journal them
+
+`SpringMongoSagaStateStore` writes every saga instance at write concern `majority` with `j: true`, whatever write
+concern your `MongoTemplate` has, and reads it at read concern `majority`. 0.34.0 wrote and read the instance at the
+template's concerns. A saga acknowledges its input as soon as the write returns, so a write that a failover rolls back
+loses the input.
+
+A quarantined instance and the inputs it skips now change together, in one MongoDB transaction, so quarantine on
+MongoDB needs a replica set or a sharded cluster. With quarantine off a saga runs on a standalone server that journals
+its writes.
+
+### Who is affected
+
+- An application whose `MongoTemplate`, client, database or server default sets a write concern below `majority`, such
+  as `w: 1`. Saga writes no longer use it.
+- A replica set of a primary, a secondary and an arbiter. With the secondary down, a majority can't journal a write, so
+  every saga write fails, where `w: 1` succeeded.
+- An application that runs sagas with quarantine on, the default in 0.35.0, against a standalone MongoDB server. The
+  saga refuses to start, before it gets its first input, since the server refuses the transactions a quarantine
+  writes.
+- A MongoDB server that runs without journaling. Every saga write asks for `j: true`, and MongoDB answers such a write
+  with an error on a server without journaling, so every saga write fails there, with quarantine off too.
+- Code that builds a `SpringMongoSagaStateStore` with a `MongoOperations` that isn't a `MongoTemplate`, such as a
+  wrapper or a mock.
+- An application of the Spring Boot starter with a `MongoOperations` bean of its own that isn't a `MongoTemplate`,
+  such as a decorator marked `@Primary`. The starter now builds the store of a `@Saga` on the `MongoTemplate` bean, as
+  it builds the event store, so saga reads and writes no longer go through the decorator. Spring Boot creates no
+  `MongoTemplate` bean when the application declares a `MongoOperations` bean, so an application with no
+  `MongoTemplate` bean of its own fails to start its sagas.
+
+### What changes
+
+`compareAndSave` and `compareAndSaveWithoutState` stay a single-document write each, and wait until a majority of the
+replica set has the write in its on-disk journal. When a majority doesn't acknowledge it within 10 seconds, the write
+throws, and outside a transaction of yours the store's `RetryStrategy` tries it again. On a client with a `timeoutMS` above 0, where the driver sends
+no `wtimeout`, your `timeoutMS` bounds each attempt instead. A write that the driver refuses with a
+`BsonMaximumSizeExceededException`, or that the server refuses as a document of more than 16 MiB, throws on its first
+attempt, whatever the strategy retries, since it's as large on every attempt. 0.34.0 sent it again, up to 9 more times
+by default. A write that timed out can still be on the primary. Reads
+at read concern `majority` don't return it until a majority has it, so the saga doesn't act on it before then.
+
+`find` and `findWithoutState` read an instance they don't find at `majority` again at read concern `linearizable`,
+with a `maxTimeMS` of 10 seconds. MongoDB documents that such a read returns every write a majority acknowledged before
+it started, in [read concern "linearizable"](https://www.mongodb.com/docs/manual/reference/read-concern-linearizable/). Right after a failover, a
+majority read on the new primary can miss an instance the old primary wrote, and the saga would then skip an input
+addressed to it. So the first input of a new instance costs a second read. A standalone server has no failover and
+refuses read concern `linearizable`, so there the store skips the second read.
+
+The three writes of `SagaStateStoreSkippedInputs` and the `delete` of a quarantined instance run in a transaction that
+commits at `majority` with `j: true` and reads at read concern `snapshot`. A commit that a majority doesn't acknowledge
+fails after 10 seconds, or after your `timeoutMS` when it is above 0. On a client with a `timeoutMS` of 0 the commit
+waits without limit, since the driver then sends no `wtimeout` and `MongoTransactionManager` passes it no transaction
+timeout. The store retries a transaction that fails with the `TransientTransactionError` label, and commits again after
+an `UnknownTransactionCommitResult`, both with its `RetryStrategy`. The store throws any other failure of the
+transaction at once, whatever the strategy retries, and that includes a strategy you implement yourself.
+
+The store asks the server for its deployment once, with `hello`, when it is constructed. So restart the application
+after you convert a standalone server to a replica set. Until then the store still refuses quarantine and skips the
+second read of an instance it doesn't find, which right after an election can make it miss an instance that exists.
+
+On a standalone server, `SagaRunner.run` throws an `IllegalStateException` when quarantine is on, before the saga
+gets its first input, and a `@Saga` with quarantine on fails the same way while the application context starts, a push saga under
+`occurrent.subscription.mode=manual` included. The message says to run MongoDB as a replica set, which can
+have a single member, or as a sharded cluster, or to turn quarantine off with `occurrent.saga.quarantine-enabled=false`
+on Spring Boot or `SagaRunnerConfig.disableQuarantine()` on a `SagaRunner`. With quarantine off a saga runs on a
+standalone server that journals its writes, since the runner then makes none of the three transactional writes.
+
+An instance 0.35.0 quarantined while the data was on a replica set, such as data restored from one onto the standalone
+server, can't record the inputs it skips there. The delivery of an input it has to record as skipped fails, so
+the input isn't acknowledged and is delivered again. That includes a redelivery of an input it recorded as skipped on
+the replica set, which a replica set acknowledges. A redelivery of an input it applied before it was quarantined needs
+no record, so it's skipped and acknowledged as on a replica set. A subscription that delivers an event again before
+any later one, as a MongoDB subscription does, holds up every later event of that saga subscription meanwhile, for every instance of the saga, not only the events of the quarantined instance. That lasts until you move
+the data back to a replica set and release the instance there, or delete it by hand in the database, as the
+[quarantined saga instance runbook](../runbooks/quarantined-saga-instance.md) describes.
+
+`SagaSubscription.release(sagaId)` throws an `IllegalStateException` on the standalone server before it reads or writes
+anything, so it dispatches none of the held inputs' commands there. The timer poller doesn't replay an instance marked
+releasing there either, and the first poll that lists one logs an `ERROR` that names it. A `delete` of such an instance
+on the standalone server writes in a transaction. The server refuses it, and the store throws an
+`IllegalStateException` that says it needs a replica set.
+
+Inside a MongoDB transaction of yours on the template's `MongoDatabaseFactory`, those writes join your transaction
+instead of starting their own. In such a transaction the store sends each read and write once, whatever `RetryStrategy`
+it has, and a failure reaches you as MongoDB reported it. MongoDB aborts a transaction when an operation in it fails, so
+the same operation sent again in it fails too. 0.34.0 retried every read and write with the store's `RetryStrategy`,
+inside your transaction too. Retry by running your transaction again. That is a Spring transaction run by a
+`MongoTransactionManager`, a Spring transaction of another resource in which a template with
+`SessionSynchronization.ALWAYS` has started a MongoDB transaction, or a transaction on the session of a template from
+`MongoTemplate.withSession`. Your commit's write concern then decides whether they survive a failover. The store can't
+read that concern, so it doesn't check it. When a store call fails inside your transaction, abort the transaction, since
+a commit after the failure may keep what the store wrote before it. With a `MongoTransactionManager` set to
+`SYNCHRONIZATION_NEVER`, each store call takes part in your transaction with synchronization on for the call, so it
+reads and writes in your transaction as well.
+
+In such a transaction, `find` and `findWithoutState` read at your transaction's snapshot, which misses an instance
+stored after it began. When the read finds no instance, the store inserts a document that holds only the saga's id and
+deletes it again in your transaction. An
+instance another writer stored after your snapshot began makes the insert fail with a `WriteConflict` labelled
+`TransientTransactionError`. Run your transaction again on that label, as you would for any write conflict, and the next
+attempt reads the instance. An instance your transaction deleted reads as absent. The two writes leave no document
+behind when your transaction commits, and a change stream on the saga collection may see them. The saga collection
+must accept a document that holds only `_id`, so a validator that requires other fields makes such a read of an absent
+instance fail.
+
+Call `SagaSubscription.release(sagaId)` outside such a transaction, and outside a Spring transaction of another
+resource that synchronizes its resources, as one does by default. Inside either it throws a `SagaReadRefusedException`,
+an `IllegalStateException`, before it reads or writes anything, whatever read concern the transaction has. In the
+second, a template with `SessionSynchronization.ALWAYS` starts a MongoDB transaction at the release's first write, and
+the store can't tell how the template synchronizes. A release reads the instance and its first
+recorded input in a transaction of the store's at read concern `snapshot`, since a transaction at `local` or `majority`
+on a sharded cluster can read the two from different moments, and the store can't read the concern of your
+transaction.
+
+Every constructor throws an `IllegalArgumentException` for a `MongoOperations` that isn't a `MongoTemplate`, since the
+store runs its transactions on the template's `MongoDatabaseFactory`. The message says to pass the `MongoTemplate`
+bean.
+
+### What to do
+
+- On a replica set of a primary, a secondary and an arbiter, replace the arbiter with a data-bearing member, or expect
+  saga writes to fail while the secondary is down.
+- On a standalone server, run MongoDB as a replica set, which can have a single member, or turn quarantine off with
+  `SagaRunnerConfig.disableQuarantine()` or `occurrent.saga.quarantine-enabled=false`. Before you move data from a
+  replica set onto a standalone server, release or delete every quarantined instance in it. On a MongoDB subscription,
+  an input that one left quarantined has to record as skipped holds up every later event of its saga subscription
+  there, for every instance of the saga.
+- Pass the `MongoTemplate` bean to `SpringMongoSagaStateStore`. The Spring Boot starter already does.
+- With the starter and a `MongoOperations` decorator, declare the `MongoTemplate` it wraps as a bean.
+- Run the transitions outside a transaction of yours, or commit yours at `majority` with `j: true`.
+
+## The shorter `SagaEnvelope` and `SagaFailure` constructors are removed
+
+`SagaEnvelope` and `SagaFailure` keep only their canonical constructors.
+
+### Who is affected
+
+Code that builds a `SagaEnvelope` or a `SagaFailure`, which is usually a test. Three calls written against 0.34.0 stop
+compiling:
+
+- the 13-argument `SagaEnvelope` constructor, which was the canonical one in 0.34.0
+- the deprecated 11-argument `SagaEnvelope` constructor
+- the 5-argument `SagaFailure` constructor, which was the canonical one in 0.34.0
+
+### What to do
+
+Pass the components the removed constructor filled in:
+
+| Call | Add | For an instance with nothing in them |
+| --- | --- | --- |
+| `SagaEnvelope` with 13 arguments | `streamMarks` and `quarantineSkipCount`, after `failure` | `Map.of()` and `null`, or a count for a `QUARANTINED` envelope whose failure has a quarantine id |
+| `SagaEnvelope` with 11 arguments | `started`, `failure`, `streamMarks` and `quarantineSkipCount`, after `currentStep` | `true`, `null`, `Map.of()` and `null` |
+| `SagaFailure` with 5 arguments | `releasedAt` and `quarantineId`, after `failureMessage` | `null` and `null` |
+
+```java
+// Before, stops compiling
+new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, createdAt, updatedAt, null, null, true, null);
+
+// After
+new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, createdAt, updatedAt, null, null, true, null, Map.of(), null);
+```
+
+No recipe adds them.
 
 ## The deprecated `accept(..)` on the projection feeds is removed
 
@@ -1647,9 +2731,15 @@ the event store nor the subscription model reports a live start.
 subscription doesn't start on that node. During a rolling upgrade, a 0.34 node that resumes a subscription a 0.35 node
 stored in the new form fails to start it until it runs 0.35 too.
 
-To roll back to 0.34, first delete the stored checkpoint of every subscription whose checkpoint starts with
-`position:` and has `;v:2;` after its first value. Each of those subscriptions then starts from the start it is
-configured with.
+To roll back to 0.34, stop every instance of the application, delete the stored checkpoint of every subscription whose
+checkpoint starts with `position:` and has `;v:2;` after its first value, and start every instance again on 0.34 with
+the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
+Each of those subscriptions then starts from the start it is configured with. Deleting the checkpoint of a subscription
+with `startAt = NOW` or `startAt = DEFAULT` skips the events since that checkpoint, even with every instance stopped,
+because the first instance to start finds nothing stored and starts at the present. The same goes for a subscription in
+code that starts from `StartAt.now()` or `StartAt.subscriptionModelDefault()`. A 0.35 instance that still runs after the
+delete can take such a subscription over and store a checkpoint in the new form again.
 
 ### When a catch-up loses its live start on every replay
 
@@ -1667,33 +2757,48 @@ level, and the `Flux` of an unnamed reactor catch-up fails with the exception. I
 when its subscribe started the replay, and the replay ran again after a backoff when a resume started it. A named
 reactor subscription ended and freed its id unless a takeover started the replay. `waitUntilStarted()` fails with the
 exception, and the id stays taken, so a subscribe of the same id throws `DuplicateSubscriptionIdException` until you
-cancel the subscription. Resuming the subscription replays again from the beginning, and so does `start(true)`. Over a
+cancel the subscription. With more than one instance, stop every instance and delete or replace the checkpoint stored
+for the subscription, if there is one, instead of cancelling, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. Resuming the subscription replays again from the beginning, and so does `start(true)`. Over a
 `CompetingConsumerSubscriptionModel` around a blocking catch-up the node gives up the lease and stops competing for it
 until you resume the subscription.
 
 A replay that started later and loses its live start is held paused the same way. A replay again from its start would
 skip events, so `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription, and so
-does `start(true)` on the blocking stack. A reactor `start(true)` keeps it held paused and replays nothing. On a
-blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
+does `start(true)` on the blocking stack. With more than one instance, stop every instance and delete or replace the
+checkpoint stored for the subscription, if there is one, instead of cancelling, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. A reactor `start(true)` keeps it held paused and replays nothing.
+
+On a blocking catch-up subscription model you call directly, `resumeSubscription(id, startAt)` at a position the change
 stream history still reaches resumes it. With checkpoint storage that position replaces the one the catch-up stored
-when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. While
-a replay that `subscribe(..)` started is still running for a subscription paused during that replay, the resume stores
-nothing and reads no present position, since that replay reads the stored position to decide where it goes live from.
+when a restart starts from it, so a resume after a later pause doesn't replay from where the lost replay got to. On
+the instance whose `subscribe(..)` started the held replay, a position a restart starts from is stored over whatever
+was stored, a resume token another instance stored too, and also when nothing was.
+
+While a replay that `subscribe(..)` started is still running for a subscription paused during that replay, the resume
+stores nothing and reads no present position, since that replay reads the stored position to decide where it goes live
+from.
 
 A resume token or another checkpoint the MongoDB model restarts at is stored as given, and so is a checkpoint the
 catch-up replays from with a live start or at the beginning. A time after the beginning that a stream catch-up replays
 from without a live start is stored with the present position as its live start, in the new form, which 0.34 refuses.
 A DCB catch-up replays only from a position and the MongoDB model doesn't restart at a time, so on a DCB catch-up a
 resume at a time stores nothing. A `GlobalCheckpoint` above 0 without a live start, and a checkpoint the MongoDB model
-doesn't restart at, store nothing, so the position the catch-up stored stays. A resume that needs the present position
-to store, such as one at `StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event
-store nor the MongoDB model answers one.
+doesn't restart at, store nothing, so what is stored stays. A resume that needs the present position to store, such as
+one at `StartAt.now()`, throws `IllegalStateException` and stores nothing when neither the event store nor the MongoDB
+model answers one.
 
 A `CompetingConsumerSubscriptionModel`, which the blocking Spring Boot starter puts around its catch-up, can't resume a
 subscription at a position, and its `cancelSubscription(id)` acts only on the instance you call it on. With checkpoint
-storage every instance that gets the lease refuses the same stored checkpoint. Stop every instance of the application
-and delete or replace that checkpoint, as the `ERROR` the competing consumer logs says. Without checkpoint storage,
-cancel the subscription on every instance and subscribe it again from the beginning or from a checkpoint you kept.
+storage every instance that gets the lease refuses the same stored checkpoint. Stop every instance of the application,
+delete that checkpoint or replace it with a checkpoint you kept that the subscription model still has the history back
+to, and start every instance again with the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes
+and the `ERROR` the competing consumer logs says. Without checkpoint storage, stop every instance and start them all
+again subscribed from the beginning, or from a checkpoint you kept that the subscription model still has the history
+back to.
 
 A DCB catch-up and the reactor catch-ups replay only by position, and throw the same exception when you start them from
 a time replay's checkpoint in the new form.
@@ -1790,10 +2895,12 @@ starts the subscription from the annotation's start, as it starts without the be
 a subscription model reads the start, also when a node of a competing consumer takes over, and can ask more than once
 for one start, so return the same answer each time.
 
-With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, or on `NOW`, the
-answer only moves where the subscription starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and the
-competing consumer model does not compete for it. A catch-up that stores checkpoints during its replay still does, and
-deletes the last one when the replay goes live.
+With `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING` or an explicit position, the answer only
+moves where the subscription starts. The subscription keeps no checkpoint in `CheckpointStorage` once it is live, and on
+the blocking starter the competing consumer model doesn't compete for it. A catch-up that stores checkpoints during its
+replay still does, and deletes the last one when the replay goes live. On the blocking starter the same goes for `NOW`.
+On the reactive starter a `NOW` subscription stores a checkpoint after each event, and doesn't read it on its next
+start.
 
 Spring Boot decides from the annotation, not from the answer, whether application startup waits for the subscription.
 When `occurrent.subscription.mode` is `manual`, nothing waits. Otherwise, under the default `startupMode`, a subscription whose annotation starts at `NOW` or `DEFAULT` waits, also when the
@@ -1896,12 +3003,18 @@ replay that started above position 0. A checkpoint from a replay that started at
 replays again from there instead.
 
 A subscription that is refused, and has no such checkpoint stored with its state, can only start from the beginning
-again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`. Cancel it
-first with `cancelSubscription(id)`, which deletes its stored checkpoint. A blocking catch-up holds a refused resume,
-and holds the stored checkpoint it read with it, so deleting the checkpoint and resuming is refused again. With every
-instance of the application stopped, deleting the stored checkpoint is enough. From then on it delivers a checkpoint
-with every event. For a refused replay whose live start was lost, size the change stream history to reach back across
-the replay. On MongoDB that is the oplog.
+again: `StartPosition.BEGINNING`, `DcbStartAt.beginning()` or `StartAt.checkpoint(GlobalCheckpoint.of(0))`.
+
+When the subscription stores its checkpoint, cancel it first with `cancelSubscription(id)`, which deletes that
+checkpoint. With more than one instance, stop every instance instead, delete the stored checkpoint, and start them all
+again with the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
+
+A blocking catch-up holds a refused resume, and holds the stored checkpoint it read with it, so deleting the checkpoint
+and resuming is refused again. Deleting the stored checkpoint with every instance of the application stopped, and
+starting them all again with the same start, is enough, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes. After that the subscription delivers a checkpoint with every event. For a refused replay whose live start was
+lost, size the change stream history to reach back across the replay. On MongoDB that is the oplog.
 
 `startAtGlobalPosition`, `startAtDcbPosition` and `DcbStartAt.afterPosition(long)` are deprecated for removal, since
 every value above 0 is refused. Use `StartPosition.BEGINNING` or `DcbStartAt.beginning()` instead of 0.
@@ -1937,8 +3050,9 @@ whole history the next time it starts.
 
 Under the default `resumeBehavior`, a subscription that went live this way before 0.35 stored a checkpoint as it handled
 events, and resumes from that checkpoint in 0.35, so it still never gets the history. To get it, stop every instance of
-the application, delete the checkpoint stored for the subscription, and start the application again. The subscription
-then replays the whole history, including the events it already handled after it went live, so rebuild the read
+the application, delete the checkpoint stored for the subscription, and start them all again with the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
+The subscription then replays the whole history, including the events it already handled after it went live, so rebuild the read
 model it feeds first, or make sure its handler can take an event it already handled.
 
 For a start above position 0 in your own code, start from `StartAtTime.beginningOfTime()` or from a time instead.
@@ -2040,8 +3154,11 @@ the subscription doesn't need the history.
 
 For a subscription behind a catch-up whose `CheckpointStorage` holds a catch-up's checkpoint, restore the start it had
 when the replay stopped, so the catch-up finishes the replay, or remove the stored checkpoint to start from the new
-start position without the history. A Spring Boot starter subscription at `DEFAULT` waits for its start by default, so
-the exception can stop the application from starting.
+start position without the history. With more than one instance, stop every instance before you remove it, and start
+them all again with the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
+A Spring Boot starter subscription at `DEFAULT` waits for its start by default, so the exception can stop the
+application from starting.
 
 ### A record pattern over `NativeMongoSubscription` stops compiling
 
@@ -2172,7 +3289,10 @@ any position other than the beginning could skip that event.
   model finds the token gone, so it doesn't tell you the subscription stopped. Check `isPaused(id)` instead.
 - The subscription is paused, `isPaused(id)` answers `true`, and it delivers nothing.
 - After the error, `resumeSubscription(id)` throws `CatchupCannotResumeException` until you cancel the subscription,
-  see [How to recover](#how-to-recover). On a blocking catch-up subscription model you call directly, a
+  see [How to recover](#how-to-recover). With more than one instance, stop every instance and delete or replace the
+  checkpoint stored for the subscription, if there is one, instead of cancelling, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes. On a blocking catch-up subscription model you call directly, a
   `resumeSubscription(id, startAt)` can end that refusal too, even at a position whose history is gone, and even when
   the error is logged while it runs. A `resumeSubscription(id)` after the pause but before the error isn't refused
   yet. A resume that isn't refused never delivers from a position whose history is gone. When it opens the
@@ -2223,55 +3343,223 @@ any position other than the beginning could skip that event.
 Cancelling a subscription whose checkpoint Spring Boot stores deletes the checkpoint. When the subscription is
 registered again, it starts where its annotation says. So cancelling and subscribing again with `NOW` or `DEFAULT`
 skips every event since the lost token. For a `NOW` or `DEFAULT` subscription the only ways back without a gap are to
-switch it to `BEGINNING` or to resume it from a checkpoint the application kept.
+switch it to `BEGINNING`, or to resume it from a checkpoint the application kept that the subscription model still
+has the history back to. Outside Spring Boot, on a blocking catch-up subscription model you call directly, the second
+can be a `resumeSubscription(id, StartAt)` at that checkpoint, as described below.
 
-When the application doesn't start, or you would rather not call `cancelSubscription`, delete the stored checkpoint
-instead, with every instance of the application stopped. Spring Boot stores it in the collection
-`occurrent.subscription.mongodb.collection` names, `subscriptions` by default, as the document whose `_id` is the
-subscription id. Every step below that cancels the subscription can delete that document instead.
+A step below that cancels the subscription is for one instance. With more than one, stop every instance, delete the
+checkpoint stored for the subscription, if there is one, where a step cancels, and start them all again with the same
+start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes. Do the same with one instance when the application doesn't start, or you would rather not call
+`cancelSubscription`.
 
-A subscription that the blocking starter paused under `startupMode = BACKGROUND` recovers the same way. With every
-instance of the application stopped, delete its stored checkpoint, or replace it with a resume token the oplog still
-has, and start the application again. It then starts where its annotation says, or from the resume token you stored.
+A subscription that the blocking starter paused under `startupMode = BACKGROUND` recovers the same way. Delete its
+stored checkpoint, or replace it with a resume token the oplog still has, with every instance stopped and started
+again with the same start attribute, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
+It then starts where its annotation says, or from the resume token you stored.
+Only a token the application kept with its own state starts it without a gap. A newer one skips the events between
+the last one the handler handled and that token.
 
 To replay from the beginning, when the read model or saga can take every event again:
 
 1. Set `startAt = BEGINNING` on the annotation. In code, subscribe from the beginning, for example
    `DcbStartAt.beginning()` for a DCB subscription.
-2. Cancel the subscription with `cancelSubscription(id)`, which deletes its stored checkpoint.
+2. With one instance, cancel the subscription with `cancelSubscription(id)`, which deletes any checkpoint stored for
+   it.
 3. Register it again, for example by restarting the application. With nothing stored, it replays from the beginning
    and then goes live.
 
 To rebuild the read model, when it can't take an event twice:
 
-1. Stop the application, or cancel the subscription.
-2. Delete the read model's data and the subscription's stored checkpoint. Stopping the application keeps the
+1. Stop every instance of the application, or with one instance cancel the subscription.
+2. Delete the read model's data and any checkpoint stored for the subscription. Stopping the application keeps the
    checkpoint, and the next start would refuse it again.
-3. Replay from the beginning, as above.
+3. Replay from the beginning as above, and start every instance again with the same start, as
+   [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+   describes.
 
 To resume from a checkpoint the application kept, when it stores the checkpoint delivered with each event:
 
-1. Cancel the subscription.
+1. With one instance, cancel the subscription.
 2. Subscribe again from that checkpoint, or answer it from a `SubscriptionResumePoints` bean. A checkpoint from a
-   replayed event always resumes without a gap. A resume token from a live event resumes only while the oplog still
-   has it.
+   replayed event never resumes with a gap. When the oplog no longer has the live start that checkpoint holds and its
+   replay didn't start at the beginning, the subscribe throws `CatchupCannotResumeException`. Under
+   `startupMode = BACKGROUND` or `occurrent.subscription.mode=manual` the subscription is paused instead, as above. A
+   resume token from a live event resumes only while the oplog still has it.
 
 On a blocking catch-up subscription model you call directly, you can keep the subscription instead of cancelling it,
 when the token you kept is from a live event and the oplog still has it. Call
 `resumeSubscription(id, StartAt.checkpoint(new StringBasedCheckpoint(token)))` on the catch-up model. It runs the
 paused subscription again from that token, and a later `resumeSubscription(id)` no longer throws. This resume never
 replays, so a checkpoint from a replayed event doesn't work here. When the catch-up model wraps a
-`DurableSubscriptionModel`, that model stores the token as the subscription's checkpoint.
+`DurableSubscriptionModel`, that model stores the token as the subscription's checkpoint, which every instance reads.
+With more than one instance,
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+says what happens to the other instances.
 
 The blocking Spring Boot starter puts a `CompetingConsumerSubscriptionModel` around the catch-up model, and that model
 has no resume at a position, see [#1304](https://github.com/johanhaleby/occurrent/issues/1304). So in Spring Boot,
-cancel the subscription as above.
+recover as above.
 
 To continue from now, when skipping the events since the lost token is acceptable:
 
-1. Cancel the subscription.
+1. With one instance, cancel the subscription.
 2. Subscribe again with `StartAt.now()`, or register it again with `startAt = NOW` or the default. The events
    committed between the lost token and now are never delivered.
+
+#### Changing a checkpoint or marker that several instances share
+
+When more than one instance of the application runs a subscription, every instance reads what is stored under its id.
+For a durable or catch-up subscription that is its checkpoint, and for a subscription with `source = PUSH` it is its
+catch-up marker. Two things about how the application runs decide how to change it, and what else a new subscription
+id needs:
+
+- Where the handler keeps what it builds. Either every instance writes to one store, such as a read model in MongoDB,
+  or each instance keeps its own, for example in memory.
+- For a subscription with `source = PUSH`, which RabbitMQ queue or Kafka consumer group each instance consumes.
+  Instances that consume one queue or group share its events, and each event goes to one of them. The application
+  names the queue or the group when it builds the source, and a new subscription id doesn't change it.
+
+When every instance writes to one store, delete or replace it like this instead of cancelling the subscription on one
+instance:
+
+1. Stop every instance of the application that can write the checkpoint or marker.
+2. Save a copy of the stored checkpoint or marker. Spring Boot stores both in the collection
+   `occurrent.subscription.mongodb.collection` names, `subscriptions` by default, as the document whose `_id` is the
+   subscription id. When the change turns out to skip events, stop every instance again and put the copy back.
+3. Delete the stored checkpoint or marker, or replace the checkpoint with the one to start from.
+4. Start every instance again with the same start. In Spring Boot that is the same start attribute on the annotation.
+   For a marker, start one instance first, and start the others once it has stored the marker again.
+
+The instance that starts first runs the subscription from that start, and what it writes to the store is there for
+every instance. An instance that starts once the first one has stored its checkpoint or marker finds it, and resumes
+after it or skips its replay. The store already has those events from the first instance. On the reactive starter and
+for `source = PUSH`, an instance that starts before that runs from the same start too, so the store gets those events
+from more than one instance, as on any start that finds nothing stored.
+
+A subscription with `source = PUSH` stores the marker only once its replay is done, so with every instance started at
+once each of them replays the whole history. When one instance starts first, as step 4 says, only that instance does.
+
+Deleting the checkpoint of a subscription with `startAt = NOW` or `startAt = DEFAULT` skips the events since that
+checkpoint, even with every instance stopped, because the first instance to start finds nothing stored and starts at
+the present. The same goes for a subscription in code that starts from `StartAt.now()` or
+`StartAt.subscriptionModelDefault()`.
+
+A `resumeSubscription(id, startAt)` at a position, on a blocking catch-up subscription model you call directly,
+resumes the subscription only on the instance you call it on. At a resume token, through a `DurableSubscriptionModel`
+it stores the token as the checkpoint every instance reads, also when another instance has stored a newer one. An
+instance that restarts before a newer checkpoint is stored starts from that token, so the events another instance
+already handled after it are delivered again. When the durable model writes with a version, such as the fencing token
+of a lease, and another instance stored the checkpoint with a newer version, the checkpoint storage refuses the token
+and the resume throws `CheckpointWriteConditionNotFulfilledException`, as
+[A resume at a position through a `DurableSubscriptionModel` stores the checkpoint](#a-resume-at-a-position-through-a-durablesubscriptionmodel-stores-the-checkpoint)
+describes.
+
+Over a stored resume token, a resume at a catch-up position, a `GlobalCheckpoint` or a time stores nothing, so the
+token stays. The exception is an instance whose subscription never went live, because the replay its `subscribe(..)`
+started lost its live start and the instance holds the subscription paused. That instance stores what
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) says,
+also over the token.
+
+Another instance that paused the subscription when the history of the stored resume token was lost stays paused, and
+its `resumeSubscription(id)` keeps throwing `CatchupCannotResumeException`. Restart it with a start that reads the
+stored checkpoint, such as the subscription model default.
+
+When the stored checkpoint is a resume token whose history is gone,
+[A subscription whose resume token is gone stops instead of restarting from now](#a-subscription-whose-resume-token-is-gone-stops-instead-of-restarting-from-now)
+describes what the restart does. When it is a catch-up position whose live start is gone,
+[When a catch-up loses its live start on every replay](#when-a-catch-up-loses-its-live-start-on-every-replay) and
+[A catch-up refuses a start that could skip an event committed below it](#a-catch-up-refuses-a-start-that-could-skip-an-event-committed-below-it)
+describe it.
+
+When each instance keeps what it builds for itself, for example in memory, one checkpoint or marker can't serve every
+instance. The one that starts first stores it, and every instance that starts after resumes after it or skips its
+replay, so what that instance builds misses those events. That happens on every start, also when nothing was deleted.
+So such instances can share a subscription id only when nothing is stored under it, and a step in this guide that stops
+every instance and starts them all again with the same start is for instances that write to one store.
+
+For an annotation without `source = PUSH`, set `resumeBehavior = SAME_AS_START_AT` on a start that replays, `BEGINNING`
+or an explicit position, or on the blocking starter on `NOW`. The subscription then keeps no checkpoint in
+`CheckpointStorage` once it is live, and on the blocking starter it doesn't compete for the lease, so every instance
+runs it from that start on every boot. With `BEGINNING`, what an instance keeps in memory gets the whole history again
+on every boot. On the reactive starter `NOW` with `SAME_AS_START_AT` stores a checkpoint after each event, and every
+instance writes it under the one id. A start at `NOW` doesn't read it, and a later switch to `DEFAULT` resumes from it.
+
+Otherwise give each instance a subscription id of its own:
+
+- The checkpoint and the catch-up marker are stored under the subscription id, so each instance then reads only what
+  it stored itself, and a change to it needs only that instance stopped.
+- Under the blocking starter the lease is taken per subscription id too, so each instance holds the lease of its own
+  id and runs its subscription.
+- For a subscription with `source = PUSH` the broker decides which live events reach an instance, not the id. Each
+  instance needs a RabbitMQ queue or a Kafka consumer group of its own, or it gets only some of the live events.
+- An annotation's `id` is a constant, so every instance of the application has the same one. An annotation with
+  `source = PUSH` can't set `resumeBehavior`, so subscribe such a subscription in code instead.
+
+When what an instance builds is gone after a restart, an id of its own still resumes from what that instance stored
+before it. Store nothing for it then, so every start replays from its start. For example, build a
+`CatchupThenPushSubscriptionModel` with `null` as its catch-up marker storage. On an annotation without
+`source = PUSH`, `resumeBehavior = SAME_AS_START_AT` on a start that replays, or on the blocking starter on `NOW`,
+stores nothing once the subscription is live, as above, so its instances don't need an id of their own.
+
+`cancelSubscription(id)` deletes what every instance shares, and the other instances keep running and can store it
+again before the instance you recover subscribes again:
+
+- On the blocking starter, the instance that holds the lease runs the subscription. A cancel gives up the lease only
+  on the instance you call it on, so another instance waiting for the lease can take it, start from its own start, at
+  the present for `NOW` or `DEFAULT`, and store a newer checkpoint. A delete while an instance still runs has the same
+  effect, also after a refused start, since the instance that refused gives the lease back and another instance that
+  still competes can take it. The events between the old checkpoint and the newer one are never delivered.
+- On the reactive starter every instance runs the subscription and stores the checkpoint, so a newer one can be stored
+  the same way.
+- A subscription with `source = PUSH` runs on every instance, and each instance stores the marker once its own replay
+  is done. When it does that after your cancel deleted the marker, the subscribe on the instance you recover finds the
+  marker and skips its replay on the blocking stack, or replays only the events after it on the reactive stack.
+
+A new subscription id has nothing stored under it, so the subscription starts from its start, and the catch-up of a
+subscription with `source = PUSH` replays the whole history. Use one for a rebuild or a changed filter or handler. Once
+no instance runs the old id, delete what is stored under it.
+
+A new id keeps the new subscription apart from the checkpoint and the marker of the old one, but not from the store
+the old one writes to, or from the queue or consumer group it consumes. Under the new id the subscription repeats
+everything its handler does for every event from its start, the records it writes, the commands it dispatches and the
+messages it sends. For a rebuild that is the whole history. Stop every instance on the old id before the first
+instance on the new id starts. Stopping them doesn't prevent the repeats.
+
+When the subscription under the new id starts at the present, as it does for `NOW` or `DEFAULT`, it gets no event
+committed before it starts. The events committed while no instance runs, after the last instance on the old id stops
+and before the first one on the new id starts, are never delivered, and neither are the earlier events that only a
+changed filter matches.
+
+What else a new id takes depends on the deployment:
+
+- When every instance writes to one store, give every instance the same new id. For `source = PUSH`, start one
+  instance on it first, and start the others once it has stored the marker, as step 4 above says.
+- When each instance keeps what it builds for itself, a new id that every instance shares has the same problem as the
+  old one, since every instance that starts after the first finds what the first one stored under it. Give each
+  instance a new id of its own, and for `source = PUSH` keep each instance on a queue or consumer group of its own.
+  An annotation without `source = PUSH` and with `resumeBehavior = SAME_AS_START_AT` on a start that replays, or on
+  the blocking starter on `NOW`, stores nothing under its id once it is live, so every instance can share the new id,
+  as above.
+
+An instance on the old id that consumes the queue or consumer group of the new subscription gets some of the events
+stored after the catch-up of the new subscription read the history. `RabbitMqCloudEventSource` acknowledges such an
+event and `KafkaCloudEventSource` commits its offset once the old subscription has handled it, and also when the old
+filter declines it. `RabbitMqDomainEventSource` and `KafkaDomainEventSource` do the same. So the new subscription
+never gets that event.
+
+A new RabbitMQ queue gets only the messages published after it is bound, so it has to exist before the subscription on
+the new id starts. Building the `RabbitMqCloudEventSource` creates the queue and its bindings, unless it is built with
+`declareTopology(false)`.
+
+A step in this guide that says "with one instance" means that one process runs the subscription and nothing else
+writes to its checkpoint storage under that id. A subscription model that the application calls directly doesn't
+make that so. Two `DurableSubscriptionModel`s can share one `CheckpointStorage`, and a cancel on one deletes the
+checkpoint the other one keeps writing. A subscription that stores nothing can always be cancelled and subscribed again
+without stopping anything, such as one on a `SynchronousSubscriptionModel`, which takes no `CheckpointStorage`, or an
+unnamed reactor `Flux`.
 
 ### How to keep it from happening
 
@@ -2416,7 +3704,9 @@ registers with no stored checkpoint, and refuses the registration when it cannot
 On the blocking starter, set `resumeBehavior = DEFAULT` on a `NOW` subscription that relied on resuming from its
 checkpoint after a restart, or on competing with the other instances. Without it the subscription now misses the events
 written while the application was down, and runs on every instance. Delete the old checkpoint of a subscription you
-later switch to `DEFAULT`, or it resumes from that position.
+later switch to `DEFAULT`, or it resumes from that position. Delete it with every instance stopped, and start them all
+again with the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
 
 ## A subscription with no start position resumes from a catch-up's checkpoint
 
@@ -2465,8 +3755,9 @@ The reactive starter, a `@DcbSubscription`, and a projection or snapshot over DC
 
 Nothing, unless the handler can't take the events the replay delivers. The replay can run long when the checkpoint is
 far behind, and the application doesn't finish starting until it's done. Set `startupMode = BACKGROUND` on the
-annotation to start the application first. To start at the present instead, delete the stored checkpoint before the
-next boot.
+annotation to start the application first. To start at the present instead, delete the stored checkpoint with every
+instance stopped, and start them all again with the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
 
 A subscription whose live checkpoint MongoDB no longer has stops the application from starting. Set
 `startupMode = BACKGROUND` to have it paused instead, and see
@@ -2662,6 +3953,324 @@ checkpoint and, for a `@Projection`, `@Snapshot` or `@Saga`, its state. There is
 says whether an inherited handler was meant to run. See
 [ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md).
 
+## A write through the application service is refused while the application starts
+
+The Spring Boot starters now refuse a write through the application service until their startup scan has registered
+every handler. The scan runs once all singleton beans are created, and ends before any `ApplicationRunner` runs.
+[ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md#3-a-write-through-the-application-service-waits-for-the-synchronous-handlers)
+has the reasons.
+
+### Who is affected
+
+The changes reach an application that uses a Spring Boot starter with `occurrent.subscription.mode` set to anything
+but `DISABLED`, the default `AUTO` included, when one of these holds:
+
+- A bean calls `execute` on the `ApplicationService` or `DcbApplicationService` that the starter creates while the
+  application starts, from a `@PostConstruct` method, from `afterPropertiesSet`, from a `@Bean` method, or from a
+  thread it starts then.
+- A test starts a context whose event store bean is a Mockito mock of `SpringMongoEventStore` or
+  `ReactorMongoEventStore`.
+- The application sets `occurrent.subscription.mode=MANUAL` and has a `@SynchronousSubscription`, or a `@Projection`
+  or `@Snapshot` with `mode = SYNCHRONOUS`. All three run on the synchronous subscription model.
+- The application has a `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or a
+  `@Saga` on the blocking starter, that starts live, at `NOW` or at `DEFAULT` with nothing stored, and something
+  writes directly to the event store while the application starts. `@Projection` and `@Saga` start at `DEFAULT`
+  unless they set `startAt`.
+- The application declares its own `CheckpointStorage` that refuses `CheckpointWriteCondition.ifAbsent()`, on the
+  reactor starter, or on the blocking starter with `occurrent.subscription.competing-consumer.fence-checkpoints=false`.
+- The application stops the synchronous subscription model, or pauses a synchronous subscription, and keeps writing
+  through the application service.
+
+The last one reaches an application without a starter too, when it passes a `SynchronousSubscriptionModel` to
+`synchronousSubscriptions(..)` on the builder of `GenericApplicationService` or `GenericDcbApplicationService`, on
+either stack.
+
+### What changes
+
+A `@SynchronousSubscription` runs on the thread that writes through the application service, and nothing replays a
+write to it, so a write made before it registered reaches it only if your code passes that write's events to the
+`SynchronousSubscriptionModel` while the handler is running, as the javadoc of `SynchronousSubscriptionModel`
+describes. For such a write the blocking application service
+now throws `WriteRefusedException` from `execute`, and the reactor one returns a `Mono` that fails with it when it is
+subscribed. Nothing is stored. A `@PostConstruct` method that writes fails the creation of its bean, so the
+application doesn't start, and the message says where to write instead:
+
+```
+The application is still starting and has not registered all of its handlers, so a synchronous handler it registers later would never see this write. Write from an ApplicationRunner or an ApplicationReadyEvent listener, not from a @PostConstruct method, an InitializingBean or a @Bean method.
+```
+
+On the reactor stack the refusal is an error signal on that `Mono`. A `@PostConstruct` method that blocks on it fails
+the same way, but one that calls `subscribe()` without an error consumer stores nothing, and the application starts
+with only Reactor's log line about a dropped error. The `Mono` asks whether to refuse each time it is subscribed, so a
+`Mono` built while the application starts and subscribed once it runs is not refused.
+
+An asynchronous handler, a `@Saga` and a push projection included, now starts once the startup scan has registered
+every handler, in the order the scan registered them, and each `WAIT_UNTIL_STARTED` replay ends before the next handler
+starts. In 0.34.0 each one started as the scan registered it. So a synchronous handler gets every write that a saga or a
+startup replay makes, and a `WAIT_UNTIL_STARTED` replay still ends before any `ApplicationRunner` runs.
+
+A write from a `SmartInitializingSingleton` may or may not be refused, depending on whether Spring calls it before or
+after the starter's own `SmartInitializingSingleton`, which follows the order the beans were registered in. Write
+from an `ApplicationRunner` there too.
+
+The starter refuses the write also when the application declares no synchronous handler. A write made directly to
+the event store, with `EventStore.write` or `DcbEventStore.append`, is not refused. A synchronous handler sees such a
+write, whenever it is made, only if the application passes its events to the `SynchronousSubscriptionModel` while that
+handler is running, with `dispatch` on either stack or `accept` on the blocking one. The javadoc of
+`SynchronousSubscriptionModel` says when a handler is running.
+
+A `@Subscription`, `@StreamSubscription`, `@DcbSubscription`, `@Projection` or `@Snapshot`, or a `@Saga` on the
+blocking starter, that starts live can now get that direct write. On its first start at `NOW`, or at `DEFAULT` with
+nothing stored, it starts from where the event store was when the event store bean was created, except in the cases
+listed further down. In 0.34.0 it started
+from where the event store was once all singleton beans existed, and missed what was written before, as
+[section 11 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#11-a-subscription-handler-spring-cannot-invoke-is-now-refused-and-a-live-subscription-can-miss-a-startup-write)
+describes. A `@Projection` and a `@Saga` start at `DEFAULT` unless they set `startAt`, so a default `@Saga` now acts
+on, and sends commands for, an event written directly to the event store while the application starts, where 0.34.0
+skipped it. A handler on a bean built after startup, such as a `@Lazy` bean, starts from where the event store is
+when that bean is built, so it gets what the bean's own `@PostConstruct` method writes. For a `FactoryBean` built
+after startup that is where the event store was when the factory was built, so its product's handler also gets what
+the factory writes while it builds the product. The product's handler gets events written before the product was built
+in three more cases:
+
+- The factory is a singleton or scoped one created in an earlier call than the product, for example with
+  `getBean("&name")` or by injecting it, or its `isSingleton()` returns false so each lookup builds a new product. The
+  handler also gets what was written between the factory's creation and the product's.
+- The factory is a prototype, and an older factory of the same name that the same thread created is still there,
+  unclaimed by a product and not garbage collected, for example the factory whose `getObject` asked for this product.
+  The handler starts from where the event store was when that older factory was built.
+- The factory was built while the application started and its product only later, also a prototype factory whose
+  `getObject` ran after startup. The handler starts from where the event store was when the event store bean was
+  created, so it also gets what was written while the application started and while the factory built the product.
+
+Except where a `SubscriptionResumePoints` bean answers for the subscription, a handler starts where the event store
+is when it subscribes, which is once the startup scan is done, in these cases:
+
+- Its bean is built on a Reactor non-blocking thread.
+- The event store bean is a Spring AOP proxy without a single target. The starter logs a warning naming the bean.
+  An event store behind a proxy with a single target is read through that target.
+- The application uses neither MongoDB starter. Only those two turn where the event store is into a checkpoint, with
+  the internal `LiveStartCheckpoints` bean they declare.
+- It would store that position as its first checkpoint, which every live start but `NOW` with
+  `resumeBehavior = SAME_AS_START_AT` does, and Spring can't pick one `CheckpointStorage` bean, as it does with a
+  single one or a `@Primary` one among several.
+
+Such a handler misses an event written directly to the event store while the scan runs, for example from the
+`@PostConstruct` method of a bean the scan creates. In 0.34.0 it subscribed as the scan registered it, so it got that
+event when the bean was created after it had subscribed.
+
+The starter writes that first checkpoint with `CheckpointWriteCondition.ifAbsent()`. A `CheckpointStorage` of your own
+that answers `false` from `evaluatesWriteConditionsFor` fails startup instead, unless
+`occurrent.subscription.start-when-first-position-can-be-overwritten` is set, see
+[A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
+
+That position is a time in MongoDB's oplog, so it lasts only as long as the oplog window. An application that takes
+longer than the oplog window to start, from the event store bean to the handler's subscribe, finds it gone. A handler
+the starter runs through a catch-up subscription, which both starters do by default, then refuses to start instead of
+skipping the events since that position. The blocking starter throws `CatchupCannotResumeException` and the
+application doesn't start. With `startupMode = BACKGROUND`, and on the reactor starter, the handler is paused with an
+error in the log that names it. With every instance of the application stopped, delete its stored checkpoint, or
+replace it with a checkpoint the application kept that the subscription model still has the history back to, and start
+every instance again with the same start, as
+[Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share) describes.
+Deleting the checkpoint of a subscription with `startAt = NOW` or `startAt = DEFAULT` skips the events since that
+checkpoint, even with every instance stopped, because the first instance to start finds nothing stored and starts at
+the present.
+A handler at `NOW` with `resumeBehavior = SAME_AS_START_AT` stores no checkpoint on the blocking starter, and doesn't
+read the one it stores on the reactive starter, so it is paused with an error in the log, and the next start of the
+application reads a new position. Without a catch-up subscription, the
+MongoDB subscription model restarts the handler from now when
+`occurrent.subscription.mongodb.restart-on-change-stream-history-lost` is `true`, its default, and the events written
+between that position and the restart are never delivered. With it set to `false` the subscription ends with an error
+in the log.
+
+The starter reads where the event store is from the event store bean as soon as that bean is created. A Mockito mock
+returns `null` from `openCatchupReadScope`, so a context with one fails to start with an `IllegalStateException` that
+names `openCatchupReadScope`.
+
+Under `occurrent.subscription.mode=MANUAL` the synchronous subscription model, which runs `@SynchronousSubscription`
+and a `@Projection` or `@Snapshot` with `mode = SYNCHRONOUS`, runs from the start. In 0.34.0 the starter kept it
+stopped until you started the subscriptions, and a write made before that reached no synchronous handler. Now every
+write through the application service runs the synchronous handlers.
+
+The application service also throws `WriteRefusedException` for a write while the synchronous subscription model is
+stopped and has a handler registered, and for a write whose events match a paused synchronous subscription. That
+holds with or without a starter, as long as a dispatcher you implement yourself passes `beforeWrite()` on, see
+[A synchronous event dispatcher you implement breaks on `beforeWrite()`](#a-synchronous-event-dispatcher-you-implement-breaks-on-beforewrite).
+In 0.34.0 that write was stored and the stopped or paused handler never got its
+events. The match uses the stream id and the stream version that the write gives the events, so a filter on either
+one works. A filter on the position or on the append id can't match before the event store writes the events, so a
+paused subscription with such a filter doesn't stop the write.
+
+A `pauseSubscription(id)` or `stop()` on the synchronous subscription model waits for the writes the model has
+already let through, so their handlers still get their events, and `pauseSubscription(id)` returns once the
+subscription is paused. A write that starts while the pause waits is refused when the pausing subscription matches
+it, and a write that starts while the stop waits is refused. A handler that pauses or stops its own model doesn't
+wait, since its own write is one of those, and the pause or stop applies once the last of those writes ends. Until then
+`isPaused(id)` answers `false`. On the reactor stack a pause or stop on a non-blocking thread doesn't wait either and
+applies the same way. So does one from any thread while the model routes the events of a write, since a reactor
+handler runs on whatever thread the event store calls back on. A long write holds a pause or stop back for as long as
+it runs.
+
+### What to do
+
+Move a write out of a `@PostConstruct` method, an `InitializingBean` or a `@Bean` method into an `ApplicationRunner`
+or an `ApplicationReadyEvent` listener. Before:
+
+```java
+@Component
+class OpenDefaultAccount {
+    private final ApplicationService<DomainEvent> applicationService;
+
+    OpenDefaultAccount(ApplicationService<DomainEvent> applicationService) {
+        this.applicationService = applicationService;
+    }
+
+    @PostConstruct
+    void open() {
+        applicationService.execute("account-1", events -> Account.open(events, "account-1"));
+    }
+}
+```
+
+After:
+
+```java
+@Component
+class OpenDefaultAccount implements ApplicationRunner {
+    private final ApplicationService<DomainEvent> applicationService;
+
+    OpenDefaultAccount(ApplicationService<DomainEvent> applicationService) {
+        this.applicationService = applicationService;
+    }
+
+    @Override
+    public void run(ApplicationArguments args) {
+        applicationService.execute("account-1", events -> Account.open(events, "account-1"));
+    }
+}
+```
+
+With an `ApplicationReadyEvent` listener, annotate the method with `@EventListener(ApplicationReadyEvent.class)` in
+place of `@PostConstruct`. A thread that writes goes the same way, so start it from the `ApplicationRunner`.
+
+In a test with a mocked event store, run the test over `InMemoryEventStore` or a MongoDB event store instead, as
+[A catch-up needs the event store itself](#a-catch-up-needs-the-event-store-itself) recommends. To keep the mock, make
+`openCatchupReadScope` return a scope. A mocked scope reports no live start, and the subscriptions then start as they
+did in 0.34.0:
+
+```java
+// Blocking, org.occurrent.eventstore.api.blocking.internal.CatchupReadScope
+when(eventStore.openCatchupReadScope(any())).thenReturn(mock(CatchupReadScope.class));
+// Reactor, org.occurrent.eventstore.api.reactor.internal.CatchupReadScope
+CatchupReadScope scope = mock(CatchupReadScope.class);
+when(scope.close()).thenReturn(Mono.empty());
+when(eventStore.openCatchupReadScope(any())).thenReturn(Mono.just(scope));
+```
+
+A test that stops the synchronous subscription model and keeps writing through the application service now gets
+`WriteRefusedException`. Put `@EnableOccurrentTesting` on the test class and register the
+`OccurrentSubscriptionsExtension` bean it declares in an `@Autowired @RegisterExtension` field. Building that extension
+lets those writes through, and a stopped or paused synchronous handler doesn't get their events. The annotation alone
+doesn't, because nothing builds the extension until a test autowires it. Once built, the model lets those writes
+through for as long as Spring keeps the test context cached, so every test class that shares the context gets the same
+behaviour.
+
+In the application, resume a paused synchronous subscription before writing events it matches, or cancel it.
+
+## A synchronous event dispatcher you implement breaks on `beforeWrite()`
+
+`SynchronousEventDispatcher` in `org.occurrent.application.service.blocking` and `ReactiveSynchronousEventDispatcher`
+in `org.occurrent.application.service.reactor` gain an abstract method:
+
+```java
+WriteCheck beforeWrite();
+```
+
+A class that implements either interface doesn't compile until it implements the method. A class compiled against
+0.34.0 and not compiled again throws `AbstractMethodError` when the application service calls the method. The
+application service calls it once per write, before it reads anything. `SynchronousSubscriptionModel` answers with the
+refusal and the wait that
+[A write through the application service is refused while the application starts](#a-write-through-the-application-service-is-refused-while-the-application-starts)
+describes.
+
+### What to do
+
+A dispatcher that passes the written events on to a `SynchronousSubscriptionModel`, or to another dispatcher, passes
+`beforeWrite()` on as well:
+
+```java
+@Override
+public WriteCheck beforeWrite() {
+    return synchronousSubscriptionModel.beforeWrite();
+}
+```
+
+`WriteCheck.NONE` is right only for a dispatcher that never wraps a model that can be stopped or paused. There's no
+default implementation, because a dispatcher that wraps the model and doesn't pass the call on lets a write through
+while the model is stopped or a matching subscription is paused, and that handler never gets its events. For the same
+reason the rewrite recipe doesn't add the method, since a generated `return WriteCheck.NONE` would bring that loss
+back.
+
+## A synchronous handler the startup scan can't see fails the creation of its bean
+
+The Spring Boot starters register every handler in a scan while the application starts. A bean whose synchronous
+handler the scan couldn't see, and that is created after it, now fails its creation.
+[ADR 172](../architecture/decisions/0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md#3-a-write-through-the-application-service-waits-for-the-synchronous-handlers)
+has the reasons.
+
+### Who is affected
+
+An application that uses a Spring Boot starter and has a bean with a `@SynchronousSubscription`, or a `@Projection` or
+`@Snapshot` with `mode = SYNCHRONOUS`, when both of these hold:
+
+- The bean's declared type hides the annotation. That is a `@Bean` method that returns an interface or `Object`, or a
+  `FactoryBean` whose declared product type isn't the annotated class.
+- The bean is created after the scan, since it is `@Lazy`, the application sets
+  `spring.main.lazy-initialization=true`, or it is a `FactoryBean` product nothing asked for during the scan. That
+  includes a bean that an asynchronous handler's startup replay creates, since the asynchronous handlers start once the
+  scan is done.
+
+### What changes
+
+In 0.34.0 the handler registered when the bean was created, and never got the writes made before that. Now creating
+the bean throws an `IllegalStateException` before its init methods run, so the `getBean` call or the injection that
+asked for it fails. When another post-processor replaces the bean with an object that declares such a handler, the
+creation fails once the bean is initialized instead. The message names the bean and the handler, for example:
+
+```
+Bean 'accountReadModel' declares the synchronous handler com.example.AccountReadModel#on and is created after the startup scan of the Spring Boot starter registered the synchronous handlers. A synchronous handler has no replay and gets only the writes made after it registers, so it would miss the earlier ones. Let the startup scan register it: remove @Lazy from the bean, or declare its @Bean method with the annotated class as the return type rather than an interface or Object. Or make the handler asynchronous, with @Subscription instead of @SynchronousSubscription, or mode = ASYNC on @Projection and @Snapshot.
+```
+
+A prototype bean, or the target of a scoped proxy, whose handler registered at startup is created as before.
+
+An object that implements `FactoryBean` and declares a synchronous handler that isn't registered yet now fails its
+creation with a `BeanCreationException` wherever the starter handles it as a factory. That is every `FactoryBean`
+bean. It is also the product of a `FactoryBean` when that product implements `FactoryBean` too and its factory is
+registered with `registerSingleton`, is an inner bean, or asks for the product while it initializes itself. An object
+the starter handles as a factory also fails its creation when the starter can't read its handler methods. In 0.34.0
+the starter didn't register a synchronous handler of such an object when the object was created. Move the handler to
+a class that doesn't implement `FactoryBean`.
+
+An object Spring initializes under a name with no bean definition fails its creation the same way when it declares a
+synchronous handler that isn't registered. That is the product of a `FactoryBean` registered with `registerSingleton`,
+and an object passed to `initializeBean` of `AutowireCapableBeanFactory`. The startup scan reads only names with a bean
+definition, and in 0.34.0 the starter didn't register such a handler when the object was created either. Declare the
+bean, or the `FactoryBean` that creates it, with a bean definition, for example with a `@Bean` method. An object
+initialized under its class name with `.ORIGINAL` appended isn't checked. That is the name Spring's test support gives
+a test instance, so a test class that declares a synchronous handler starts as it did in 0.34.0.
+
+### What to do
+
+Do one of these:
+
+- Declare the annotated class as the `@Bean` method's return type. The startup scan then sees the handler and creates
+  the bean to register it, `@Lazy` or not.
+- Remove `@Lazy`, so the bean is created with the other singletons, before the startup scan.
+- Make the handler asynchronous, with `@Subscription` in place of `@SynchronousSubscription`, or `mode = ASYNC` on
+  `@Projection` and `@Snapshot`. With `startAt = BEGINNING` an asynchronous handler reads the events stored before its
+  bean was created from the event store.
+
 ## Five types the Spring Boot starters share move to an internal package
 
 Both Spring Boot starters read a bean's handlers through `SubscriptionAnnotations`, in the module they share. It moves
@@ -2725,6 +4334,34 @@ code stops compiling.
 Remove the reference. Nothing replaces it. Code that asked `isDefaultKnownLiveOnlyFor(..)` whether a projection never
 replays should treat a projection with no `startAt` as one that can replay.
 
+## `HistoryRetainingSubscriptions` is removed
+
+`HistoryRetainingSubscriptions`, released in 0.34.0, is gone, and nothing replaces it. A subscription model implemented
+it to say whether an event it delivered can still be read after it's acknowledged. The blocking `SagaRunner` was the
+only thing in Occurrent that asked, and it turned quarantine off with a `WARN` on a model that couldn't answer yes for
+every event. In 0.35.0 a quarantined saga instance holds its own copy of each event it skips, as
+[A quarantined saga instance can be released, and quarantine is on by default](#a-quarantined-saga-instance-can-be-released-and-quarantine-is-on-by-default)
+describes, so the runner no longer asks. `SpringMongoSubscriptionModel`, `NativeMongoSubscriptionModel` and
+`CatchupThenPushSubscriptionModel` no longer implement it.
+
+### Who is affected
+
+Code that implements `HistoryRetainingSubscriptions`, overrides `retains(CloudEvent)` or `retainsEveryEvent()`, names
+the type, or calls `HistoryRetainingSubscriptions.findIn(..)`. That code stops compiling. A jar compiled against
+0.34.0 that implements the type fails with a `NoClassDefFoundError` when the JVM loads its class, and one that only
+calls `findIn(..)` fails with it no later than when the call runs.
+
+### What to do
+
+Delete the `implements HistoryRetainingSubscriptions` clause and the `retains` and `retainsEveryEvent` overrides from a
+subscription model of your own. Remove every other reference. Nothing replaces them, and a saga on your model
+quarantines without them.
+
+### Why there is no recipe
+
+The fix is to delete code, and what the code around a `findIn(..)` call or a `retains` answer did with the result is
+yours to decide. A recipe that removed the call would have to guess what to put in place of its answer.
+
 ## A blocking cancel no longer promises a rebuild
 
 This applies to the blocking `CatchupThenPushSubscriptionModel` when you give it a `CheckpointStorage` for the catch-up
@@ -2744,10 +4381,22 @@ then skips its replay. 0.34.0 had the same gap.
 
 * Subscribe under a new subscription id when a projection has to be rebuilt, or when its filter or its projection
   changes. The marker is stored under the id alone, so under the old id a stored marker skips the replay and the
-  changed projection never sees the history.
-* Rebuild a push `@Saga` under a new id only when its completed instances are kept for as long as the history it
-  replays. A new id replays the whole history into the saga, so every instance that its TTL removed is recreated from
-  its start event and dispatches its commands again. With `catchup = NONE` a new id replays nothing.
+  changed projection never sees the history. Under a new id the subscription starts from the beginning of the history
+  and repeats everything its handler does, the records it writes, the commands it dispatches and the messages it
+  sends. Stop every instance on the old id before the first one on the new id starts. Stopping them doesn't prevent
+  the repeats. With more than one instance, what else a new id needs depends on where each instance keeps what it
+  builds and which broker queue or consumer group it consumes, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
+* Rebuild a push `@Saga` under a new id too. With `catchup = NONE` a new id replays nothing. Otherwise the saga under
+  the new id replays the whole history and can repeat everything it did, the state it writes and the commands it
+  dispatches. The default MongoDB store keeps the instances of each saga id in a `saga-<id>` collection, so under a
+  new id every instance is recreated from its start event and dispatches its commands again. Stop every instance on
+  the old id before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one
+  instance, what else a new id needs depends on where each instance keeps what it builds and which broker queue or
+  consumer group it consumes, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
 * Don't give a durable subscription and a blocking catch-up-then-push model, `CatchupProjectionFeed` or
   `DomainEventFeed` the same subscription id in the same `CheckpointStorage`. Any checkpoint stored under the id counts
   as the marker, so a checkpoint the durable subscription stored makes the blocking catch-up skip its replay.
@@ -3137,8 +4786,13 @@ for opening the change stream and for its `maxAwaitTime`, or the server's defaul
 Pick one, as the exception's message says:
 
 * Subscribe through a catch-up subscription, which replays from the event store and then goes live.
-* Remove the subscription's checkpoint from the durable storage, so it starts again from the position it is
-  subscribed at.
+* When a durable subscription model stores the subscription's checkpoint, remove it from the durable storage, so the
+  subscription starts again from the position it is subscribed at. With more than one instance, remove it with every
+  instance stopped and start them all again with the same start, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes. Deleting the checkpoint of a subscription that starts from now or at the subscription model default skips
+  the events since that checkpoint, even with every instance stopped, because the first instance to start finds
+  nothing stored and starts at the present.
 * Turn `restartSubscriptionsOnChangeStreamHistoryLost` on, which restarts the subscription at the present and skips
   what was written in between.
 
@@ -3256,13 +4910,27 @@ What you see:
 - The marker is stored under the subscription id alone. When you change the filter or the projection, subscribe under
   a new id. A start under the old id can resume after a position its earlier filter stored, and skip the events at or
   below it that the new filter matches. 0.34.0 skipped the whole replay in that case.
+- Under a new id the subscription starts from the beginning of the history and repeats everything its handler does,
+  the records it writes, the commands it dispatches and the messages it sends. Stop every instance on the old id
+  before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one instance,
+  what else a new id needs for a rebuild or a changed filter or projection depends on where each instance keeps what
+  it builds and which broker queue or consumer group it consumes, as
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes.
 - A catch-up that reads a checkpoint stored under the subscription id takes it as its marker. When something other
   than a catch-up stored it, such as a durable subscription that used the id before it moved to `source = PUSH`, and
   it is not a position, that catch-up fails with an `IllegalStateException` that names the id. 0.34.0 took any stored
-  checkpoint as a finished catch-up and skipped the replay. Delete that checkpoint, or subscribe under a new id. A
-  start that finds no marker replays the whole history. A failed catch-up does not delete that checkpoint, but the
-  push model's `cancelSubscription(id)` does. When a durable checkpoint is a position, a catch-up can resume after it
-  and replace it. So don't share a subscription id between a durable subscription and a catch-up-then-push model,
+  checkpoint as a finished catch-up and skipped the replay. Subscribe under a new id, or, when nothing else uses that
+  checkpoint, delete it with every instance stopped, start one instance again with the same start, and start the
+  others once it has stored its catch-up marker. Under a new id the
+  subscription starts from the beginning of the history and repeats everything its handler does, the records it writes, the commands it
+  dispatches and the messages it sends. Stop every instance on the old id before the first one on the new id starts.
+  Stopping them doesn't prevent the repeats. With more than one instance, what else a new id needs depends on where
+  each instance keeps what it builds and which broker queue or consumer group it consumes.
+  [Changing a checkpoint or marker that several instances share](#changing-a-checkpoint-or-marker-that-several-instances-share)
+  describes both. A start that finds no marker replays the whole history. A failed catch-up
+  does not delete that checkpoint, but the push model's `cancelSubscription(id)` does. When a durable checkpoint is a
+  position, a catch-up can resume after it and replace it. So don't share a subscription id between a durable subscription and a catch-up-then-push model,
   `CatchupProjectionFeed` or `DomainEventFeed`, on either stack.
 - `ReactiveReplayAware`, and a `ReplayAware` view on a reactor feed, hear `replayStarted()`, `replayCompleted()` and
   `replayAbandoned()` only for a replay from the beginning, as in 0.34.0. A replay after a marker delivers its events
@@ -3281,6 +4949,89 @@ a replay, such as the one `Projections` builds, reads and writes once per event 
 recorder writes a record for each append the projection applies. Plan for that replay, and set
 `startupMode = BACKGROUND` when a startup probe could cut it short. A 0.34.0 node that reads a marker 0.35.0 stored
 skips its replay, as it always did, so a rolling upgrade needs nothing more on either side.
+
+## A blocking catch-up holds live events until it has delivered what it held
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` holds the live events that
+arrive while it replays and delivers them once the replay ends. In 0.34.0 it went live before it delivered them, so a
+live event that arrived then could reach the handler ahead of an older held one. It now goes live once it holds
+nothing, and a live event that arrives meanwhile waits behind the held ones.
+
+There is nothing to change for most applications. A listener that calls `acceptOrDefer(..)` gets `DEFERRED` until
+the catch-up has delivered what it held, and has the broker deliver the event again, as it already does during the
+replay. A write to the in-memory event store that reaches a `CatchupThenPushSubscriptionModel` meanwhile waits on the
+writing thread until the catch-up has gone live, stopped or failed, so the catch-up goes live however fast events are
+written. Don't write to the event store while holding a lock that the handler takes, since the write and the handler
+then wait for each other. A handler that waits for another thread's write to the event store, such as a write it
+submits to an executor and then waits on, waits forever the same way.
+`isReadyForLiveDelivery(..)` on the model or the feed answers `false` for that time too, so a RabbitMQ or Kafka source
+wired with `readinessSource(..)` stays paused until the catch-up holds nothing.
+A projection that calls `acceptAndWait(..)` on its own feed while it applies an event gets an `IllegalStateException`
+for a held event, as it already did during the replay. Feed that event from another thread instead, and don't have
+the projection wait for that thread.
+A projection, view or handler of a blocking catch-up feed or subscription that calls `acceptAndWait(..)` on another
+blocking feed gets an `IllegalStateException` while that other feed isn't live. In 0.34.0 the call waited for that
+feed's catch-up, or applied the event at once while the feed delivered what it held, and two catch-ups whose handlers
+fed each other this way could wait for each other forever. Feed that event from another thread, and don't have the
+handler wait for that thread.
+
+A `goLive()` on a `CatchupProjectionFeed`, a `goLive(id)` on a `DomainEventFeed`, and a `catchUp()`, `catchUp(id)` or
+`catchUpAll()` that finds the catch-up marker already written wait until the feed is live when they're called while
+the feed delivers what it held or writes its marker. In 0.34.0 they returned at once then. So application code that
+makes one of these calls while holding a lock that the projection takes now waits forever when the feed delivers a
+held event to the projection, since that delivery waits for the lock. Release the lock before the call, or make the
+call from another thread without waiting for it while you hold the lock. A call from the projection, view or handler of
+another blocking feed or catch-up subscription doesn't wait for that delivery, as in 0.34.0.
+
+## A full live buffer fails a blocking catch-up push subscription
+
+A blocking `CatchupThenPushSubscriptionModel` over an event store that pushes its writes to it, such as the in-memory
+event store, holds up to `maxBufferedEvents` live events until its catch-up has delivered them, 100,000 by default.
+In 0.34.0 an event written once that buffer was full was refused to the writer, the catch-up went on and wrote its
+marker, and the subscription never got the event. The catch-up now fails instead, writes no marker, and the
+subscription refuses every later event. A `PushObserver` is told `REFUSED` for the event that found the buffer full,
+where 0.34.0 told it `NOT_DELIVERABLE`.
+
+The write that found the buffer full, and every later write to the in-memory event store of an event the subscription
+would receive, throws once the store has committed the event. So a writer that retries such a write stores the event twice. The live events the
+subscription held before the buffer filled up were reported `DELIVERED` to a `PushObserver` when they were held, and
+the failed subscription never delivers them.
+
+An event that finds the buffer full before the replay has started fails the catch-up too. The replay reads that event
+from the store, but a projection that records its appends never records that event's append, so `waitUntilApplied`
+would time out for it. Once the replay has ended, a write waits for the catch-up to deliver what it held instead of
+adding to the buffer, unless a handler makes it, as [the section above](#a-blocking-catch-up-holds-live-events-until-it-has-delivered-what-it-held)
+describes.
+
+There is no code to change, unless a writer retries a write that threw. A subscription that fails this way stays
+failed until you cancel it and subscribe again, and that replay delivers every event the failed one missed, from the
+store. A history too large to replay while the writers fill the buffer needs a larger `maxBufferedEvents` in its
+`CatchupThenLiveOptions`.
+
+## A blocking catch-up stopped while it delivers what it held ends there
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` delivers the live events it
+held during its replay before it writes the catch-up marker. In 0.34.0 a `stopCatchUp()` that came after the last
+replayed event still let a feed write its marker, and a `stop()` that came then still let a subscription deliver every
+held event and go live. The catch-up now looks for a stop before each held event and once more right before it goes
+live, and a stop it finds there writes no marker.
+
+There is no code to change. The next catch-up replays the history the stopped one would have marked, and the held
+events the stopped one kept reach the handler from that replay or after it. They reach it once while that replay's
+de-dup cache, sized by `dedupCacheSize`, still holds them.
+
+## A recording callback that throws fails only its own event on a blocking catch-up
+
+A blocking `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` or `DomainEventFeed` calls
+`alreadyDeliveredByReplay(..)` on its `CatchupListener` or `ReplayAware` view for a live event its replay already
+applied, so a recording projection can write down the append the event came from. In 0.34.0 a throw from that call for
+an event held during the catch-up failed the whole catch-up, so it wrote no marker and refused every later event. Now
+the throw fails that event alone. A feed's `acceptAndWait(..)` for it throws, and a subscription logs a warning. The
+catch-up delivers the rest, goes live and writes its marker.
+
+There is no code to change, unless an application relied on a recording failure to fail the catch-up. A projection
+that has to stop on such a failure now sees it through the `acceptAndWait(..)` that throws, or through the warning
+on a subscription.
 
 ## The reactor `HistoryLossReportingSubscriptions` gains a method
 
@@ -3302,3 +5053,45 @@ Retrying another error from the position the subscription has read to is fine. S
 the position the subscription had read to, or to the position it opened at when it has read nothing. There is no
 default implementation, because a model that can't report a later loss would let a catch-up subscription skip events
 without saying so. The rewrite recipe doesn't add the method, since it has to be written for your model.
+
+## The MongoDB starter adds two health contributors for competing consumers
+
+With `spring-boot-health` on the classpath, the MongoDB Spring Boot starter adds the health contributors
+`competingConsumers` and `competingConsumerLeases`. Spring Boot reports `/actuator/health` as down when any contributor
+is down, so the overall status can be down in cases where 0.34.0 reported it up.
+
+### Who is affected
+
+An application on `occurrent-mongodb-spring-boot-starter` with Spring Boot Actuator, when something acts on the overall
+status of `/actuator/health`, such as a load balancer or a Kubernetes probe pointed at that path. A probe on
+`/actuator/health/liveness` or `/actuator/health/readiness` is not affected, because neither contributor is in those
+groups.
+
+### What changes
+
+`competingConsumers` has one component per subscription id, and `competingConsumerLeases` one per
+`SpringMongoLeaseCompetingConsumerStrategy` bean. A component is down in these cases:
+
+| Contributor | Down when | Up again when |
+| --- | --- | --- |
+| `competingConsumers` | The wrapped model refused to start the subscription after `subscribe` returned, so the subscription was given up. | The id is subscribed again or cancelled. |
+| `competingConsumers` | The wrapped model refused to start or resume the subscription from its position, so it's held paused. | The subscription is resumed. |
+| `competingConsumers` | A call to the lease strategy or the wrapped model failed, and the model keeps trying it. | A try succeeds. |
+| `competingConsumerLeases` | The latest lease refresh attempt failed, for example because MongoDB refuses writes. | A refresh attempt refreshes every lease. |
+
+A node on standby, a subscription you paused and a stopped model are up. The details of a component that is down
+include the failure and since when it has been failing. When two `CompetingConsumerSubscriptionModel`s use the same
+subscription id, its component is down when one of them reports a failure.
+
+### What to do
+
+Nothing, if a node should report down in these cases. To leave one out, set
+`management.health.competingconsumers.enabled=false` or `management.health.competingconsumerleases.enabled=false`. To
+change what one reports, declare your own `HealthContributor` bean named `competingConsumers` or
+`competingConsumerLeases`, which replaces the starter's.
+
+`CompetingConsumerSubscriptionModel#competingConsumerStatus(subscriptionId)`, and `leaseRefreshFailure()` on
+`SpringMongoLeaseCompetingConsumerStrategy` and `NativeMongoLeaseCompetingConsumerStrategy`, return the same information
+to code of your own. The
+code compiles unchanged, there is no OpenRewrite recipe, and nothing stored changes. See
+[ADR 183](../architecture/decisions/0183-a-competing-consumer-reports-its-status-and-the-mongodb-starter-turns-it-into-health.md).

@@ -16,6 +16,10 @@
 
 package org.occurrent.springboot.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -37,7 +41,9 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -81,6 +87,36 @@ class SagaPushCatchupStatusTest {
                             assertThat(failed.cause()).isInstanceOf(RuntimeException.class).hasMessage("replay boom"));
                     assertThat(status.isCaughtUp("push-saga-failing")).isFalse();
                 });
+    }
+
+    @Test
+    void a_background_catch_up_that_fails_logs_how_to_change_what_is_stored_when_several_instances_run_it() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        Logger registrarLog = (Logger) LoggerFactory.getLogger(SagaAnnotationRegistrar.class);
+        registrarLog.addAppender(appender);
+        try {
+            new ApplicationContextRunner()
+                    .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                    .withUserConfiguration(SagaSupportConfiguration.class, FailingCatchupSagaConfiguration.class)
+                    .run(context -> {
+                        assertThat(context).hasNotFailed();
+                        PushCatchupStatus status = context.getBean(PushCatchupStatus.class);
+
+                        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                        while (!(status.of("push-saga-failing") instanceof PushCatchupStatus.Failed) && System.nanoTime() < deadline) {
+                            Thread.sleep(10);
+                        }
+
+                        assertThat(appender.list).filteredOn(event -> event.getLevel() == Level.ERROR).singleElement().satisfies(event ->
+                                assertThat(event.getFormattedMessage())
+                                        .startsWith("The background catch-up of saga push-saga-failing failed.")
+                                        .endsWith(SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT));
+                    });
+        } finally {
+            registrarLog.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     @Test

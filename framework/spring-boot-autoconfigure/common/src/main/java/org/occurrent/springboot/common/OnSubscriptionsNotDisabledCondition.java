@@ -25,7 +25,8 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 
 /**
  * Matches unless subscriptions are {@link SubscriptionMode#DISABLED}. Applies to every subscription bean, so
- * {@link SubscriptionMode#MANUAL} still creates them all, just stopped.
+ * {@link SubscriptionMode#MANUAL} still creates them all. Under it the starter keeps every subscription model stopped
+ * except the synchronous one, which runs from the start.
  */
 public class OnSubscriptionsNotDisabledCondition implements Condition {
 

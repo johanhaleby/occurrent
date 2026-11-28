@@ -36,6 +36,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.spring.reactor.CommitRetryingReactiveMongoTransactionManager;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
@@ -74,6 +75,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
@@ -151,9 +153,30 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     void a_user_event_store_that_reads_in_position_order_and_implements_catchup_reads_starts() {
         EventStore userEventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class, EventStoreQueries.class, CatchupReads.class));
         when(((PositionOrderedReader) userEventStore).writesPosition()).thenReturn(true);
+        opensAScopeWithoutLiveStart((CatchupReads) userEventStore);
 
         contextRunner().withBean(EventStore.class, () -> userEventStore).run(context ->
                 assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void a_user_event_store_that_opens_no_scope_fails_the_context_at_startup_and_the_message_names_the_store_and_the_method_to_stub() {
+        EventStore userEventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class, EventStoreQueries.class, CatchupReads.class));
+        when(((PositionOrderedReader) userEventStore).writesPosition()).thenReturn(true);
+
+        contextRunner().withBean(EventStore.class, () -> userEventStore).run(context ->
+                assertThat(context).getFailure().rootCause()
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining(userEventStore.getClass().getName())
+                        .hasMessageContaining("openCatchupReadScope"));
+    }
+
+    // The starter reads the live start of the event store when it creates the store bean, so a mock has to open a scope
+    private static void opensAScopeWithoutLiveStart(CatchupReads eventStore) {
+        CatchupReadScope scope = mock(CatchupReadScope.class);
+        when(scope.liveStart()).thenReturn(null);
+        when(scope.close()).thenReturn(Mono.empty());
+        when(eventStore.openCatchupReadScope(any())).thenReturn(Mono.just(scope));
     }
 
     @Test
@@ -407,6 +430,7 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         // A user override implements the event store, query, and DCB interfaces the same way the real store does, so the
         // query DSL still wires. Mockito bypasses the eager-initializing constructor.
         ReactorMongoEventStore userEventStore = mock(ReactorMongoEventStore.class);
+        opensAScopeWithoutLiveStart(userEventStore);
         contextRunner().withBean(ReactorMongoEventStore.class, () -> userEventStore).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(EventStore.class);

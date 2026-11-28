@@ -17,6 +17,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
 import org.bson.Document;
@@ -36,11 +37,16 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -105,11 +111,11 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
     private static SagaEnvelope<String> instanceWith(Map<String, StreamMarks> marks, long version) {
         return new SagaEnvelope<>(SAGA_ID, "awaiting-payment", SagaStatus.ACTIVE, version, List.of(), Map.of(STREAM_ID, 12L, "other", 1L), null,
-                NOW, NOW, null, null, true, null, marks);
+                NOW, NOW, null, null, true, null, marks, null);
     }
 
     private void save(SagaEnvelope<String> envelope, long expectedVersion) {
-        assertThat(stateStore.compareAndSave(SAGA_ID, envelope, expectedVersion)).isTrue();
+        assertThat(SagaEnvelopes.of(stateStore, null).compareAndSave(SAGA_ID, envelope, expectedVersion)).isTrue();
     }
 
     private Document rawDocument() {
@@ -139,7 +145,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks()).isEqualTo(MARKS);
@@ -174,7 +180,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -204,7 +210,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks().get("other").floor()).isEqualTo(Long.MIN_VALUE);
@@ -220,7 +226,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(later, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
         }
 
         @Test
@@ -229,7 +235,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -266,7 +272,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             // Then
             assertAll(
                     () -> assertThat(rawDocument().containsKey("streamMarks")).isFalse(),
-                    () -> assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEmpty()
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEmpty()
             );
         }
     }
@@ -281,7 +287,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWrittenBy0_34(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -297,7 +303,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWrittenBy0_34(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks()).isEmpty();
@@ -312,7 +318,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(MARKS, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(MARKS);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(MARKS);
         }
     }
 
@@ -333,7 +339,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithATypeEntryWithoutAHorizon(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks().get(STREAM_ID).byType().get(PLACED_TYPE)).isEqualTo(new TypeMark(12, List.of(9L, 10L, 11L), Long.MIN_VALUE));
@@ -345,7 +351,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithATypeEntryWithoutAHorizon(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks().get(STREAM_ID).byType().get(PLACED_TYPE).horizon()).isEqualTo(Long.MIN_VALUE);
@@ -359,20 +365,20 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         private SagaEnvelope<String> failureRecordFor(SagaEnvelope<String> read) {
             return new SagaEnvelope<>(SAGA_ID, read.state(), SagaStatus.QUARANTINED, read.version() + 1, read.timers(), read.streamWatermarks(), null,
                     read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(),
-                    new SagaFailure(STREAM_ID + "@13", null, NOW, IllegalStateException.class.getName(), "boom"), read.streamMarks());
+                    new SagaFailure(STREAM_ID + "@13", null, NOW, IllegalStateException.class.getName(), "boom", null, null), read.streamMarks(), null);
         }
 
         @Test
         void the_marks_the_record_carries_over_are_kept() {
             // Given
             save(instanceWith(MARKS, 1), 0);
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // When
-            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, failureRecordFor(read), read.version());
+            boolean written = SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, failureRecordFor(read), read.version());
 
             // Then
-            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> after = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(written).isTrue(),
                     () -> assertThat(after.status()).isEqualTo(SagaStatus.QUARANTINED),
@@ -385,18 +391,18 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         void the_marks_are_among_the_fields_the_write_replaces() {
             // Given
             save(instanceWith(MARKS, 1), 0);
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
             Map<String, StreamMarks> other = Map.of(STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(99, List.of(), 95))));
             SagaEnvelope<String> record = failureRecordFor(read);
             SagaEnvelope<String> withOtherMarks = new SagaEnvelope<>(SAGA_ID, record.state(), record.status(), record.version(), record.timers(),
                     record.streamWatermarks(), null, record.createdAt(), record.updatedAt(), null, record.currentStep(), record.started(),
-                    record.failure(), other);
+                    record.failure(), other, null);
 
             // When
-            stateStore.compareAndSaveWithoutState(SAGA_ID, withOtherMarks, read.version());
+            SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, withOtherMarks, read.version());
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(other);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(other);
         }
     }
 
@@ -414,7 +420,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(PENDING_MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks()).isEqualTo(PENDING_MARKS);
@@ -426,7 +432,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(PENDING_MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -462,7 +468,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
             // When
             Document raw = rawDocument();
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             Document other = streamDocument(raw, "other");
@@ -485,20 +491,20 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(later, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
         }
 
         @Test
         void a_save_with_nothing_pending_takes_away_the_pending_versions_the_document_had() {
             // Given
             save(instanceWith(PENDING_MARKS, 1), 0);
-            SagaEnvelope<String> before = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> before = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // When
             save(instanceWith(MARKS, 2), 1);
 
             // Then
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(before.streamMarks().get(STREAM_ID).pending()).isNotEmpty(),
                     () -> assertThat(read.streamMarks()).isEqualTo(MARKS),
@@ -510,15 +516,15 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         void a_later_write_that_changes_other_fields_and_carries_the_marks_over_keeps_the_pending_versions() {
             // Given
             save(instanceWith(PENDING_MARKS, 1), 0);
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             SagaEnvelope<String> changed = new SagaEnvelope<>(SAGA_ID, "paid", SagaStatus.ACTIVE, 2, read.timers(), Map.of(STREAM_ID, 13L, "other", 1L),
-                    null, NOW, NOW.plusSeconds(60), null, null, true, null, read.streamMarks());
+                    null, NOW, NOW.plusSeconds(60), null, null, true, null, read.streamMarks(), null);
 
             // When
             save(changed, 1);
 
             // Then
-            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> after = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(after.state()).isEqualTo("paid"),
                     () -> assertThat(after.streamMarks()).isEqualTo(PENDING_MARKS)
@@ -552,7 +558,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithAStreamEntryWithoutPending(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -567,7 +573,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithAStreamEntryWithoutPending(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks().get(STREAM_ID).pending()).isEmpty();
@@ -579,8 +585,8 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithAStreamEntryWithPending(), COLLECTION);
 
             // When
-            SagaEnvelope<String> viaFind = stateStore.find(SAGA_ID).orElseThrow();
-            SagaEnvelope<String> viaFindWithoutState = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> viaFind = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> viaFindWithoutState = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -598,7 +604,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(PENDING_MARKS, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(PENDING_MARKS);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(PENDING_MARKS);
         }
     }
 
@@ -608,20 +614,20 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
         private SagaEnvelope<String> withMarks(SagaEnvelope<String> read, Map<String, StreamMarks> marks) {
             return new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(), null,
-                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks);
+                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks, null);
         }
 
         @Test
         void the_pending_version_is_stored_and_the_state_stays_where_it_was() {
             // Given
             save(instanceWith(MARKS, 1), 0);
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // When
-            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, PENDING_MARKS), read.version());
+            boolean written = SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, withMarks(read, PENDING_MARKS), read.version());
 
             // Then
-            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> after = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(written).isTrue(),
                     () -> assertThat(after.streamMarks()).isEqualTo(PENDING_MARKS),
@@ -635,13 +641,13 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         void a_write_that_carries_the_pending_versions_over_keeps_them() {
             // Given
             save(instanceWith(PENDING_MARKS, 1), 0);
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // When
-            stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, read.streamMarks()), read.version());
+            SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, withMarks(read, read.streamMarks()), read.version());
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(PENDING_MARKS);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(PENDING_MARKS);
         }
 
         @Test
@@ -649,13 +655,13 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             // Given
             Map<String, StreamMarks> insertedMarks = Map.of(STREAM_ID, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L))));
             SagaEnvelope<String> inserted = new SagaEnvelope<>(SAGA_ID, "initial", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null,
-                    NOW, NOW, null, null, false, null, insertedMarks);
+                    NOW, NOW, null, null, false, null, insertedMarks, null);
 
             // When
-            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, inserted, 0);
+            boolean written = SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, inserted, 0);
 
             // Then
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(written).isTrue(),
                     () -> assertThat(read.started()).isFalse(),
@@ -678,7 +684,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks()).isEqualTo(LEGACY_FAILED_MARKS);
@@ -690,7 +696,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -725,7 +731,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(later, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(later);
         }
 
         @Test
@@ -737,24 +743,24 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(MARKS, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).legacyFailed()).isEmpty();
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).legacyFailed()).isEmpty();
         }
 
         @Test
         void a_write_without_the_state_that_carries_the_marks_over_keeps_the_failed_versions() {
             // Given
             save(instanceWith(LEGACY_FAILED_MARKS, 1), 0);
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
             SagaEnvelope<String> carried = new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(),
-                    null, read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), read.streamMarks());
+                    null, read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), read.streamMarks(), null);
 
             // When
-            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, carried, read.version());
+            boolean written = SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, carried, read.version());
 
             // Then
             assertAll(
                     () -> assertThat(written).isTrue(),
-                    () -> assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS)
+                    () -> assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS)
             );
         }
     }
@@ -786,7 +792,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithPendingAndNoLegacyFailed(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             StreamMarks marks = read.streamMarks().get(STREAM_ID);
@@ -802,7 +808,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithPendingAndNoLegacyFailed(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             StreamMarks marks = read.streamMarks().get(STREAM_ID);
@@ -818,7 +824,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithLegacyFailedWrittenAsIntegers(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks().get(STREAM_ID).legacyFailed()).containsExactly(5L, 7L);
@@ -833,7 +839,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(LEGACY_FAILED_MARKS, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(LEGACY_FAILED_MARKS);
         }
     }
 
@@ -852,7 +858,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
 
         private SagaEnvelope<String> withMarks(SagaEnvelope<String> read, Map<String, StreamMarks> marks) {
             return new SagaEnvelope<>(SAGA_ID, read.state(), read.status(), read.version() + 1, read.timers(), read.streamWatermarks(), null,
-                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks);
+                    read.createdAt(), NOW.plusSeconds(60), null, read.currentStep(), read.started(), read.failure(), marks, null);
         }
 
         @Test
@@ -861,7 +867,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(pendingSinceMarks, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -877,7 +883,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(pendingSinceMarks, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertAll(
@@ -914,7 +920,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(marks, 1), 0);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, precise.truncatedTo(ChronoUnit.MILLIS)));
@@ -930,20 +936,20 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(later, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(6L, since6));
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(6L, since6));
         }
 
         @Test
         void a_save_with_nothing_pending_takes_away_the_pending_since_the_document_had() {
             // Given
             save(instanceWith(pendingSinceMarks, 1), 0);
-            SagaEnvelope<String> before = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> before = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // When
             save(instanceWith(MARKS, 2), 1);
 
             // Then
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(before.streamMarks().get(STREAM_ID).pendingSince()).isNotEmpty(),
                     () -> assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEmpty()
@@ -954,13 +960,13 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         void a_write_without_the_state_stores_the_pending_since_and_leaves_the_state_where_it_was() {
             // Given
             save(instanceWith(MARKS, 1), 0);
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // When
-            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, pendingSinceMarks), read.version());
+            boolean written = SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, withMarks(read, pendingSinceMarks), read.version());
 
             // Then
-            SagaEnvelope<String> after = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> after = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(written).isTrue(),
                     () -> assertThat(after.streamMarks()).isEqualTo(pendingSinceMarks),
@@ -974,13 +980,13 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             Map<String, StreamMarks> insertedMarks = Map.of(STREAM_ID,
                     new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(PLACED_TYPE, List.of(1L)), List.of(), Map.of(1L, since1)));
             SagaEnvelope<String> inserted = new SagaEnvelope<>(SAGA_ID, "initial", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null,
-                    NOW, NOW, null, null, false, null, insertedMarks);
+                    NOW, NOW, null, null, false, null, insertedMarks, null);
 
             // When
-            boolean written = stateStore.compareAndSaveWithoutState(SAGA_ID, inserted, 0);
+            boolean written = SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, inserted, 0);
 
             // Then
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(written).isTrue(),
                     () -> assertThat(read.streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(1L, since1))
@@ -991,13 +997,13 @@ class SpringMongoSagaStateStoreStreamMarksTest {
         void a_write_without_the_state_that_carries_the_marks_over_keeps_the_pending_since() {
             // Given
             save(instanceWith(pendingSinceMarks, 1), 0);
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // When
-            stateStore.compareAndSaveWithoutState(SAGA_ID, withMarks(read, read.streamMarks()), read.version());
+            SagaEnvelopes.of(stateStore, null).compareAndSaveWithoutState(SAGA_ID, withMarks(read, read.streamMarks()), read.version());
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(pendingSinceMarks);
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks()).isEqualTo(pendingSinceMarks);
         }
     }
 
@@ -1030,7 +1036,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithPendingAndNoPendingSince(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
             // Then
             assertEmptyPendingSinceAndOtherMarksIntact(read);
@@ -1042,7 +1048,7 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             mongoOperations.insert(documentWithPendingAndNoPendingSince(), COLLECTION);
 
             // When
-            SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
             // Then
             assertEmptyPendingSinceAndOtherMarksIntact(read);
@@ -1059,7 +1065,139 @@ class SpringMongoSagaStateStoreStreamMarksTest {
             save(instanceWith(marks, 2), 1);
 
             // Then
-            assertThat(stateStore.find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, since));
+            assertThat(SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow().streamMarks().get(STREAM_ID).pendingSince()).isEqualTo(Map.of(4L, since));
+        }
+    }
+
+    @Nested
+    @DisplayName("when the instances that lose a version on a downgrade are listed")
+    class WhenTheInstancesThatLoseAVersionOnADowngradeAreListed {
+
+        private static final String GUIDE = "doc/migration/upgrading-to-0.35.0.md";
+        private static final String GUIDE_ANCHOR = "so it lists more instances than the ones that lose one:";
+        private static final String GUIDE_UPDATE_ANCHOR = "Give every `ACTIVE_MARKED` instance back its plain status before a 0.34.0 node starts:";
+        private static final Map<String, StreamMarks> LEGACY_FAILED_ONLY_MARKS = Map.of(
+                STREAM_ID, new StreamMarks(3, Map.of(PLACED_TYPE, new TypeMark(12, List.of(9L, 10L, 11L), 8)), Map.of(), List.of(5L, 7L)),
+                "other", new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(), List.of()));
+
+        /**
+         * Reads the javascript block that follows the anchor sentence in the migration guide, so the tests fail when
+         * the guide changes. Never falls back to a default.
+         */
+        private static String guideBlockAfter(String anchorSentence) {
+            Path directory = Path.of("").toAbsolutePath();
+            while (directory != null && !Files.isRegularFile(directory.resolve(GUIDE))) {
+                directory = directory.getParent();
+            }
+            assertThat(directory).as("a directory above %s that holds %s", Path.of("").toAbsolutePath(), GUIDE).isNotNull();
+            String guide;
+            try {
+                guide = Files.readString(directory.resolve(GUIDE));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            int anchor = guide.indexOf(anchorSentence);
+            assertThat(anchor).as("the sentence \"%s\" in %s", anchorSentence, GUIDE).isNotNegative();
+            int fence = guide.indexOf("```javascript", anchor);
+            assertThat(fence).as("a fenced javascript block after the sentence \"%s\" in %s", anchorSentence, GUIDE).isNotNegative();
+            int blockEnd = guide.indexOf("```", fence + 3);
+            assertThat(blockEnd).as("the closing fence of the javascript block after \"%s\" in %s", anchorSentence, GUIDE).isNotNegative();
+            return guide.substring(fence + "```javascript".length(), blockEnd);
+        }
+
+        /** The object literal that opens at the first brace at or after {@code from}, braces balanced, and the index after it. */
+        private static String[] objectAfter(String block, int from, String what) {
+            int start = block.indexOf('{', from);
+            assertThat(start).as("the object after %s in %s", what, GUIDE).isNotNegative();
+            int depth = 0;
+            for (int i = start; i < block.length(); i++) {
+                char c = block.charAt(i);
+                if (c == '{') {
+                    depth++;
+                } else if (c == '}' && --depth == 0) {
+                    return new String[]{block.substring(start, i + 1), String.valueOf(i + 1)};
+                }
+            }
+            throw new AssertionError("the object after " + what + " in " + GUIDE + " has no closing brace");
+        }
+
+        private static String guideFilter() {
+            String block = guideBlockAfter(GUIDE_ANCHOR);
+            int find = block.indexOf(".find(");
+            assertThat(find).as("a .find( call in the javascript block after the anchor in %s", GUIDE).isNotNegative();
+            return objectAfter(block, find, ".find(")[0];
+        }
+
+        /** The filter and the update of the {@code updateMany} in the guide's block that gives marked instances back their plain status. */
+        private static String[] guideUpdateMany() {
+            String block = guideBlockAfter(GUIDE_UPDATE_ANCHOR);
+            int updateMany = block.indexOf(".updateMany(");
+            assertThat(updateMany).as("an .updateMany( call in the javascript block after the update anchor in %s", GUIDE).isNotNegative();
+            String[] filter = objectAfter(block, updateMany, ".updateMany(");
+            String[] update = objectAfter(block, Integer.parseInt(filter[1]), "the .updateMany( filter");
+            return new String[]{filter[0], update[0]};
+        }
+
+        private void saveWithId(String id, Map<String, StreamMarks> marks) {
+            SagaEnvelope<String> envelope = new SagaEnvelope<>(id, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM_ID, 12L, "other", 1L), null,
+                    NOW, NOW, null, null, true, null, marks, null);
+            assertThat(SagaEnvelopes.of(stateStore, null).compareAndSave(id, envelope, 0)).isTrue();
+        }
+
+        private Document rawDocument(String id) {
+            return requireNonNull(mongoOperations.findOne(Query.query(where("_id").is(id)), Document.class, COLLECTION));
+        }
+
+        private void saveQuarantinedWithMarks(String id) {
+            saveWithId(id, PENDING_MARKS);
+            mongoOperations.getCollection(COLLECTION).updateOne(Document.parse("{ _id: '" + id + "' }"), Document.parse("{ $set: { status: 'QUARANTINED' } }"));
+        }
+
+        @Test
+        void the_guide_filter_lists_exactly_the_marked_instances_with_a_pending_or_legacy_failed_version() {
+            // Given
+            saveWithId("1", PENDING_MARKS);
+            saveWithId("2", LEGACY_FAILED_ONLY_MARKS);
+            saveWithId("3", MARKS);
+            saveWithId("4", Map.of());
+            saveQuarantinedWithMarks("5");
+
+            // When
+            List<Document> listed = mongoOperations.find(new BasicQuery(guideFilter(), "{ state: 0 }"), Document.class, COLLECTION);
+
+            // Then
+            assertAll(
+                    () -> assertThat(rawDocument("1").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("2").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("3").getString("status")).isEqualTo("ACTIVE_MARKED"),
+                    () -> assertThat(rawDocument("4").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("5").getString("status")).isEqualTo("QUARANTINED"),
+                    () -> assertThat(listed).extracting(d -> d.getString("_id")).containsExactlyInAnyOrder("1", "2")
+            );
+        }
+        @Test
+        void the_guide_update_many_gives_only_the_active_marked_instances_their_plain_status_back() {
+            // Given
+            saveWithId("1", PENDING_MARKS);
+            saveWithId("2", LEGACY_FAILED_ONLY_MARKS);
+            saveWithId("3", MARKS);
+            saveWithId("4", Map.of());
+            saveQuarantinedWithMarks("5");
+            Document activeBefore = rawDocument("4");
+            Document quarantinedBefore = rawDocument("5");
+            String[] updateMany = guideUpdateMany();
+
+            // When
+            mongoOperations.getCollection(COLLECTION).updateMany(Document.parse(updateMany[0]), Document.parse(updateMany[1]));
+
+            // Then
+            assertAll(
+                    () -> assertThat(rawDocument("1").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("2").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("3").getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(rawDocument("4")).isEqualTo(activeBefore),
+                    () -> assertThat(rawDocument("5")).isEqualTo(quarantinedBefore)
+            );
         }
     }
 }

@@ -16,6 +16,9 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -75,7 +78,7 @@ class SagaTimerErrorIsolationTest {
     @Test
     void costs_only_its_own_instance_and_the_rest_of_the_batch_still_fires() {
         SagaStateStore<String> backing = SagaStateStore.inMemory();
-        backing.compareAndSave("throws-an-error", envelope("throws-an-error"), 0);
+        SagaEnvelopes.of(backing, null).compareAndSave("throws-an-error", envelope("throws-an-error"), 0);
         seedHealthy(backing, 3);
         SagaStateStore<String> store = failingInstanceFirst(backing, "throws-an-error");
         List<CancelOrder> dispatched = new ArrayList<>();
@@ -96,7 +99,7 @@ class SagaTimerErrorIsolationTest {
         // That loop catches Throwable, and nothing dispatching here is what says it neither retried the error nor
         // mapped it into something the guard would have read as the instance's.
         SagaStateStore<String> backing = SagaStateStore.inMemory();
-        backing.compareAndSave("ran-out-of-memory", envelope("ran-out-of-memory"), 0);
+        SagaEnvelopes.of(backing, null).compareAndSave("ran-out-of-memory", envelope("ran-out-of-memory"), 0);
         seedHealthy(backing, 3);
         SagaStateStore<String> store = failingInstanceFirst(backing, "ran-out-of-memory");
         List<CancelOrder> dispatched = new ArrayList<>();
@@ -112,7 +115,7 @@ class SagaTimerErrorIsolationTest {
     }
 
     private static void seedHealthy(SagaStateStore<String> store, int count) {
-        IntStream.range(0, count).forEach(i -> store.compareAndSave("healthy-" + i, envelope("healthy-" + i), 0));
+        IntStream.range(0, count).forEach(i -> SagaEnvelopes.of(store, null).compareAndSave("healthy-" + i, envelope("healthy-" + i), 0));
     }
 
     /**
@@ -128,19 +131,34 @@ class SagaTimerErrorIsolationTest {
     private static SagaStateStore<String> failingInstanceFirst(SagaStateStore<String> delegate, String failingSagaId) {
         return new SagaStateStore<>() {
             @Override
-            public Optional<SagaEnvelope<String>> find(String sagaId) {
+            public SagaStateCodec<String> stateCodec() {
+                return delegate.stateCodec();
+            }
+
+            @Override
+            public Optional<StoredSaga> find(String sagaId) {
                 return delegate.find(sagaId);
             }
 
             @Override
-            public boolean compareAndSave(String sagaId, SagaEnvelope<String> envelope, long expectedVersion) {
-                return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+            public Optional<StoredSaga> findWithoutState(String sagaId) {
+                return delegate.findWithoutState(sagaId);
             }
 
             @Override
-            public List<SagaEnvelope<String>> findWithDueTimers(Instant now, int limit) {
+            public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+                return delegate.compareAndSave(saga, expectedVersion);
+            }
+
+            @Override
+            public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+                return delegate.compareAndSaveWithoutState(saga, expectedVersion);
+            }
+
+            @Override
+            public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
                 return delegate.findWithDueTimers(now, limit).stream()
-                        .sorted(Comparator.comparing(envelope -> envelope.sagaId().equals(failingSagaId) ? 0 : 1))
+                        .sorted(Comparator.comparing(saga -> saga.sagaId().equals(failingSagaId) ? 0 : 1))
                         .toList();
             }
 
@@ -157,7 +175,7 @@ class SagaTimerErrorIsolationTest {
 
     private static SagaEnvelope<String> envelope(String sagaId) {
         return new SagaEnvelope<>(sagaId, "waiting", SagaStatus.ACTIVE, 1, List.of(new TimerEntry(TIMER, LONG_OVERDUE)),
-                Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null);
+                Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null, true, null, Map.of(), null);
     }
 
     private SagaExecution<OrderEvent, String, CancelOrder> execution(SagaStateStore<String> store,
@@ -174,7 +192,7 @@ class SagaTimerErrorIsolationTest {
                 })
                 .build();
         SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), 10, 50);
-        return new SagaExecution<>("saga-timer-error-isolation", saga, store, dispatcher, converter, config, event -> true);
+        return new SagaExecution<>("saga-timer-error-isolation", saga, store, dispatcher, converter, config);
     }
 
     @FunctionalInterface

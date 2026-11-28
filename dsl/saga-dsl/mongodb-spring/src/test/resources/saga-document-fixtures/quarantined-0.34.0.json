@@ -1,0 +1,48 @@
+{
+  "_id": "saga-quarantined-0.34.0",
+  "status": "QUARANTINED",
+  "version": {
+    "$numberLong": "5"
+  },
+  "timers": [
+    {
+      "name": "reminder",
+      "firesAtEpochMilli": {
+        "$numberLong": "1800000000000"
+      }
+    }
+  ],
+  "nextTimerFiresAt": {
+    "$numberLong": "1800000000000"
+  },
+  "streamWatermarks": {
+    "stream-a": {
+      "$numberLong": "15"
+    }
+  },
+  "positionWatermark": {
+    "$numberLong": "15"
+  },
+  "createdAt": {
+    "$numberLong": "1772600767123"
+  },
+  "updatedAt": {
+    "$numberLong": "1772601377456"
+  },
+  "failureInput": "input-55",
+  "failureFirstFailedAt": {
+    "$numberLong": "1772601000250"
+  },
+  "failureType": "java.lang.IllegalStateException",
+  "failurePosition": {
+    "$numberLong": "55"
+  },
+  "failureMessage": "order is already shipped",
+  "state": {
+    "orderId": "order-6",
+    "customer": "frank",
+    "quantity": {
+      "$numberInt": "4"
+    }
+  }
+}

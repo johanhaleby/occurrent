@@ -7,6 +7,11 @@ Date: 2026-08-01
 Accepted. This is the first slice of #481. The `occurrent.subscription.mode` property that motivates it
 follows separately.
 
+Superseded in part by [ADR 172](0172-how-the-spring-boot-starters-find-and-start-annotated-handlers.md#3-a-write-through-the-application-service-waits-for-the-synchronous-handlers)
+on a stopped synchronous subscription. Since 0.35.0 the synchronous subscription model refuses a write through the
+application service while it is stopped and has a handler registered, and a write whose events a paused synchronous
+subscription matches, where the passage below says the write succeeds and the projection doesn't run.
+
 ## Context
 
 ADR 82 shipped deny-by-default subscription testing: stop every subscription, then let each test name the

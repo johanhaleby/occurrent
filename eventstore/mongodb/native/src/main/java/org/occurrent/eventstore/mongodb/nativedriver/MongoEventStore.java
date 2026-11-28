@@ -44,7 +44,7 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
@@ -128,7 +128,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final boolean requireBackfilledPosition;
     private final boolean resumeFromMarkerVersions;
     private final boolean spreadTypeMarkerWrites;
-    private final Deployment deployment;
+    private final MongoDeployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -183,7 +183,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (dcbEnabled && !resumeFromMarkerVersions) {
             log.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(database::runCommand) : Deployment.OTHER;
+        this.deployment = dcbEnabled ? MongoDeployment.detect(database::runCommand) : MongoDeployment.OTHER;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
         // position updateEvent dropped has no position field either, so that check would fail startup
@@ -408,7 +408,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private DcbEventStream readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
-        if (deployment == Deployment.MONGOS && ClientSessionHolder.get() == null) {
+        if (deployment == MongoDeployment.MONGOS && ClientSessionHolder.get() == null) {
             // Causally consistent so the events read waits on a commit still prepared on their shard that the markers read already shows
             try (ClientSession session = mongoClient.startSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
                 return readWithoutMarkerVersions(criteria, options, () -> consistencyToken(session, criteria), () -> currentPosition(session), query -> eventCollection.find(session, query));
@@ -473,7 +473,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             if (!options.firstOperationOfTransaction() || !ambientSession.hasActiveTransaction()) {
                 return markerVersionsUnavailable(criteria, options, "The read runs inside a session or transaction the caller owns, whose writes may still abort", null);
             }
-            if (deployment == Deployment.REPLICA_SET) {
+            if (deployment == MongoDeployment.REPLICA_SET) {
                 return readMarkerVersionsInSession(ambientSession, criteria, options);
             }
             // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes

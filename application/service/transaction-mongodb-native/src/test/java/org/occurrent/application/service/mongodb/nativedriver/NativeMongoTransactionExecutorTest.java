@@ -491,6 +491,12 @@ class NativeMongoTransactionExecutorTest {
     }
 
     private static final class FailingOnceDispatcher implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicBoolean failed = new AtomicBoolean();
         private final RuntimeException failure;
 
@@ -512,6 +518,12 @@ class NativeMongoTransactionExecutorTest {
     }
 
     private record RunningDispatcher(Runnable onDispatch) implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         @Override
         public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             onDispatch.run();

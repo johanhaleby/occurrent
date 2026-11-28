@@ -2,7 +2,6 @@ package org.occurrent.subscription.api.blocking.internal;
 
 import net.jqwik.api.Arbitraries;
 import net.jqwik.api.Arbitrary;
-import net.jqwik.api.Disabled;
 import net.jqwik.api.Example;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
@@ -30,8 +29,11 @@ class BlockingHandoverLifecycleTest {
                 net.jqwik.api.Tuple.of(1, Arbitraries.just(ACCEPT_COPY_OF_HISTORY)),
                 net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(FAIL_FOLD)),
                 net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(FAIL_CALLBACK)),
-                net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(INTERRUPT)));
-        return Arbitraries.of(true, false).flatMap(live -> action.list().ofMinSize(2).ofMaxSize(9).map(actions -> new Script(live, actions)));
+                net.jqwik.api.Tuple.of(withFailures ? 1 : 0, Arbitraries.just(INTERRUPT)),
+                net.jqwik.api.Tuple.of(2, Arbitraries.just(HOLD_DRAIN)),
+                net.jqwik.api.Tuple.of(2, Arbitraries.just(CATCH_UP_CAUGHT_UP)),
+                net.jqwik.api.Tuple.of(1, Arbitraries.just(FEED_FROM_HANDLER)));
+        return Arbitraries.of(true, false).flatMap(live -> action.list().ofMinSize(2).ofMaxSize(12).map(actions -> new Script(live, actions)));
     }
 
     @Provide
@@ -44,7 +46,6 @@ class BlockingHandoverLifecycleTest {
         return scripts(true);
     }
 
-    @Disabled("#1293 item 32: a catch-up that is cancelled or stopped once its history has been read still returns true and writes the marker. Shrunk live [CATCH_UP, STEP, STEP, STEP, CATCH_UP, CANCEL]")
     @Property(tries = 500)
     void the_marker_is_written_only_for_a_catch_up_nothing_cancelled(@ForAll("withoutFailures") Script script) {
         Trace trace = BlockingHandoverRunner.run(script);
@@ -52,14 +53,12 @@ class BlockingHandoverLifecycleTest {
         assertThat(trace.notes()).as(script + " " + trace).isEmpty();
     }
 
-    @Disabled("#1293 item 32: a catch-up that is cancelled or stopped once its history has been read still returns true. Shrunk live [CATCH_UP, STEP, STEP, STEP, CATCH_UP, CANCEL]")
     @Property(tries = 500)
     void a_catch_up_that_was_cancelled_before_it_returned_does_not_return_true(@ForAll("withoutFailures") Script script) {
         Trace trace = BlockingHandoverRunner.run(script);
         assertThat(BlockingHandoverSpec.stoppedCatchUpViolations(trace)).as(script + " " + trace).isEmpty();
     }
 
-    @Disabled("#1293 item 32: the catch-up returns true although keepReplaying turned false before the drain")
     @Example
     void a_cancel_at_the_drain_does_not_let_the_catch_up_return_true() {
         Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, STEP, STEP, STEP, CANCEL)));
@@ -85,12 +84,60 @@ class BlockingHandoverLifecycleTest {
         assertThat(BlockingHandoverSpec.deliveryViolations(trace)).as(script + " " + trace).isEmpty();
     }
 
-    @Disabled("#1293 item 32: the marker is written although keepReplaying turned false before the drain")
     @Example
     void a_cancel_at_the_drain_writes_no_marker() {
         Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, STEP, STEP, STEP, CANCEL)));
         assertThat(BlockingHandoverSpec.markerViolations(trace)).isEmpty();
         assertThat(trace.notes()).isEmpty();
+    }
+
+    @Property(tries = 500)
+    void a_payload_offered_after_a_drain_started_is_delivered_after_every_payload_offered_before_it_and_no_two_drains_overlap(@ForAll("withFailures") Script script) {
+        Trace trace = BlockingHandoverRunner.run(script);
+        assertThat(BlockingHandoverSpec.orderViolations(trace)).as(script + " " + trace).isEmpty();
+    }
+
+    @Example
+    void a_payload_fed_while_the_drain_delivers_is_delivered_behind_the_one_buffered_before_the_catch_up() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(ACCEPT_REPORTING, HOLD_DRAIN, CATCH_UP, STEP, STEP, STEP, STEP, ACCEPT_REPORTING)));
+        assertThat(trace.notes()).as("the held drain was released when the script ended").isEmpty();
+        assertThat(trace.drainStarts()).as("this catch-up's drain and the one of the clean catch-up the run ends with").hasSize(2);
+        assertThat(trace.offers()).hasSize(2);
+        BlockingHandoverSpec.Offer fedDuringTheDrain = trace.offers().get(1);
+        assertThat(fedDuringTheDrain.startedAt()).as("p1 was offered after the drain started").isGreaterThan(trace.drainStarts().get(0));
+        assertThat(fedDuringTheDrain.deliveredWhenStarted()).as("what had been delivered when p1 was offered, with the drain held inside p0").doesNotContain("p0");
+        assertThat(BlockingHandoverSpec.orderViolations(trace)).as(trace.toString()).isEmpty();
+        assertThat(trace.delivered()).containsSubsequence("p0", "p1");
+    }
+
+    @Example
+    void a_catch_up_of_a_caught_up_source_that_comes_in_while_a_drain_is_held_does_not_deliver_next_to_it() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(ACCEPT_REPORTING, ACCEPT_REPORTING, HOLD_DRAIN, CATCH_UP_CAUGHT_UP, ACCEPT_REPORTING, CATCH_UP, STEP, STEP, STEP, STEP)));
+        assertThat(trace.drainStarts()).as("the drain of the caught-up catch-up was held when the second catch-up came in").isNotEmpty();
+        assertThat(trace.offers().get(2).deliveredWhenStarted()).as("p2 was offered while the drain was held inside p0").doesNotContain("p0");
+        assertThat(BlockingHandoverSpec.orderViolations(trace)).as(trace.toString()).isEmpty();
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).as(trace.toString()).isEmpty();
+    }
+
+    @Example
+    void a_payload_a_fold_feeds_during_the_drain_is_delivered_once_after_the_ones_the_drain_took() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(ACCEPT_REPORTING, ACCEPT_REPORTING, FEED_FROM_HANDLER, CATCH_UP_CAUGHT_UP)));
+        assertThat(trace.delivered()).filteredOn(payload -> !BlockingHandoverRunner.HISTORY.contains(payload)).containsExactly("p0", "p1", "f0");
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).as(trace.toString()).isEmpty();
+    }
+
+    @Example
+    void a_payload_that_reaches_deliver_ahead_of_one_offered_before_the_drain_is_a_violation() {
+        BlockingHandoverSpec.Offer older = new BlockingHandoverSpec.Offer("p0", "acceptReportingDelivery", "reported:true", false, 1);
+        BlockingHandoverSpec.Offer newer = new BlockingHandoverSpec.Offer("p1", "acceptReportingDelivery", "reported:true", false, 3);
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of("p1", "p0"), List.of(older, newer), List.of(), List.of(), List.of(), List.of(), List.of(2L), List.of());
+        assertThat(BlockingHandoverSpec.orderViolations(trace)).hasSize(1).first().asString().contains("p1").contains("p0");
+    }
+
+    @Example
+    void two_catch_ups_delivering_at_once_is_a_violation() {
+        Trace trace = new Trace(BlockingHandoverRunner.HISTORY, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of("two catch-ups were delivering at once"));
+        assertThat(BlockingHandoverSpec.orderViolations(trace)).hasSize(1);
     }
 
     @Example
@@ -111,6 +158,19 @@ class BlockingHandoverLifecycleTest {
     void a_fold_failure_in_the_catch_up_that_drains_a_payload_buffered_while_a_stopped_replay_was_open_counts_as_after_its_offer() {
         Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(CATCH_UP, CANCEL, ACCEPT_REPORTING, FAIL_FOLD)));
         assertThat(trace.offers()).hasSize(1).first().extracting(BlockingHandoverSpec.Offer::failureFiredAfterInItsCatchUp).isEqualTo(true);
+    }
+
+    @Example
+    void a_recording_callback_that_throws_changes_only_the_answer_of_its_own_payload_and_the_catch_up_writes_its_marker() {
+        Trace trace = BlockingHandoverRunner.run(new Script(false, List.of(ACCEPT_REPORTING, ACCEPT_COPY_OF_HISTORY, FAIL_CALLBACK, CATCH_UP)));
+
+        assertThat(trace.catchUps().get(0).result()).as("the catch-up that goes on past a throwing callback, which wrote its marker").isEqualTo("true");
+        assertThat(trace.offers()).extracting(BlockingHandoverSpec.Offer::payload, BlockingHandoverSpec.Offer::answer)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("p0", "reported:true"), org.assertj.core.groups.Tuple.tuple("h1", "refused:PreDispatchRefusalException"));
+        assertThat(trace.delivered()).as("every other payload is delivered once").containsExactlyInAnyOrder("h1", "h2", "p0");
+        assertThat(trace.offers()).as("a callback failure excuses no lost payload").noneMatch(BlockingHandoverSpec.Offer::failureFiredAfterInItsCatchUp);
+        assertThat(BlockingHandoverSpec.deliveryViolations(trace)).as(trace.toString()).isEmpty();
+        assertThat(BlockingHandoverSpec.markerViolations(trace)).isEmpty();
     }
 
     @Example

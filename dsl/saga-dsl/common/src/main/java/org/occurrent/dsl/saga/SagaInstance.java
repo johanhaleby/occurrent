@@ -31,9 +31,10 @@ import java.time.Instant;
  * redelivery watermarks, the pending timer names), which exists only so the executor is safe under at-least-once
  * delivery and means nothing outside it.
  * <p>
- * Note that {@link SagaEnvelope} implements this interface but stays the {@link SagaStateStore} type, so it still
- * exposes everything the executor needs. This interface narrows what an observing caller is handed. It does not put
- * the envelope's own components out of reach.
+ * {@link SagaEnvelope} implements this interface too. It is the runner's view of an instance, which
+ * {@link org.occurrent.dsl.saga.codec.SagaCodec} turns into the {@link org.occurrent.dsl.saga.codec.StoredSaga} a
+ * {@link SagaStateStore} persists, so it exposes everything the executor needs. This interface narrows what an
+ * observing caller is handed. It does not put the envelope's own components out of reach.
  */
 public interface SagaInstance {
 

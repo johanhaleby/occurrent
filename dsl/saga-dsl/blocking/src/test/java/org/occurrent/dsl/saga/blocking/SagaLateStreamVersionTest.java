@@ -16,6 +16,9 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.codec.StoredSaga;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -164,7 +167,7 @@ class SagaLateStreamVersionTest {
     }
 
     private SagaEnvelope<Basket> stored() {
-        return store.find(BASKET).orElseThrow();
+        return SagaEnvelopes.of(store, null).find(BASKET).orElseThrow();
     }
 
     private List<String> warnings() {
@@ -390,7 +393,7 @@ class SagaLateStreamVersionTest {
                     throw new IllegalStateException("cannot reserve two");
                 }
                 issued.add(command);
-            }, converter, SagaRunnerConfig.defaults().withReorderWindow(2).withQuarantineAfter(budget), event -> true, now::get);
+            }, converter, SagaRunnerConfig.defaults().withReorderWindow(2).withQuarantineAfter(budget), now::get);
         }
 
         private CloudEvent itemAddedAt(long streamVersion, String item) {
@@ -670,8 +673,8 @@ class SagaLateStreamVersionTest {
         @BeforeEach
         void storeAnInstanceThatHasFoldedUpToVersion5() {
             SagaEnvelope<Basket> legacy = new SagaEnvelope<>(BASKET, new Basket(1, false), SagaStatus.ACTIVE, 1, List.of(),
-                    Map.of(STREAM, 5L), null, NOW, NOW, null, null, true, null);
-            assertThat(store.compareAndSave(BASKET, legacy, 0)).isTrue();
+                    Map.of(STREAM, 5L), null, NOW, NOW, null, null, true, null, Map.of(), null);
+            assertThat(SagaEnvelopes.of(store, null).compareAndSave(BASKET, legacy, 0)).isTrue();
         }
 
         @Test
@@ -809,7 +812,7 @@ class SagaLateStreamVersionTest {
         private SagaExecution<BasketEvent, Basket, BasketCommand> afterVersionsOneAndTenApplied() {
             refusing = new RefusesToLoadTheState(store);
             SagaExecution<BasketEvent, Basket, BasketCommand> execution = new SagaExecution<>("baskets", basketSaga(), refusing,
-                    command -> issued.add(command), converter, FAST_POLL_CONFIG.withReorderWindow(2), event -> true);
+                    command -> issued.add(command), converter, FAST_POLL_CONFIG.disableQuarantine().withReorderWindow(2));
             execution.onCloudEvent(streamKeyed(STREAM, 1, added("one")));
             execution.onCloudEvent(streamKeyed(STREAM, 10, added("ten")));
             refusing.refuseFullLoads();
@@ -933,7 +936,17 @@ class SagaLateStreamVersionTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<Basket>> find(String sagaId) {
+        public SagaStateCodec<Basket> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             if (refusing) {
                 throw loadFailure;
             }
@@ -941,17 +954,17 @@ class SagaLateStreamVersionTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<Basket>> findWithoutState(String sagaId) {
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
             return delegate.find(sagaId);
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<Basket> envelope, long expectedVersion) {
-            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSave(saga, expectedVersion);
         }
 
         @Override
-        public List<SagaEnvelope<Basket>> findWithDueTimers(Instant now, int limit) {
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 

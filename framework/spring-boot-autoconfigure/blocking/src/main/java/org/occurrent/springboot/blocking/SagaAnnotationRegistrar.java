@@ -23,6 +23,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
 import org.occurrent.dsl.saga.blocking.RedeliveryDetection;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
@@ -30,6 +31,7 @@ import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.springboot.common.internal.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.internal.PushCatchupStatusImpl;
@@ -43,6 +45,7 @@ import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
@@ -57,10 +60,10 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
 
@@ -77,6 +80,7 @@ class SagaAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
+    private final StartupSubscribes startupSubscribes;
     // Resolves the competing-consumer strategy lazily, on the first checkpoint write a catch-up-then-push saga makes,
     // so this registrar does not force the strategy bean into existence while singletons are still being instantiated
     // (ADR 116). Separate from resolveSagaCompetingConsumerStrategy below, which gates the saga timer poller and is
@@ -96,7 +100,8 @@ class SagaAnnotationRegistrar {
     // registration that shutdown has begun even in principle.
     private volatile boolean closing = false;
 
-    SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
+    SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, StartupSubscribes startupSubscribes) {
+        this.startupSubscribes = startupSubscribes;
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
@@ -146,14 +151,17 @@ class SagaAnnotationRegistrar {
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
         // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
-        SagaRunnerConfig config = withQuarantineBudget(SagaRunnerConfig.defaults(), occurrentProperties().getSaga().getQuarantineAfter())
+        SagaRunnerConfig config = withQuarantine(SagaRunnerConfig.defaults(), occurrentProperties().getSaga(),
+                        applicationContext.getEnvironment().getProperty(QUARANTINE_AFTER_PROPERTY))
                 .withTimerPollInterval(sagaTimerPollInterval())
                 .withRedeliveryDetection(redeliveryDetectionOf(annotation));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
+        SagaRunner<E, C> withStrategy = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
+        rejectStoreThatCannotQuarantine(id, config, stateStore);
         // Effectively final, so a withheld push saga can close over it and run the same registration later.
-        final SagaRunner<E, C> runner = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
+        final SagaRunner<E, C> runner = withStrategy;
 
         // A saga replaying its history from the beginning defaults to starting in the background, exactly as
         // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
@@ -199,21 +207,23 @@ class SagaAnnotationRegistrar {
         }
 
         refuseIfSagaSubscriptionBeanNameIsTaken(id);
-        AtomicReference<SagaSubscription> ran = new AtomicReference<>();
-        BackgroundStartup.subscribe(annotation.startupMode(), () -> ran.set(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted)));
-        SagaSubscription sagaSubscription = ran.get();
-        sagaSubscriptions.add(sagaSubscription);
-        // Reached on the refresh thread at startup, and from postProcessAfterInitialization for a saga on a bean
-        // Spring Boot builds later, which is the path that can overlap close().
-        if (closing) {
-            stopOwnRegistration(sagaSubscription, subscribable);
-            return;
-        }
-        registerSagaSubscriptionSingleton(id, sagaSubscription);
-        if (push) {
-            watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
-        }
-        publishSagaInstances(id, sagaSubscription.instances());
+        // Held until the startup scan is done, like every other asynchronous start, since a saga dispatches commands
+        // that write
+        BackgroundStartup.subscribe(startupSubscribes, annotation.startupMode(), () -> {
+            SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
+            sagaSubscriptions.add(sagaSubscription);
+            // Reached on the refresh thread at startup, and from postProcessAfterInitialization for a saga on a bean
+            // Spring Boot builds later, which is the path that can overlap close().
+            if (closing) {
+                stopOwnRegistration(sagaSubscription, subscribable);
+                return;
+            }
+            registerSagaSubscriptionSingleton(id, sagaSubscription);
+            if (push) {
+                watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
+            }
+            publishSagaInstances(id, sagaSubscription.instances());
+        });
     }
 
     // Under startupMode = BACKGROUND nobody joins the replay, so a failure would reach no one. Worse, the model forgets
@@ -230,7 +240,8 @@ class SagaAnnotationRegistrar {
             } catch (RuntimeException | Error e) {
                 log.error("The background catch-up of saga {} failed. It has replayed no history and refuses every "
                         + "live event, so the source redelivers rather than losing them. Fix the cause, then cancel "
-                        + "the subscription and start it again.", id, e);
+                        + "the subscription and start it again. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT,
+                        id, e);
                 withPushCatchupStatus(status -> status.recordFailure(id, e));
             }
         });
@@ -635,17 +646,49 @@ class SagaAnnotationRegistrar {
         return (CommandDispatcher<C>) dispatcherBean;
     }
 
+    // The runner refuses such a store too, but names only SagaRunnerConfig.disableQuarantine(), which an application on
+    // the starter does not call. The atomic transitions are asked here too, since a push saga under manual mode runs
+    // the runner only when the application starts it, long after the context has started
+    private static void rejectStoreThatCannotQuarantine(String id, SagaRunnerConfig config, SagaStateStore<?> stateStore) {
+        if (config.quarantineAfter().isEmpty()) {
+            return;
+        }
+        if (stateStore instanceof SagaStateStoreSkippedInputs skippedInputs) {
+            skippedInputs.requireAtomicTransitions();
+            return;
+        }
+        throw new IllegalStateException("@Saga '%s' quarantines an instance that keeps failing, and its state store %s does not implement SagaStateStoreSkippedInputs, so a quarantined instance could neither record the inputs it skips nor be released. Implement SagaStateStoreSkippedInputs on the store, as the in-memory and MongoDB stores do, or turn quarantine off with occurrent.saga.quarantine-enabled=false.".formatted(id, stateStore.getClass().getName()));
+    }
+
     private Duration sagaTimerPollInterval() {
         return occurrentProperties().getSaga().getTimerPollInterval();
+    }
+
+    static final String QUARANTINE_AFTER_PROPERTY = "occurrent.saga.quarantine-after";
+
+    static SagaRunnerConfig withQuarantine(SagaRunnerConfig config, OccurrentProperties.SagaProperties properties) {
+        return withQuarantine(config, properties, null);
+    }
+
+    // rawQuarantineAfter is the property as written, since Spring binds a blank value to null, the same as one left out
+    static SagaRunnerConfig withQuarantine(SagaRunnerConfig config, OccurrentProperties.SagaProperties properties, @Nullable String rawQuarantineAfter) {
+        if (!properties.isQuarantineEnabled()) {
+            return config.disableQuarantine();
+        }
+        if (rawQuarantineAfter != null && rawQuarantineAfter.isBlank()) {
+            throw new IllegalArgumentException(QUARANTINE_AFTER_PROPERTY + " is blank. A blank value kept quarantine off in 0.34.0, and 0.35.0 refuses it instead of quarantining after the default of 5m. Set occurrent.saga.quarantine-enabled=false to keep quarantine off, or leave " + QUARANTINE_AFTER_PROPERTY + " out for the default.");
+        }
+        return withQuarantineBudget(config, properties.getQuarantineAfter());
     }
 
     // Zero is refused because a reader can take it to mean "never" or "immediately"
     static SagaRunnerConfig withQuarantineBudget(SagaRunnerConfig config, @Nullable Duration configured) {
         if (configured == null) {
-            return config.disableQuarantine();
+            return new SagaRunnerConfig(config.timerPollInterval(), config.timerBatchLimit(), config.maxCasAttempts(), config.redeliveryDetection(),
+                    Optional.of(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER), config.reorderWindow());
         }
         if (configured.isZero() || configured.isNegative()) {
-            throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out to keep quarantine off.");
+            throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out for the default of 5m, or set occurrent.saga.quarantine-enabled=false to turn quarantine off.");
         }
         return config.withQuarantineAfter(configured);
     }

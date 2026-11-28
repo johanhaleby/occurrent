@@ -39,7 +39,11 @@ public enum RedeliveryDetection {
      * Take the event anyway, logging a warning the first time. Choose this for a feed that genuinely carries no stream
      * key, which is usually another application's broker feeding a {@link Catchup#NONE} saga, and only when every
      * command the saga issues is safe to receive more than once, since a redelivery runs every reaction again. This is
-     * the same duplication {@link #REQUIRED} exists to refuse, accepted knowingly rather than quietened.
+     * the same duplication {@link #REQUIRED} exists to refuse, accepted knowingly rather than quietened. Releasing a
+     * quarantined instance can also apply such an input again, when the instance applied the same event before it was
+     * quarantined. Two releases of one instance that overlap, two {@code release} calls or a call and the timer poller,
+     * can each dispatch the commands of the same held input, as for an input of any kind, and the stored state takes it
+     * once.
      */
     BEST_EFFORT
 }

@@ -136,13 +136,19 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
         @Nullable Function<List<E>, Mono<Void>> sideEffect = options.sideEffect();
-        boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable DcbReadOptions readOptions = readOptions(options);
         boolean versionsRequested = options.versionsRequested();
 
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        return Mono.defer(() -> {
+        // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or before
+        // the first synchronous handler registered answers for the moment it runs. Closed before the result or the
+        // error reaches the subscriber, and when building the rest throws, so a pause or a stop that the subscriber
+        // makes once the write is done doesn't wait for it.
+        // The side effect runs after the write check closed, so one that pauses or stops a subscription model, or
+        // waits for something that does, never waits for this write
+        return Mono.using(() -> synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite(), writeCheck -> {
+            boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
             // Given what the executor set up for the attempt the read runs in
             Function<ExecutorScope, Mono<Decision<E>>> readAndDecide = scope -> Mono.defer(() -> readOptions == null
@@ -157,7 +163,9 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                             return Mono.empty();
                         }
                         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-                        return Mono.just(new Decision<>(eventStream, newDomainEvents, addTags(options.tagGenerator(), newDomainEvents, cloudEvents)));
+                        List<CloudEvent> taggedEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
+                        writeCheck.check(taggedEvents);
+                        return Mono.just(new Decision<>(eventStream, newDomainEvents, taggedEvents));
                     });
             BiFunction<Decision<E>, Boolean, Mono<Result<E>>> appendAndDispatch = (decision, openedTransaction) -> Mono.defer(() -> {
                 if (failureAfterWrite.isHeld()) {
@@ -191,14 +199,14 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     .retryWhen(retry)
                     // An executor can swallow the stand-in and return a value, which says nothing about the failure
                     .filter(result -> !failureAfterWrite.isHeld())
-                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()))
-                    .flatMap(result -> {
-                        if (sideEffect == null) {
-                            return Mono.just(result.appendResult());
-                        }
-                        return Mono.defer(() -> sideEffect.apply(result.newDomainEvents())).thenReturn(result.appendResult());
-                    });
-        });
+                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()));
+        }, ReactiveSynchronousEventDispatcher.WriteCheck::close, true)
+                .flatMap(result -> {
+                    if (sideEffect == null) {
+                        return Mono.just(result.appendResult());
+                    }
+                    return Mono.defer(() -> sideEffect.apply(result.newDomainEvents())).thenReturn(result.appendResult());
+                });
     }
 
     private Mono<Boolean> reportsTransaction(boolean dispatchSynchronously) {

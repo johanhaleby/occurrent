@@ -349,6 +349,12 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         AtomicBoolean refuseAfterAppend = new AtomicBoolean();
         DcbSnapshotInvalidException refusal = new DcbSnapshotInvalidException(criteria(), DcbMarkerVersions.of(criteria(), Map.of("tag:name:" + ACCOUNT, new DcbMarkerVersions.MarkerVersion("epoch", 1, 0))), "refused by a synchronous subscription (test double)");
         ReactiveSynchronousEventDispatcher refusingDispatcher = new ReactiveSynchronousEventDispatcher() {
+
+            @Override
+            public WriteCheck beforeWrite() {
+                return WriteCheck.NONE;
+            }
+
             @Override
             public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
                 return refuseAfterAppend.get() ? Mono.error(refusal) : Mono.empty();
@@ -392,6 +398,12 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         AtomicBoolean callOtherService = new AtomicBoolean();
         Function<List<DomainEvent>, List<DomainEvent>> otherServicesFunction = events -> List.of();
         ReactiveSynchronousEventDispatcher dispatcherCallingOtherService = new ReactiveSynchronousEventDispatcher() {
+
+            @Override
+            public WriteCheck beforeWrite() {
+                return WriteCheck.NONE;
+            }
+
             @Override
             public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
                 return callOtherService.get() ? otherService.execute(criteria(), otherServicesFunction).then() : Mono.empty();
@@ -596,6 +608,12 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
             }
         };
         ReactiveSynchronousEventDispatcher dispatcherWithoutEffect = new ReactiveSynchronousEventDispatcher() {
+
+            @Override
+            public WriteCheck beforeWrite() {
+                return WriteCheck.NONE;
+            }
+
             @Override
             public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
                 return Mono.empty();

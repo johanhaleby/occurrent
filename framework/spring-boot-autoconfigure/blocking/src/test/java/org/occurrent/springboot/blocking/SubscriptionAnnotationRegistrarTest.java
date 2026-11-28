@@ -24,10 +24,12 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
@@ -43,7 +45,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -55,6 +59,12 @@ import static org.mockito.Mockito.when;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SubscriptionAnnotationRegistrarTest {
 
+    private static StartupSubscribes startedSubscribes() {
+        StartupSubscribes startupSubscribes = new StartupSubscribes();
+        startupSubscribes.start();
+        return startupSubscribes;
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void a_handler_asking_for_two_start_positions_leaves_the_valid_handler_before_it_unsubscribed_and_unreserved() throws Exception {
@@ -62,7 +72,7 @@ class SubscriptionAnnotationRegistrarTest {
         Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
         when(context.getBean(CloudEventConverter.class)).thenReturn(new NoopCloudEventConverter());
         when(context.getBean(Subscriptions.class)).thenReturn(subscriptions);
-        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class));
+        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class), startedSubscribes());
 
         TwoStartPositionsSubscriber bean = new TwoStartPositionsSubscriber();
         List<HandlerMethod> validFirst = List.of(
@@ -95,7 +105,7 @@ class SubscriptionAnnotationRegistrarTest {
         when(context.getBean(CloudEventConverter.class)).thenReturn(new NoopCloudEventConverter());
         when(context.getBean(Subscriptions.class)).thenReturn(subscriptions);
         when(context.getBean(DcbSubscriptions.class)).thenThrow(new NoSuchBeanDefinitionException(DcbSubscriptions.class));
-        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class));
+        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class), startedSubscribes());
 
         SubscriptionBesideDcbSubscriber bean = new SubscriptionBesideDcbSubscriber();
         List<HandlerMethod> validFirst = List.of(
@@ -117,6 +127,75 @@ class SubscriptionAnnotationRegistrarTest {
         verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
         assertThat(reservedHandlers).isEmpty();
         assertThat(claimedIds).isEmpty();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void an_asynchronous_subscription_registered_before_the_startup_subscribes_start_subscribes_when_they_start() throws Exception {
+        Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+        StartupSubscribes startupSubscribes = new StartupSubscribes();
+        SubscriptionAnnotationRegistrar registrar = registrarOver(subscriptions, mock(Subscriptions.class), startupSubscribes);
+
+        register(registrar, new AsynchronousAndSynchronousSubscriber(), "asynchronous");
+
+        verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+
+        startupSubscribes.start();
+
+        verify(subscriptions, times(1)).subscribe(eq("asynchronous-after-the-scan"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void an_asynchronous_subscription_registered_after_the_startup_subscribes_start_subscribes_at_once() throws Exception {
+        Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+        StartupSubscribes startupSubscribes = new StartupSubscribes();
+        startupSubscribes.start();
+        SubscriptionAnnotationRegistrar registrar = registrarOver(subscriptions, mock(Subscriptions.class), startupSubscribes);
+
+        register(registrar, new AsynchronousAndSynchronousSubscriber(), "asynchronous");
+
+        verify(subscriptions, times(1)).subscribe(eq("asynchronous-after-the-scan"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_synchronous_subscription_subscribes_at_once_also_before_the_startup_subscribes_start() throws Exception {
+        Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+        Subscriptions<TestEvent> synchronousSubscriptions = mock(Subscriptions.class);
+        SubscriptionAnnotationRegistrar registrar = registrarOver(subscriptions, synchronousSubscriptions, new StartupSubscribes());
+
+        register(registrar, new AsynchronousAndSynchronousSubscriber(), "synchronous");
+
+        verify(synchronousSubscriptions, times(1)).subscribe(eq("synchronous-at-once"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SubscriptionAnnotationRegistrar registrarOver(Subscriptions<TestEvent> subscriptions, Subscriptions<TestEvent> synchronousSubscriptions, StartupSubscribes startupSubscribes) {
+        ApplicationContext context = mock(ApplicationContext.class);
+        when(context.getBean(CloudEventConverter.class)).thenReturn(new NoopCloudEventConverter());
+        when(context.getBean(Subscriptions.class)).thenReturn(subscriptions);
+        when(context.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class)).thenReturn(synchronousSubscriptions);
+        return new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class), startupSubscribes);
+    }
+
+    private static void register(SubscriptionAnnotationRegistrar registrar, AsynchronousAndSynchronousSubscriber bean, String handler) throws Exception {
+        registrar.registerSubscriptions(bean, List.of(handlerOf(AsynchronousAndSynchronousSubscriber.class, handler)), () -> bean, false,
+                ConcurrentHashMap.<HandlerMethod>newKeySet()::add, ConcurrentHashMap.<String>newKeySet()::add,
+                ignored -> {
+                }, ignored -> {
+                });
+    }
+
+    static class AsynchronousAndSynchronousSubscriber {
+        @Subscription(id = "asynchronous-after-the-scan")
+        void asynchronous(TestEvent event) {
+        }
+
+        @SynchronousSubscription(id = "synchronous-at-once")
+        void synchronous(TestEvent event) {
+        }
     }
 
     private static HandlerMethod handlerOf(Class<?> scanned, String name) throws Exception {

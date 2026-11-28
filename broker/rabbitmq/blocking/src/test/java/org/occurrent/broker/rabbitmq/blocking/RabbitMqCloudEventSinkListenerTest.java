@@ -302,6 +302,19 @@ class RabbitMqCloudEventSinkListenerTest extends RabbitMqTestSupport {
         assertThat(sink.isOpen()).isFalse();
     }
 
+    @Test
+    void close_returns_normally_once_the_connection_is_closed() throws Exception {
+        ConnectionFactory connectionFactory = new ConnectionFactory();
+        connectionFactory.setUri(amqpUrl());
+        Connection ownConnection = connectionFactory.newConnection();
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(ownConnection, resolver).build();
+
+        ownConnection.close();
+
+        assertThatCode(sink::close).doesNotThrowAnyException();
+    }
+
     private RabbitMqCloudEventSink.Builder sinkBuilder() {
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
         return RabbitMqCloudEventSink.builder(connection(), resolver);

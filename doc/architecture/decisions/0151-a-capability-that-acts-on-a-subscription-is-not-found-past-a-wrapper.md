@@ -4,7 +4,8 @@ Date: 2026-10-24
 
 ## Status
 
-Accepted. #1251 and #1253. Amended by #1430, which adds `StartRefusalReportingSubscriptions` to the list.
+Accepted. #1251 and #1253. Amended by #1430, which adds `StartRefusalReportingSubscriptions` to the list. Amended
+again for #918, which removes `HistoryRetainingSubscriptions` from the list, since 0.35.0 removes the interface.
 
 Amends [ADR 118](0118-a-subscription-model-capability-marker-replaces-object-in-the-of-lookups.md) and
 [ADR 119](0119-subscription-model-capability-gains-instance-side-lookups.md), where both
@@ -42,8 +43,8 @@ to it.
 `capability(type)` answers `this` when the model implements `type`, as before. Past that, it unwraps a
 `SubscriptionModelWrapper` only when `type` is one of these:
 
-* `IntrospectableSubscriptions`, `ReplayAwareSubscriptions` and `HistoryRetainingSubscriptions`, which answer
-  questions about subscriptions.
+* `IntrospectableSubscriptions` and `ReplayAwareSubscriptions`, which answer questions about subscriptions. The list
+  had `HistoryRetainingSubscriptions` too, until 0.35.0 removed that interface.
 * `QuietPositionReportingSubscriptions`, which adds and removes a listener that is told positions. Another listener
   changes no wrapper's state.
 * `StartRefusalReportingSubscriptions`, added in #1430, which adds and removes a listener that is told about a start

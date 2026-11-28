@@ -6,6 +6,7 @@ import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.HashSet;
 import java.util.Optional;
@@ -93,6 +94,8 @@ public class CompetingConsumerSubscription implements Subscription {
     static final class StartRefusal {
         // Reported by the wrapped model, until the competing consumer model has acted on it
         final AtomicReference<@Nullable UnsupportedStartAtException> reported = new AtomicReference<>();
+        // When the wrapped model reported the refusal, set before reported
+        volatile @Nullable Instant reportedAt;
         // Reported by the wrapped model each time it holds the consumer paused, with an UnsupportedStartAtException when
         // it got no position at the present and a CatchupCannotResumeException when the history its subscription would
         // go live from is gone, until the competing consumer model has acted on it. Each report is kept, since a late one

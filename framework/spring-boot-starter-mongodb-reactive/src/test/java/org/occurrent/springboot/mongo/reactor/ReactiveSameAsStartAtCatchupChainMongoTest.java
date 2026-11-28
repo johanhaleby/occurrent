@@ -44,6 +44,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -72,7 +73,11 @@ class ReactiveSameAsStartAtCatchupChainMongoTest {
     void the_durable_layer_passes_a_null_answer_through_so_the_catchup_replays_and_nothing_is_stored() {
         // Given
         String[] args = bootArgs("reactive-same-as-start-at-chain");
-        SpringApplication.run(HistoryApplication.class, args).close();
+        // Written with subscriptions off, since the application service refuses a write while the application starts
+        // when a subscription could have missed it
+        String[] historyArgs = Arrays.copyOf(args, args.length + 1);
+        historyArgs[args.length] = "--occurrent.subscription.enabled=false";
+        SpringApplication.run(HistoryApplication.class, historyArgs).close();
         // A live start opens at the start of the current second, so the history must be a second older to need a replay
         await().pollDelay(ofMillis(2100)).atMost(ofSeconds(5)).until(() -> true);
         ConfigurableApplicationContext ctx = SpringApplication.run(ChainApplication.class, args);

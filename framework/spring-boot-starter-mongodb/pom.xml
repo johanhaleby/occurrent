@@ -43,6 +43,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-mongodb</artifactId>
         </dependency>
+        <!-- Health, configured only when the application has it on the classpath, see ADR 171 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <optional>true</optional>
+        </dependency>
         <!-- Generate configuration metadata file automatically, see https://docs.spring.io/spring-boot/docs/current/reference/html/configuration-metadata.html#configuration-metadata.annotation-processor -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -219,6 +225,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-inmemory</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-testing-mongodb</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
@@ -243,6 +255,14 @@
             <artifactId>occurrent-common-inmemory-filter-matching-jackson</artifactId>
             <version>${project.version}</version>
             <optional>true</optional>
+        </dependency>
+
+        <!-- An event store with no live start, for the test of which store the start boundary comes from -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
         </dependency>
 
     </dependencies>

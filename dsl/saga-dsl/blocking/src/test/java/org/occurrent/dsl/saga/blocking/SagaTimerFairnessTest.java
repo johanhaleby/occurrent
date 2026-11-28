@@ -15,6 +15,7 @@
  */
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -141,7 +142,7 @@ class SagaTimerFairnessTest {
 
         pollRepeatedly(execution, 4);
 
-        SagaEnvelope<String> after = store.find("failing").orElseThrow();
+        SagaEnvelope<String> after = SagaEnvelopes.of(store, null).find("failing").orElseThrow();
         assertAll(
                 () -> assertThat(attempts.get("failing")).as("failed fires").isEqualTo(4),
                 () -> assertThat(after.nextTimerAt()).isEqualTo(Instant.ofEpochMilli(1_000)),
@@ -170,8 +171,8 @@ class SagaTimerFairnessTest {
     }
 
     private void seed(String sagaId, long firesAt) {
-        store.compareAndSave(sagaId, new SagaEnvelope<>(sagaId, "waiting", SagaStatus.ACTIVE, 1, List.of(new TimerEntry(TIMER, firesAt)),
-                Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null), 0);
+        SagaEnvelopes.of(store, null).compareAndSave(sagaId, new SagaEnvelope<>(sagaId, "waiting", SagaStatus.ACTIVE, 1, List.of(new TimerEntry(TIMER, firesAt)),
+                Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null, true, null, Map.of(), null), 0);
     }
 
     private SagaExecution<OrderEvent, String, CancelOrder> execution() {
@@ -194,7 +195,7 @@ class SagaTimerFairnessTest {
                 .build();
         CommandDispatcher<CancelOrder> dispatcher = dispatched::add;
         SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofSeconds(15), batchLimit, 50);
-        return new SagaExecution<>("saga-timer-fairness", saga, store, dispatcher, converter, config, event -> true, now::get);
+        return new SagaExecution<>("saga-timer-fairness", saga, store, dispatcher, converter, config, now::get);
     }
 
     sealed interface OrderEvent permits OrderPlaced {

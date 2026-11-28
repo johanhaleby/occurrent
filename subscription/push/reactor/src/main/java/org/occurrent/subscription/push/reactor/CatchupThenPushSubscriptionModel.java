@@ -39,6 +39,7 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.internal.CatchupMarkers;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -80,6 +81,13 @@ import java.util.function.Supplier;
  * "What a reactor catch-up start replays" says what a start replays.
  * The blocking model reads a stored marker as a finished catch-up and skips the replay instead. The marker is keyed
  * by the subscription id alone, so a subscribe that changes the filter or the handler uses a new subscription id.
+ * Under a new id the subscription starts from the beginning of the history and repeats everything its handler does, the
+ * records it writes, the commands it dispatches and the messages it sends. Stop every instance on the old id before the
+ * first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one instance, what else a
+ * new id needs depends on where each instance keeps what it builds and which broker queue or consumer group it
+ * consumes, as
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+ * upgrade guide</a> describes.
  * {@link #cancelSubscription(String)} deletes the marker, and says when subscribing the same id again resumes instead
  * of replaying from the beginning. No live position is persisted, so
  * resuming the live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and
@@ -135,12 +143,22 @@ import java.util.function.Supplier;
  * failed catch-up starts it failing the same way, and also refuses each event from anywhere else that is still
  * waiting, and does not apply it. When deleting the marker still fails after 3 retries, the subscription logs an
  * error naming the subscription id. A cancel deletes the marker again, and when that delete fails too, subscribing
- * again in this process deletes it once more and replays from the beginning. After a restart a catch-up that reads a
+ * again in this process deletes it once more and replays from the beginning. A catch-up that failed because the
+ * checkpoint stored under the id is not a catch-up marker, such as a durable subscription's, does not delete that
+ * checkpoint, but a cancel deletes it, even when something else still uses it. After a restart a catch-up that reads a
  * marker the store still holds resumes after it and does not replay a failed event at or below it. Deleting the marker
  * by hand is best effort, as a cancel's delete is, so only a subscription under a new id is sure to replay from the
  * beginning, see the "Cancel" section of
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>. A written event that no replay can bring back and nothing waits for is
- * lost when applying it fails, or when the process stops before it is applied.
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>.
+ * Under a new id the subscription starts from the beginning of the history and repeats everything its handler does, the
+ * records it writes, the commands it dispatches and the messages it sends. Stop every instance on the old id before the
+ * first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one instance, what else a
+ * new id needs depends on where each instance keeps what it builds and which broker queue or consumer group it
+ * consumes, as
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+ * upgrade guide</a> describes.
+ * A written event that no replay can bring back and nothing waits for is lost when applying it fails, or when the
+ * process stops before it is applied.
  * <p>
  * Nothing records which live events the subscription has handled, and a crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the
@@ -459,9 +477,22 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                     // the broker keeps holding them (ADR 104). Recovery is cancelSubscription(id) plus a fresh
                     // subscribe. Dropped before the replay entry, so a start(true) racing this never sees a launcher
                     // with no replay running and relaunches a catch-up that failed.
-                    log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
-                            + "refuses every event, so the source redelivers rather than losing them. Cancel the "
-                            + "subscription and subscribe again once the cause is fixed.", subscriptionId, error);
+                    // A cancel deletes a checkpoint that is not a marker, and another component may still use it, so
+                    // this log asks for a cancel only when nothing else does
+                    if (CatchupMarkers.refusedANonMarker(error)) {
+                        log.error("Catch-up failed for subscription {}, because the checkpoint stored under its id is not "
+                                + "a catch-up marker. Its registration on the live feed is kept and now refuses every "
+                                + "event, so the source redelivers rather than losing them. Replace the subscription with "
+                                + "one under a new id. Cancelling it deletes the checkpoint stored under its id, so cancel "
+                                + "it only when nothing else uses that checkpoint. "
+                                + SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " "
+                                + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, error);
+                    } else {
+                        log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
+                                + "refuses every event, so the source redelivers rather than losing them. Cancel the "
+                                + "subscription and subscribe again once the cause is fixed. "
+                                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, error);
+                    }
                     interruptibleReplays.remove(subscriptionId, ownLaunch.get());
                     forget(subscriptionId, replayDone);
                     catchupOwners.remove(subscriptionId, replayDone);
@@ -737,10 +768,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * this process delete the marker again and replay from the beginning, and a subscribe after a restart resume after
      * the old marker if the store still holds it. To rebuild the projection for certain, subscribe under a new
      * subscription id.
+     * Under a new id the subscription starts from the beginning of the history and repeats everything its handler does,
+     * the records it writes, the commands it dispatches and the messages it sends. Stop every instance on the old id
+     * before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one
+     * instance, what else a new id needs depends on where each instance keeps what it builds and which broker queue or
+     * consumer group it consumes, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+     * upgrade guide</a> describes.
      * <p>
      * The cancel happens when you call this, whether or not anything subscribes to the returned {@code Mono}. When the
      * delete fails, the subscription stays cancelled and the marker stays stored. It deletes the marker for an id this
-     * model has never subscribed to.
+     * model has never subscribed to. It deletes a checkpoint stored under the id that is not a catch-up marker as well,
+     * such as a durable subscription's that a catch-up of this model refused, even when something else still uses it.
      * <p>
      * Without a {@link CheckpointStorage} there is no marker, and the {@code Mono} completes at once.
      *
@@ -767,7 +806,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // once the delete ends.
         Mono<Void> delete = deleteMarker(subscriptionId, catchupMarker);
         delete.subscribe(unused -> {
-        }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart it resumes after the marker if the store still holds it, unless the subscription is cancelled again first.", subscriptionId, error));
+        }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart it resumes after the marker if the store still holds it, unless the subscription is cancelled again first. "
+                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT, subscriptionId, error));
         return Mono.when(liveFeedCancelled, delete).cache();
     }
 

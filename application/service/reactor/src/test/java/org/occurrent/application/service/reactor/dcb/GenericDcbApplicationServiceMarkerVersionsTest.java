@@ -694,6 +694,12 @@ class GenericDcbApplicationServiceMarkerVersionsTest {
     }
 
     private static final class RecordingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         final List<CloudEvent> dispatched = new ArrayList<>();
         @Nullable RuntimeException failure;
         private final @Nullable List<String> trace;

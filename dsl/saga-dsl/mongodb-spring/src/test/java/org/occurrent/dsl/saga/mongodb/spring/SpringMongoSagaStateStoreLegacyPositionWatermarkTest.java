@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
@@ -46,7 +47,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
@@ -152,25 +152,14 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     }
 
     /**
-     * What the saga sees. A feed over the in-memory subscription model that also answers that it retains everything,
-     * because {@code SagaRunner} switches quarantine off for a model it cannot ask, and that can hand the events over
-     * without the stream key the event store wrote them with.
+     * What the saga sees. A feed over the in-memory subscription model that can hand the events over without the
+     * stream key the event store wrote them with.
      */
-    private record Feed(InMemorySubscriptionModel delegate, UnaryOperator<CloudEvent> deliveredAs) implements Subscribable, HistoryRetainingSubscriptions {
+    private record Feed(InMemorySubscriptionModel delegate, UnaryOperator<CloudEvent> deliveredAs) implements Subscribable {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             return delegate.subscribe(subscriptionId, filter, startAt, event -> action.accept(deliveredAs.apply(event)));
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
         }
     }
 
@@ -220,8 +209,8 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     @Test
     void the_document_written_by_0_34_has_the_fields_the_store_writes_for_an_instance_with_a_position_watermark() {
         // Checks the fixture used below against what the store really writes.
-        stateStore.compareAndSave(SAGA_ID, new SagaEnvelope<>(SAGA_ID, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(),
-                Map.of(SAGA_ID, 1L), 7L, NOW, NOW, null, null, true, null), 0);
+        SagaEnvelopes.of(stateStore, null).compareAndSave(SAGA_ID, new SagaEnvelope<>(SAGA_ID, "awaiting-payment", SagaStatus.ACTIVE, 1, List.of(),
+                Map.of(SAGA_ID, 1L), 7L, NOW, NOW, null, null, true, null, Map.of(), null), 0);
 
         Document writtenByTheStore = rawDocument();
 
@@ -232,7 +221,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     void loads_a_document_written_in_the_0_34_shape_and_hands_back_the_stored_number() {
         insertDirectly(documentWrittenBy0_34(7L));
 
-        SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+        SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
         assertAll(
                 () -> assertThat(read.positionWatermark()).isEqualTo(7L),
@@ -246,7 +235,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     void loads_a_stored_number_as_large_as_a_long_can_be() {
         insertDirectly(documentWrittenBy0_34(Long.MAX_VALUE));
 
-        SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+        SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
         assertThat(read.positionWatermark()).isEqualTo(Long.MAX_VALUE);
     }
@@ -255,7 +244,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     void reads_the_stored_number_without_the_state_too() {
         insertDirectly(documentWrittenBy0_34(7L));
 
-        SagaEnvelope<String> read = stateStore.findWithoutState(SAGA_ID).orElseThrow();
+        SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).findWithoutState(SAGA_ID).orElseThrow();
 
         assertThat(read.positionWatermark()).isEqualTo(7L);
     }
@@ -264,9 +253,9 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
     void loads_a_failure_record_keyed_by_a_position() {
         insertDirectly(withAFailureRecordFor(documentWrittenBy0_34(7L), "position:7", 7L, NOW.minusSeconds(300)));
 
-        SagaEnvelope<String> read = stateStore.find(SAGA_ID).orElseThrow();
+        SagaEnvelope<String> read = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
 
-        assertThat(read.failure()).isEqualTo(new SagaFailure("position:7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom"));
+        assertThat(read.failure()).isEqualTo(new SagaFailure("position:7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", null, null));
     }
 
     @Test
@@ -317,7 +306,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
             Document raw = rawDocument();
             assertAll(
                     () -> assertThat(raw.getString("failureInput")).isEqualTo(SAGA_ID + "@2"),
-                    () -> assertThat(raw.getString("status")).isEqualTo("ACTIVE"),
+                    () -> assertThat(raw.getString("status")).isEqualTo("ACTIVE_MARKED"),
                     () -> assertThat(raw.get("state")).isEqualTo("awaiting-payment"),
                     () -> assertThat(raw.containsKey(POSITION_WATERMARK)).isFalse()
             );
@@ -334,7 +323,7 @@ class SpringMongoSagaStateStoreLegacyPositionWatermarkTest {
         write(new OrderPlaced(SAGA_ID), new PaymentReserved(SAGA_ID));
 
         await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            SagaEnvelope<String> instance = stateStore.find(SAGA_ID).orElseThrow();
+            SagaEnvelope<String> instance = SagaEnvelopes.of(stateStore, null).find(SAGA_ID).orElseThrow();
             assertAll(
                     () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(instance.failure().input()).isEqualTo(SAGA_ID + "@2"),

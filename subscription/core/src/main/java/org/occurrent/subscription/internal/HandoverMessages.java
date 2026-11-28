@@ -80,7 +80,26 @@ public final class HandoverMessages {
     public static String catchUpFailed(String noun) {
         return "Catch-up failed for this " + noun + ", so it refuses live events rather than acknowledging events "
                 + "that nothing folded, and the source keeps redelivering them. Fix the cause, then replace it: a "
-                + "subscription by cancelling it and subscribing again, a projection feed by building a new one.";
+                + "subscription by cancelling it and subscribing again, a projection feed by building a new one. "
+                + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT;
+    }
+
+    /**
+     * The message a reactor catch-up-then-live caller shows once its catch-up failed because the checkpoint stored under
+     * its id is not a catch-up marker, with the caller's own noun substituted in. A cancel deletes that checkpoint, and
+     * something else, such as a durable subscription, may still use it, so the message says to cancel only when nothing
+     * else does, where {@link #catchUpFailed(String)} says to cancel.
+     *
+     * @param noun The noun describing what cannot accept live events, e.g. {@code "projection feed"} or
+     *             {@code "subscription"}.
+     */
+    public static String catchUpFailedOnANonMarker(String noun) {
+        return "Catch-up failed for this " + noun + ", because the checkpoint stored under its id is not a catch-up "
+                + "marker. It refuses live events rather than acknowledging events that nothing folded, and the source "
+                + "keeps redelivering them. Replace it with one under a new id. Cancelling a subscription deletes the "
+                + "checkpoint stored under its id, so cancel it only when nothing else uses that checkpoint. "
+                + SharedStorageMessages.NOT_A_MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT + " "
+                + SharedStorageMessages.NEW_ID_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     /**
@@ -96,7 +115,7 @@ public final class HandoverMessages {
         return "An event the handler of this " + noun + " fed it failed to apply after it was queued, so it refuses "
                 + "live events rather than acknowledging events that nothing folded, and the source keeps redelivering "
                 + "them. Fix the cause, then replace it: a subscription by cancelling it and subscribing again, a "
-                + "projection feed by building a new one.";
+                + "projection feed by building a new one. " + SharedStorageMessages.MARKER_WHEN_SEVERAL_INSTANCES_RUN_IT;
     }
 
     /**
@@ -139,6 +158,18 @@ public final class HandoverMessages {
     }
 
     /**
+     * Refuses a live event held during a blocking catch-up whose replay already applied it, when the source call that
+     * records that the replay applied it threw. Only that event is refused, and the catch-up goes on.
+     *
+     * @param noun The noun describing what the event was fed to, e.g. {@code "projection feed"}.
+     */
+    public static String alreadyAppliedNotRecorded(String noun) {
+        return "The replay of this " + noun + " already applied the event, and recording that it did failed. Do not "
+                + "acknowledge it. Offer it again and a later delivery records it, while the replay's de-dup cache still "
+                + "holds the event.";
+    }
+
+    /**
      * Refuses a live event whose caller was interrupted while it waited for a catch-up replay to apply the event.
      *
      * @param noun The noun describing what the event was waiting on, e.g. {@code "projection feed"}.
@@ -159,6 +190,20 @@ public final class HandoverMessages {
         return "A live event was fed to this " + noun + " from inside one of its own deliveries or callbacks while it "
                 + "was not live. It would wait for work this same thread holds up, so it is refused instead. Feed live "
                 + "events from another thread.";
+    }
+
+    /**
+     * Refuses a live event fed and waited on, while the handover is not live, from inside the deliveries or callbacks
+     * of another blocking handover. That other handover's catch-up can be waiting for the calling thread, so waiting
+     * here can leave two catch-ups each waiting for the other.
+     *
+     * @param noun The noun describing what was fed, e.g. {@code "projection feed"}.
+     */
+    public static String acceptedFromAnotherHandover(String noun) {
+        return "A live event was fed to this " + noun + " and waited on from inside the handler or a callback of "
+                + "another catch-up feed or subscription while this " + noun + " was not live. A catch-up of the other "
+                + "one can be waiting for this thread, so the two could wait for each other, and the event is refused "
+                + "instead. Feed it without waiting for it, or from another thread that this handler does not wait for.";
     }
 
     /**

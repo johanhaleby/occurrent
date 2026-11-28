@@ -1278,7 +1278,7 @@ class LateRegistrationOnANonBlockingThreadTest {
 
         @Bean(destroyMethod = "shutdown")
         ReactorDurableSubscriptionModel durableSubscriptionModel(RecordingDelegate.Holder delegate, ParkingCheckpointStorage storage) {
-            return new ReactorDurableSubscriptionModel(delegate.delegate(), storage, new ReactorDurableSubscriptionModelConfig(event -> false));
+            return new ReactorDurableSubscriptionModel(delegate.delegate(), storage, new ReactorDurableSubscriptionModelConfig(event -> false).startWhenFirstPositionCanBeOverwritten(true));
         }
 
         @Bean

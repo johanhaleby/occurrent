@@ -72,6 +72,11 @@ public interface ReplayAware {
      * earlier live delivery already handled is not sent here, because that delivery did all of it. It can be sent
      * again for a further copy the feed is offered, so an implementation records rather than counts.
      * <p>
+     * A throw for an event the feed held during its catch-up refuses that event alone. Its {@code acceptAndWait(..)}
+     * throws, so the listener has the broker deliver it again, and that delivery calls this again while the replay's
+     * de-dup cache, sized by {@code dedupCacheSize}, still holds the event. The catch-up goes
+     * on, and the feed stays usable. A throw for an event fed after the feed went live reaches the call that fed it.
+     * <p>
      * The default does nothing, which is what a view that only batches its replay wants.
      *
      * @param metadata What the feed knows about the event that was not delivered a second time. Empty when the live
