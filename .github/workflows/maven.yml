@@ -174,12 +174,12 @@ jobs:
   # container object in one JVM (ADR 97), and two test classes running at once inside a JVM would
   # need a per-class axis on top of that. Do not read this as licence to add -T.
   #
-  # Shard count is pinned at 10 by the concurrency limit, not chosen for tidiness: this account's
-  # GitHub plan allows 20 concurrent jobs, and 10 shards x 2 JDKs is exactly 20. An 11th shard buys
-  # no parallelism, it makes one runner execute two shards back to back, and since every shard is
-  # over 100s that is slower than an imbalanced single wave. Rebalance by moving paths between
-  # shards, not by adding one. Shards run roughly slowest first so that if runners are scarce, the
-  # cheap shards are the ones that wait.
+  # This account's GitHub plan allows 20 concurrent jobs, so 10 shards x 2 JDKs fill one wave. The
+  # matrix has 12, because stream-catchup-subscription's tests alone ran until the timeout cancelled
+  # the job, and each half of it needs a shard of its own (see the matrix below). The 4 jobs past the
+  # first 20 wait for a runner and start as the first jobs finish. Rebalance by moving paths between shards before
+  # adding one. Shards run roughly slowest first so that if runners are scarce, the cheap shards are
+  # the ones that wait.
   #
   # Balance by measured test time, because the slowest shard sets the whole stage's wall clock.
   # Measurements are deliberately NOT written down here: that is what went stale last time (#423).
@@ -190,10 +190,12 @@ jobs:
   #
   #   gh run view <run-id> --log | grep shard-timing
   #
-  # The floor is occurrent-mongodb-spring-boot-starter: one Maven module, and the only unit here
-  # that cannot be divided without splitting a single module's tests by class, which would be the
-  # most stale-prone thing in this file. Any shard above it is a subtree that could be listed as
-  # its own paths instead, so if the floor ever needs chasing, look there first.
+  # stream-catchup-subscription is the one module split by class, because its tests alone ran until
+  # the timeout cancelled the job. stream-catchup-blocking runs its classes from StreamCatchupA to
+  # StreamCatchupR with -Dtest, and subscription-util-blocking runs the
+  # rest through the excludes file .github/surefire/stream-catchup-a-to-r.txt. The two patterns have to
+  # name the same classes, or a class runs twice or not at all. Before splitting another module, look
+  # for a subtree in a slow shard that could be listed as its own paths instead.
   #
   # Note that moving a subtree between shards can change what it costs: several of these boot a
   # MongoDB container, and with Testcontainers reuse on, whichever one runs first on a runner pays
@@ -223,7 +225,7 @@ jobs:
       matrix:
         java: [ 21, 25 ]
         shard:
-          # A shard's name says what dominates it, not everything in it: filling 10 shards evenly
+          # A shard's name says what dominates it, not everything in it: filling the shards evenly
           # means some carry a lodger from a subtree that had nowhere cheaper to go. That costs
           # nothing for triage, because each subtree gets its own ::group:: in the log.
           #
@@ -260,7 +262,16 @@ jobs:
           # The blocking subscription utilities are listed one by one, because the competing consumer and the catch-up
           # model among them are each slow enough to need a shard of their own. The bare `subscription/util/blocking`
           # prefix would pull them back in here.
-          - { name: subscription-util-blocking,  paths: "subscription/util/blocking/stream-catchup-subscription subscription/synchronous/blocking subscription/push/blocking" }
+          #
+          # In run 46120920382 stream-catchup-subscription had taken 1,083 and 1,157 seconds of test time when both
+          # subscription-util-blocking jobs were cancelled at the 20 minute shard timeout, so its classes are split
+          # in two by name. By that run's logs the classes from StreamCatchupA to StreamCatchupR took up to 733 seconds
+          # and the rest up to 484. Five classes had not run when the jobs were cancelled, two of them in the first
+          # half. Every other shard in that run except example took 845 to 1,017 seconds, so neither half fits next
+          # to one of them, and example's rerun argument would hide the races these tests check. No rerun argument
+          # in either shard for the same reason. The single quotes keep the shell from globbing the -Dtest pattern.
+          - { name: stream-catchup-blocking,     paths: "subscription/util/blocking/stream-catchup-subscription", args: "'-Dtest=%regex[.*/StreamCatchup[A-R][^/$]*]'" }
+          - { name: subscription-util-blocking,  paths: "subscription/util/blocking/stream-catchup-subscription subscription/synchronous/blocking subscription/push/blocking", args: "-Dsurefire.excludesFile=$GITHUB_WORKSPACE/.github/surefire/stream-catchup-a-to-r.txt" }
           # On main stream-catchup-subscription took 487 to 492 seconds and catchup-subscription 459 to 463 next to it
           # (run 44464061054). Once both gained the handover-lock tests of #1559, stream-catchup-subscription took
           # 654 seconds and both jobs were cancelled at the 20 minute shard timeout with catchup-subscription still
