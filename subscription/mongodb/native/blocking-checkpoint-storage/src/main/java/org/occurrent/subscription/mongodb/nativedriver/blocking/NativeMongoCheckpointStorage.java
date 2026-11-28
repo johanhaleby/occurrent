@@ -197,6 +197,23 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     }
 
     /**
+     * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} does, in one
+     * {@code findOneAndUpdate} without upsert, so when no checkpoint is stored, nothing is written and this answers
+     * empty.
+     *
+     * @throws IllegalArgumentException if {@code writeVersion} is negative
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        CheckpointWriteCondition.notOlderThan(writeVersion);
+        Document candidateDocument = generateCheckpointDocument(subscriptionId, candidate);
+        Supplier<@Nullable Document> resolve = () -> persistFirstCheckpointRaceResolutionOverAStoredCheckpoint(subscriptionId, candidateDocument, writeVersion);
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        Document afterDocument = executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get();
+        return interpretFirstCheckpointRaceResolution(subscriptionId, candidate, afterDocument, writeVersion);
+    }
+
+    /**
      * Stores {@code writeVersion} with the checkpoint stored in one {@code findOneAndUpdate} without upsert, see
      * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildWriteVersionStamp(long)}, and answers that
      * checkpoint. When nothing is stored, nothing is written and this answers empty.
@@ -252,6 +269,20 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
                 eq(ID, subscriptionId),
                 singletonList(buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
                 new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip
+     * {@link #resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String, Checkpoint, long)} is, the same pipeline as
+     * {@link #persistFirstCheckpointRaceResolution(String, Document, long)} without upsert. Package private for the same
+     * reason {@link #persistConditionalCheckpointDocument} is.
+     */
+    @Nullable
+    Document persistFirstCheckpointRaceResolutionOverAStoredCheckpoint(String subscriptionId, Document candidateDocument, long writeVersion) {
+        return checkpointCollection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(false));
     }
 
     /**

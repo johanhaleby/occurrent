@@ -143,14 +143,17 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * <p>
  * A subscribe with {@link StartAt#checkpoint(Checkpoint)} of the checkpoint stored, which the Spring Boot starter
  * passes when it settled its start boundary without a competing consumer, also stores the version with that checkpoint
- * before it starts there, through the three-argument {@code resolveFirstCheckpointRace} with that checkpoint as the
- * position. Without it, a mark another node's first position left stored would refuse this node's first save of a
- * delivered event. The start is the caller's, so when the storage holds a newer write version or the call fails, this
- * model logs it and starts from that checkpoint anyway. When another node moved the stored checkpoint earlier between
- * this model's read and the call, the storage keeps that earlier one and removes the mark, and this model starts from
- * the checkpoint the storage answers instead. Starting at the caller's checkpoint then would let this node's saves move
- * storage past the events the other node replays. A subscribe of an id this model already runs or holds paused stores
- * no version, and the wrapped model refuses it with {@link DuplicateSubscriptionIdException}.
+ * before it starts there, through
+ * {@link CheckpointStorage#resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String, Checkpoint, long)} with that
+ * checkpoint as the position. Without it, a mark another node's first position left stored would refuse this node's
+ * first save of a delivered event. The start is the caller's, so when the storage holds a newer write version or the
+ * call fails, this model logs it and starts from that checkpoint anyway. When another node moved the stored checkpoint
+ * earlier between this model's read and the call, the storage keeps that earlier one and removes the mark, and this
+ * model starts from the checkpoint the storage answers instead. Starting at the caller's checkpoint then would let this
+ * node's saves move storage past the events the other node replays. When a cancel on another node deleted the
+ * checkpoint between the read and the call, the storage writes nothing, so the subscription starts at the caller's
+ * checkpoint without a version, as in 0.34.0, and the first checkpoint save of a delivered event stores the version.
+ * A subscribe of an id this model already runs or holds paused stores no version, and the wrapped model refuses it with {@link DuplicateSubscriptionIdException}.
  * <p>
  * Without a version, or for a storage whose three-argument {@code resolveFirstCheckpointRace} answers empty, the first
  * position is written with
@@ -1331,8 +1334,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // startAt but at the checkpoint the storage answers. Starting at startAt instead would let this node's saves move
     // storage past the events the other node replays from the earlier checkpoint, and lose them should that node stop
     // before it reaches startAt. The storage never answers a checkpoint later than startAt, so this skips nothing.
-    // A cancel on another node between the read and the write still has startAt stored again, since the three-argument
-    // call writes its candidate when nothing is stored
+    // A cancel on another node between the read and the write deletes the checkpoint, and the storage writes nothing
+    // then, so the subscription starts at startAt without a version, as in 0.34.0
     private Checkpoint storeThisNodesWriteVersionWithTheStoredCheckpointAt(String subscriptionId, Checkpoint startAt) {
         Checkpoint stored;
         try {
@@ -1351,7 +1354,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             return startAt;
         }
         try {
-            Optional<Checkpoint> governs = storage.resolveFirstCheckpointRace(subscriptionId, stored, writeVersion.getAsLong());
+            Optional<Checkpoint> governs = storage.resolveFirstCheckpointRaceWithoutCreatingACheckpoint(subscriptionId, stored, writeVersion.getAsLong());
             if (governs.isEmpty() || governs.get().asString().equals(startAt.asString())) {
                 return startAt;
             }

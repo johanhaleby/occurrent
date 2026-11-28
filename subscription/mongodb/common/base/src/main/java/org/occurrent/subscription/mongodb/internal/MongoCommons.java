@@ -511,6 +511,10 @@ public class MongoCommons {
      * {@code candidateDocument} holds in {@link #GENERIC_CHECKPOINT}. Every other stored checkpoint can't be
      * compared with {@code candidateDocument}, so the document is left as it is, and so is one with a newer stored
      * version. A stored checkpoint that is kept loses {@link #POSITION_MOVED_EARLIER}.
+     * <p>
+     * The three-argument {@code resolveFirstCheckpointRace} runs it with upsert, so it writes {@code candidateDocument}
+     * when no checkpoint document exists. {@code resolveFirstCheckpointRaceWithoutCreatingACheckpoint} runs it without
+     * upsert, so it writes nothing then and {@code findOneAndUpdate} returns {@code null}.
      *
      * @param candidateDocument The document {@link #generateCheckpointDocument(String, Checkpoint)} built for the
      *                          candidate position
@@ -583,14 +587,18 @@ public class MongoCommons {
      *
      * @param subscriptionId The id of the subscription the write was for
      * @param candidate      The position the write offered
-     * @param afterDocument  The document {@code findOneAndUpdate} returned
+     * @param afterDocument  The document {@code findOneAndUpdate} returned, {@code null} when it ran without upsert and
+     *                       no checkpoint is stored
      * @param writeVersion   The version the write offered
      * @return The checkpoint that now governs the subscription's first position, or empty when the pipeline wrote
-     * nothing because the stored checkpoint can't be compared with the candidate
+     * nothing because the stored checkpoint can't be compared with the candidate, or because none is stored
      * @throws CheckpointWriteConditionNotFulfilledException if a newer stored version refused the write
      */
-    public static Optional<Checkpoint> interpretFirstCheckpointRaceResolution(String subscriptionId, Checkpoint candidate, Document afterDocument,
+    public static Optional<Checkpoint> interpretFirstCheckpointRaceResolution(String subscriptionId, Checkpoint candidate, @Nullable Document afterDocument,
                                                                              long writeVersion) {
+        if (afterDocument == null) {
+            return Optional.empty();
+        }
         OptionalLong storedVersion = extractWriteVersion(afterDocument);
         if (storedVersion.isPresent() && storedVersion.getAsLong() > writeVersion) {
             throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, CheckpointWriteCondition.notOlderThan(writeVersion));
