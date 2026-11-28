@@ -32,6 +32,7 @@ import org.occurrent.eventstore.api.blocking.internal.CatchupReads;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -173,6 +174,10 @@ class CatchupSubscriptionModelHeldPausedReportTest {
         @Override
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(refusal);
+        }
+
+        @Override
+        public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
         }
 
         @Override

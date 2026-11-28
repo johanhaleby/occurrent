@@ -34,6 +34,7 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -48,6 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static com.mongodb.client.model.Filters.eq;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * {@code resolveFirstCheckpointRace} against a real replica set, the way ADR 114 and ADR 116's own pipelines were
@@ -476,6 +478,239 @@ class NativeMongoCheckpointStorageFirstCheckpointRaceTest {
         assertThat(resolution).isEmpty();
         assertThat(storedDocument()).as("stored document").isEqualTo(before);
         assertThat(storage.writeVersion(subscriptionId)).as("stored version").isEmpty();
+    }
+
+    @Test
+    void a_resume_token_save_from_a_later_position_is_refused_once_a_start_position_moved_the_stored_position_earlier() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900), CheckpointWriteCondition.notOlderThan(3));
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(3)))
+                .isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class,
+                        refusal -> assertThat(refusal.storedVersion).as("stored version of the refusal").hasValue(3L));
+
+        assertThat(storage.read(subscriptionId).asString()).as("stored checkpoint").isEqualTo(operationTimeCheckpoint(100).asString());
+        assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(3L);
+    }
+
+    @Test
+    void an_operation_time_save_from_a_later_position_is_refused_once_a_start_position_moved_the_stored_position_earlier() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900), CheckpointWriteCondition.notOlderThan(3));
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, operationTimeCheckpoint(950), CheckpointWriteCondition.notOlderThan(3)))
+                .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+
+        assertThat(storage.read(subscriptionId).asString()).as("stored checkpoint").isEqualTo(operationTimeCheckpoint(100).asString());
+    }
+
+    @Test
+    void a_generic_checkpoint_save_is_not_refused_once_a_start_position_moved_the_stored_position_earlier() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900), CheckpointWriteCondition.notOlderThan(3));
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        storage.save(subscriptionId, new StringBasedCheckpoint("generic"), CheckpointWriteCondition.notOlderThan(3));
+
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo("generic");
+    }
+
+    @Test
+    void the_resolution_with_a_version_that_keeps_the_stored_position_takes_the_refusal_away() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900), CheckpointWriteCondition.notOlderThan(3));
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100), 3);
+        Throwable thrown = catchThrowable(() -> storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(3)));
+
+        assertThat(thrown).as("thrown by a save from the later position once the resolution kept the stored position").isNull();
+        assertThat(storage.read(subscriptionId).asString()).as("stored checkpoint").isEqualTo(resumeTokenCheckpoint().asString());
+        assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(3L);
+    }
+
+    @Test
+    void a_write_that_goes_through_takes_the_refusal_away() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900), CheckpointWriteCondition.notOlderThan(3));
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        storage.save(subscriptionId, operationTimeCheckpoint(100), CheckpointWriteCondition.any());
+        Throwable thrown = catchThrowable(() -> storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(3)));
+
+        assertThat(thrown).as("thrown by a save from the later position once a write went through").isNull();
+        assertThat(storage.read(subscriptionId).asString()).as("stored checkpoint").isEqualTo(resumeTokenCheckpoint().asString());
+    }
+
+    @Test
+    void a_resolution_that_does_not_move_the_stored_position_earlier_leaves_a_save_from_a_later_position_allowed() {
+        storage.save(subscriptionId, operationTimeCheckpoint(100), CheckpointWriteCondition.notOlderThan(3));
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(900));
+
+        storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(3));
+
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(resumeTokenCheckpoint().asString());
+    }
+
+    @Test
+    void a_resolution_that_writes_into_an_empty_subscription_leaves_a_save_from_a_later_position_allowed() {
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(3));
+
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(resumeTokenCheckpoint().asString());
+    }
+
+    @Test
+    void a_write_of_an_operation_time_over_nothing_stored_sets_the_lineage_origin_to_it() {
+        storage.save(subscriptionId, operationTimeCheckpoint(300));
+
+        assertThat(storedDocument().get(MongoCommons.LINEAGE_ORIGIN)).isEqualTo(new BsonTimestamp(300, 0));
+    }
+
+    @Test
+    void a_write_of_a_resume_token_over_nothing_stored_sets_no_lineage_origin() {
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+
+        assertThat(storedDocument()).doesNotContainKey(MongoCommons.LINEAGE_ORIGIN);
+    }
+
+    @Test
+    void an_unconditional_write_of_a_resume_token_over_an_operation_time_keeps_the_lineage_origin() {
+        storage.save(subscriptionId, operationTimeCheckpoint(300));
+
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+
+        assertThat(storedDocument().get(MongoCommons.LINEAGE_ORIGIN)).isEqualTo(new BsonTimestamp(300, 0));
+    }
+
+    @Test
+    void a_not_older_than_write_of_a_resume_token_over_an_operation_time_keeps_the_lineage_origin() {
+        storage.save(subscriptionId, operationTimeCheckpoint(300), CheckpointWriteCondition.notOlderThan(1));
+
+        storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(2));
+
+        assertThat(storedDocument().get(MongoCommons.LINEAGE_ORIGIN)).isEqualTo(new BsonTimestamp(300, 0));
+    }
+
+    @Test
+    void an_if_absent_write_over_a_stored_checkpoint_is_refused_and_keeps_the_lineage_origin() {
+        storage.save(subscriptionId, operationTimeCheckpoint(300));
+        Document before = storedDocument();
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.ifAbsent()))
+                .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+
+        assertThat(storedDocument()).as("stored document").isEqualTo(before);
+    }
+
+    @Test
+    void a_write_over_a_stored_resume_token_without_a_lineage_origin_keeps_it_missing() {
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+
+        storage.save(subscriptionId, operationTimeCheckpoint(300), CheckpointWriteCondition.notOlderThan(1));
+
+        assertThat(storedDocument()).doesNotContainKey(MongoCommons.LINEAGE_ORIGIN);
+    }
+
+    @Test
+    void a_stored_resume_token_whose_lineage_began_later_than_the_candidate_is_replaced_by_it_and_marked() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900));
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+        Checkpoint candidate = operationTimeCheckpoint(100);
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, candidate);
+
+        assertThat(resolution).hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo(candidate.asString()));
+        assertThat(storage.read(subscriptionId).asString())
+                .as("the earlier position governs, so the events between it and the token's line of delivery are not skipped")
+                .isEqualTo(candidate.asString());
+        assertThat(storedDocument().get(MongoCommons.LINEAGE_ORIGIN)).isEqualTo(new BsonTimestamp(100, 0));
+        assertThat(storedDocument().get(MongoCommons.POSITION_MOVED_EARLIER)).isEqualTo(true);
+    }
+
+    @Test
+    void a_save_of_a_resume_token_is_refused_after_a_resolution_replaced_a_stored_resume_token() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900));
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(1)))
+                .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(operationTimeCheckpoint(100).asString());
+    }
+
+    @Test
+    void a_stored_resume_token_whose_lineage_began_earlier_than_the_candidate_is_kept_and_answers_empty() {
+        storage.save(subscriptionId, operationTimeCheckpoint(100));
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+        Document before = storedDocument();
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(900));
+
+        assertThat(resolution).isEmpty();
+        assertThat(storedDocument()).as("stored document").isEqualTo(before);
+    }
+
+    @Test
+    void a_stored_resume_token_whose_lineage_began_at_the_candidate_is_kept_and_answers_empty() {
+        storage.save(subscriptionId, operationTimeCheckpoint(500));
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+        Document before = storedDocument();
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(500));
+
+        assertThat(resolution).isEmpty();
+        assertThat(storedDocument()).as("stored document").isEqualTo(before);
+    }
+
+    @Test
+    void a_stored_generic_checkpoint_whose_lineage_began_later_than_the_candidate_is_replaced_by_it() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900));
+        storage.save(subscriptionId, new StringBasedCheckpoint("a-caller-supplied-position"));
+        Checkpoint candidate = operationTimeCheckpoint(100);
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, candidate);
+
+        assertThat(resolution).hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo(candidate.asString()));
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(candidate.asString());
+    }
+
+    @Test
+    void a_stored_resume_token_without_a_lineage_origin_as_a_version_before_0_35_stored_it_is_kept_and_answers_empty() {
+        MongoResumeTokenCheckpoint stored = resumeTokenCheckpoint();
+        database.getCollection(COLLECTION).insertOne(MongoCommons.generateCheckpointDocument(subscriptionId, stored));
+        Document before = storedDocument();
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(100));
+
+        assertThat(before).doesNotContainKey(MongoCommons.LINEAGE_ORIGIN);
+        assertThat(resolution).isEmpty();
+        assertThat(storedDocument()).as("stored document").isEqualTo(before);
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(stored.asString());
+    }
+
+    @Test
+    void the_version_resolution_replaces_a_stored_resume_token_whose_lineage_began_later_than_the_candidate_without_a_mark() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900), CheckpointWriteCondition.notOlderThan(1));
+        storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(2));
+        Checkpoint candidate = operationTimeCheckpoint(100);
+
+        Optional<Checkpoint> resolution = storage.resolveFirstCheckpointRace(subscriptionId, candidate, 3);
+
+        assertThat(resolution).hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo(candidate.asString()));
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(candidate.asString());
+        assertThat(storage.writeVersion(subscriptionId)).hasValue(3L);
+        assertThat(storedDocument().get(MongoCommons.LINEAGE_ORIGIN)).isEqualTo(new BsonTimestamp(100, 0));
+        assertThat(storedDocument()).doesNotContainKey(MongoCommons.POSITION_MOVED_EARLIER);
+    }
+
+    @Test
+    void the_version_resolution_keeps_a_stored_resume_token_whose_lineage_began_earlier_than_the_candidate() {
+        storage.save(subscriptionId, operationTimeCheckpoint(100), CheckpointWriteCondition.notOlderThan(1));
+        storage.save(subscriptionId, resumeTokenCheckpoint(), CheckpointWriteCondition.notOlderThan(2));
+
+        storage.resolveFirstCheckpointRace(subscriptionId, operationTimeCheckpoint(900), 3);
+
+        assertThat(storage.read(subscriptionId).asString()).isEqualTo(resumeTokenCheckpoint().asString());
     }
 
     private void insertLegacyGenericCheckpoint(String position) {

@@ -241,11 +241,19 @@ class LiveStartFirstCheckpointRaceMongoTest {
         public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
             if (bean instanceof LiveStartCheckpoints starter) {
                 Node node = node();
-                return (LiveStartCheckpoints) liveStart -> {
-                    @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
-                    node.liveStart = liveStart;
-                    node.liveStartCheckpoint = checkpoint;
-                    return checkpoint;
+                return new LiveStartCheckpoints() {
+                    @Override
+                    public @Nullable Checkpoint checkpointOf(String liveStart) {
+                        @Nullable Checkpoint checkpoint = starter.checkpointOf(liveStart);
+                        node.liveStart = liveStart;
+                        node.liveStartCheckpoint = checkpoint;
+                        return checkpoint;
+                    }
+
+                    @Override
+                    public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                        return starter.ordersCheckpointsIn(checkpointStorage);
+                    }
                 };
             }
             if (bean instanceof CheckpointStorage storage) {

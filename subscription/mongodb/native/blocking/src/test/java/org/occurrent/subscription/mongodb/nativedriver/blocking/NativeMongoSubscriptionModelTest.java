@@ -48,6 +48,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -254,6 +255,11 @@ public class NativeMongoSubscriptionModelTest {
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
                 throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+                throw new AssertionError("A MongoDB model never reports a stored position moved earlier, but was asked to for " + subscriptionId, refusal);
             }
 
             @Override

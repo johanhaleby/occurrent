@@ -79,7 +79,9 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
  * <p>
  * It also holds the start boundary of the application context, the live start the event store reports when its bean
  * is created. A first start that goes straight to live begins there, so an event written while the application starts
- * reaches it. A bean built after startup begins at a boundary read when it is created.
+ * reaches it. A bean built after startup begins at a boundary read when it is created. Over a checkpoint storage the
+ * store starter doesn't know to compare with the boundary, the start is the one it was in 0.34.0, except NOW under
+ * SAME_AS_START_AT, which stores nothing and still begins at the boundary.
  */
 class StartPositionSupport {
 
@@ -255,16 +257,18 @@ class StartPositionSupport {
     // A first start at NOW, or at DEFAULT with nothing stored, goes straight to live, so it begins at the start
     // boundary instead of wherever the feed has reached when the model subscribes (issue 979). NOW under
     // SAME_AS_START_AT stores nothing and starts the live model at the boundary. Every other one pins the boundary as
-    // the first checkpoint and starts at the model default, which resumes from it. Without a boundary, or with a
-    // checkpoint already stored, the start is the one it was before.
+    // the first checkpoint and starts at the checkpoint the pin settled, see startAtTheSettledCheckpoint. Without a
+    // boundary, with a stored checkpoint the pin kept, or over a storage the store starter doesn't know to compare with
+    // the boundary, the start is the one it was before.
     private StartAt liveOnlyStart(String subscriptionId, boolean now, ResumeBehavior resumeBehavior) {
         @Nullable Checkpoint boundary = startBoundaryFor(subscriptionId);
         if (boundary != null) {
             if (now && resumeBehavior == ResumeBehavior.SAME_AS_START_AT) {
                 return StartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : StartAt.checkpoint(boundary));
             }
-            if (pinnedOverNothingStored(subscriptionId, boundary)) {
-                return StartAt.subscriptionModelDefault();
+            @Nullable Checkpoint settled = pinOverNothingStored(subscriptionId, boundary);
+            if (settled != null) {
+                return startAtTheSettledCheckpoint(settled);
             }
         }
         return now ? nowThenResume(resumeBehavior) : StartAt.subscriptionModelDefault();
@@ -277,11 +281,41 @@ class StartPositionSupport {
                 String checkpoint = boundary.asString();
                 return DcbStartAt.dynamic(ctx -> leavesNowToTheLiveModel(ctx) ? null : DcbStartAt.checkpoint(checkpoint));
             }
-            if (pinnedOverNothingStored(subscriptionId, boundary)) {
-                return DcbStartAt.subscriptionModelDefault();
+            @Nullable Checkpoint settled = pinOverNothingStored(subscriptionId, boundary);
+            if (settled != null) {
+                return dcbStartAtTheSettledCheckpoint(settled.asString());
             }
         }
         return now ? dcbNowThenResume(resumeBehavior) : DcbStartAt.subscriptionModelDefault();
+    }
+
+    // A competing consumer model asks at subscribe, before it hands the start to the model it wraps, and every ask
+    // after that gets the model default as before. The node can get the lease long after this start, and its durable
+    // model then resumes from the checkpoint stored by then and stores this node's write version with it. A save from
+    // a later position by the node that holds the lease is refused once the pin moved the stored checkpoint earlier
+    // (ADR 186). Any other model starts at the checkpoint the pin settled. Its durable model would read storage when it
+    // subscribes, and by then a save from a later position by another node can have replaced the pin, since a save
+    // without a write version isn't refused. Starting there would skip the events in between.
+    private static StartAt startAtTheSettledCheckpoint(Checkpoint settled) {
+        AtomicBoolean competes = new AtomicBoolean();
+        return StartAt.dynamic(ctx -> {
+            if (competes.get() || CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType())) {
+                competes.set(true);
+                return StartAt.subscriptionModelDefault();
+            }
+            return StartAt.checkpoint(settled);
+        });
+    }
+
+    private static DcbStartAt dcbStartAtTheSettledCheckpoint(String settled) {
+        AtomicBoolean competes = new AtomicBoolean();
+        return DcbStartAt.dynamic(ctx -> {
+            if (competes.get() || CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType())) {
+                competes.set(true);
+                return DcbStartAt.subscriptionModelDefault();
+            }
+            return DcbStartAt.checkpoint(settled);
+        });
     }
 
     // Null when there is no boundary, when the store starter cannot turn it into a checkpoint, and when the
@@ -303,20 +337,31 @@ class StartPositionSupport {
         return checkpoints == null ? null : checkpoints.checkpointOf(liveStart);
     }
 
-    // Pinned whether or not something is stored, since another node may have pinned its own later boundary, and
-    // StartPositionPin settles that race by order. Only a pin over nothing changes the start. Where a checkpoint was
-    // stored already, the subscription resumes from whatever governs, as it did before.
-    private boolean pinnedOverNothingStored(String subscriptionId, Checkpoint boundary) {
+    // Pinned whether or not something is stored, since another node may have pinned its own later boundary, or begun
+    // delivering from it, and StartPositionPin settles that race by order. A pin over nothing answers the checkpoint the
+    // pin settled. Where a checkpoint was stored already, the existence read ran after the boundary was read, so the
+    // stored checkpoint can belong to a node that booted at the same time. When the pin settled on the boundary, the
+    // storage proved the stored one later and wrote the boundary over it, and the subscription starts there. Otherwise
+    // the stored checkpoint is kept, and the subscription resumes from it as it did before.
+    //
+    // Nothing is pinned over a storage the store starter doesn't know to compare with the boundary, since it would keep
+    // a checkpoint another node stored after the boundary was read. The subscription then starts as in 0.34.0, and its
+    // durable model reads storage before it reads the position it records.
+    private @Nullable Checkpoint pinOverNothingStored(String subscriptionId, Checkpoint boundary) {
         @Nullable CheckpointStorage checkpointStorage = applicationContext.getBeanProvider(CheckpointStorage.class).getIfUnique();
-        if (checkpointStorage == null) {
-            return false;
+        @Nullable LiveStartCheckpoints checkpoints = applicationContext.getBeanProvider(LiveStartCheckpoints.class).getIfUnique();
+        if (checkpointStorage == null || checkpoints == null || !checkpoints.ordersCheckpointsIn(checkpointStorage)) {
+            return null;
         }
         boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
         if (!checkpointAlreadyExisted && !checkpointStorage.evaluatesWriteConditionsFor(subscriptionId) && !startWhenFirstPositionCanBeOverwritten()) {
             throw firstPositionCanBeOverwritten(checkpointStorage, subscriptionId);
         }
-        StartPositionPin.pinOrSaveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
-        return !checkpointAlreadyExisted;
+        @Nullable Checkpoint settled = StartPositionPin.pinOrSaveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, boundary);
+        if (!checkpointAlreadyExisted || settled != null && settled.asString().equals(boundary.asString())) {
+            return settled;
+        }
+        return null;
     }
 
     // Refused before the pin writes anything, where the first checkpoint could only be written unconditionally. The

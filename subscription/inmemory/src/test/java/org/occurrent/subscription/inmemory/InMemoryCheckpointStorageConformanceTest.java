@@ -48,5 +48,10 @@ class InMemoryCheckpointStorageConformanceTest extends CheckpointStorageConforma
         public boolean preservesCheckpointType(Checkpoint checkpoint) {
             return true;
         }
+
+        @Override
+        public boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+            return true;
+        }
     }
 }

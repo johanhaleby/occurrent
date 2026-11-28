@@ -129,7 +129,8 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
             assertThat(storage.saves.getFirst().subscriptionId()).isEqualTo("pinning-handler");
             assertThat(storage.saves.getFirst().position()).isEqualTo(GlobalCheckpoint.of(Long.parseLong(BOUNDARY)).asString());
             assertThat(storage.saves.getFirst().condition()).isEqualTo(CheckpointWriteCondition.any());
-            assertThat(startOf(context, "pinning-handler").isDefault()).as("the registration starts at the model default").isTrue();
+            assertThat(startOf(context, "pinning-handler").get(ANY_MODEL)).as("the registration starts at the checkpoint the pin settled")
+                    .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class, started -> assertThat(started.checkpoint).isEqualTo(GlobalCheckpoint.of(Long.parseLong(BOUNDARY))));
         });
     }
 
@@ -142,7 +143,8 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
             assertThat(storage.saves).hasSize(1);
             assertThat(storage.saves.getFirst().subscriptionId()).isEqualTo("other-handler");
             assertThat(storage.saves.getFirst().condition()).isEqualTo(CheckpointWriteCondition.ifAbsent());
-            assertThat(startOf(context, "other-handler").isDefault()).isTrue();
+            assertThat(startOf(context, "other-handler").get(ANY_MODEL)).as("the registration starts at the checkpoint the pin settled")
+                    .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class, started -> assertThat(started.checkpoint).isEqualTo(GlobalCheckpoint.of(Long.parseLong(BOUNDARY))));
         });
     }
 
@@ -345,7 +347,17 @@ class FirstPositionCanBeOverwrittenLiveStartTest {
 
         @Bean
         LiveStartCheckpoints liveStartCheckpoints() {
-            return liveStart -> GlobalCheckpoint.of(Long.parseLong(liveStart));
+            return new LiveStartCheckpoints() {
+                @Override
+                public Checkpoint checkpointOf(String liveStart) {
+                    return GlobalCheckpoint.of(Long.parseLong(liveStart));
+                }
+
+                @Override
+                public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                    return checkpointStorage instanceof RecordingCheckpointStorage;
+                }
+            };
         }
 
         @Bean

@@ -32,6 +32,7 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -423,6 +424,10 @@ class StreamCatchupResumeStoresARestartablePositionTest {
         @Override
         public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
             heldPaused.add(refusal);
+        }
+
+        @Override
+        public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
         }
 
         @Override

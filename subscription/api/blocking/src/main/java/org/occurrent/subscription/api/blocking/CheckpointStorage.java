@@ -190,11 +190,21 @@ public interface CheckpointStorage {
      * nothing to compare positions by. That leaves the caller to its own fallback, the write-order-based rule this
      * capability exists to narrow: a stored position already there when the caller checked for one is taken without
      * comparison, and one that only appeared afterwards is refused unless reading it back shows the same position
-     * {@code candidate} names. A storage overrides this only when it can make that comparison for real; see
-     * {@code NativeMongoCheckpointStorage}, which compares the operation time both a stored and an offered
-     * {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} carry, and answers empty for a stored
-     * checkpoint of any other shape, because only a real checkpoint from actual delivery is not one of those. See
-     * ADR 130.
+     * {@code candidate} names. A storage overrides this only when it can make that comparison for real. The MongoDB
+     * storages, {@code NativeMongoCheckpointStorage} among them, compare the operation time both a stored and an
+     * offered {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} hold. Each checkpoint they
+     * store from 0.35.0 on also keeps the operation time of the first position it was delivered on from, so a stored
+     * resume token or generic checkpoint whose first position is later than {@code candidate} counts as later too, and
+     * {@code candidate} replaces it. They answer empty for any other stored resume token or generic checkpoint, and for
+     * one an older Occurrent version stored, which keeps no such operation time. See ADR 130 and ADR 186.
+     * <p>
+     * The node that stored the later position may already deliver from it, with its version stored next to it, and
+     * this keeps that version. So when {@code candidate} replaces a stored checkpoint, the MongoDB storages also
+     * store a mark with it, and refuse a {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan} write of a
+     * resume token or an operation time while the mark is stored. Without it the next save of that node would store a
+     * position after {@code candidate} and skip the events between the two. A write that replaces the stored checkpoint
+     * removes the mark, and so does {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} when it keeps the
+     * stored checkpoint.
      *
      * @param subscriptionId The id of the subscription whose first position is being contested
      * @param candidate      The position competing to be the subscription's first, whether a losing
@@ -212,9 +222,21 @@ public interface CheckpointStorage {
      * can ask this before it writes anything. The checkpoint that governs is {@code candidate} when nothing is stored
      * or the stored first position is later, and the stored checkpoint otherwise, so this never moves a stored
      * position later. A stored checkpoint that is {@code candidate} itself governs too, and {@code writeVersion} is
-     * stored with it. When the stored checkpoint is another one this storage can't compare {@code candidate} against,
-     * such as one written for a delivered event, nothing is written and this answers {@link Optional#empty()}, as the
-     * default does.
+     * stored with it. On the MongoDB storages, a stored resume token or generic checkpoint whose first position is
+     * later than an operation-time {@code candidate} counts as a later first position, as for the two-argument
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint)}. When the stored checkpoint is another one this storage
+     * can't order before {@code candidate}, such as one written for a delivered event whose first position isn't later,
+     * nothing is written and this answers {@link Optional#empty()}, as the default does.
+     * <p>
+     * A start of the blocking {@code DurableSubscriptionModel} at a {@code StartAt.checkpoint(..)} of the stored
+     * checkpoint stores its version through
+     * {@link #resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String, Checkpoint, long)}, which writes nothing when
+     * nothing is stored. A start at the model default from a checkpoint already stored goes through
+     * {@link #storeWriteVersion(String, long)}.
+     * <p>
+     * When the MongoDB storages keep the stored checkpoint, they also remove the mark the two-argument
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint)} stores when it moves a position earlier, so a
+     * {@code notOlderThan(writeVersion)} save is allowed again, as {@link #storeWriteVersion(String, long)} does.
      * <p>
      * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
      * allow it. When the storage holds a newer version, whatever checkpoint is stored, nothing is written and
@@ -251,10 +273,57 @@ public interface CheckpointStorage {
     }
 
     /**
+     * Settles which checkpoint a subscription goes on from, the way
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} does, but only over a checkpoint that is already
+     * stored. When nothing is stored, nothing is written and this answers {@link Optional#empty()}, so a checkpoint
+     * that a cancel on another node deleted isn't stored again.
+     * <p>
+     * When a checkpoint is stored, the one that governs is {@code candidate}, written over the stored one, when the
+     * stored first position is later, and the stored checkpoint otherwise, so this never answers a checkpoint later
+     * than {@code candidate}. A stored checkpoint that is {@code candidate} itself governs too. {@code writeVersion} is
+     * stored with the checkpoint that governs. When the stored checkpoint is another one this storage can't order
+     * before {@code candidate}, nothing is written and this answers empty. When the MongoDB storages keep the stored
+     * checkpoint, they also remove the mark the two-argument {@link #resolveFirstCheckpointRace(String, Checkpoint)}
+     * stores when it moves a position earlier, so a {@code notOlderThan(writeVersion)} save is allowed again.
+     * <p>
+     * The blocking {@code DurableSubscriptionModel} calls this before it starts a subscription at a
+     * {@code StartAt.checkpoint(..)} of the stored checkpoint, with that checkpoint as {@code candidate}, and starts
+     * from the checkpoint this answers. That is an earlier one when another node stored it between the model's read
+     * and this call. When this answers empty, the subscription starts at {@code candidate} without this node's version
+     * stored with it, as in 0.34.0, and the first checkpoint save of a delivered event stores the version.
+     * <p>
+     * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
+     * allow it. When the storage holds a newer version, nothing is written and
+     * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
+     * <p>
+     * The default answers {@link Optional#empty()} and writes nothing.
+     * {@code NativeMongoCheckpointStorage}, {@code SpringMongoCheckpointStorage}, {@code SpringRedisCheckpointStorage}
+     * and the blocking {@code InMemoryCheckpointStorage} override this method.
+     *
+     * @param subscriptionId The id of the subscription whose stored checkpoint is settled
+     * @param candidate      The checkpoint the subscription is asked to go on from
+     * @param writeVersion   The version to store with the checkpoint that governs
+     * @return The checkpoint that governs once this call returns, stored with {@code writeVersion}, or empty when
+     * nothing is stored, when the stored checkpoint can't be ordered before {@code candidate}, or when this storage
+     * doesn't settle it, and then nothing is written
+     * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
+     *                                                       {@code writeVersion}. The four storages named above throw
+     *                                                       it, and the default answers empty
+     * @throws IllegalArgumentException                      if {@code writeVersion} is negative. The four storages
+     *                                                       named above throw it, and the default answers empty
+     */
+    @NullMarked
+    default Optional<Checkpoint> resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        return Optional.empty();
+    }
+
+    /**
      * Stores {@code writeVersion} with the checkpoint stored for {@code subscriptionId}, whatever checkpoint that is,
      * and answers that checkpoint. The checkpoint itself is left as it is, in the same atomic write. When nothing is
      * stored, nothing is written and this answers {@link Optional#empty()}, so a checkpoint that a cancel on another
-     * node deleted isn't stored again.
+     * node deleted isn't stored again. The MongoDB storages also remove the mark the two-argument
+     * {@link #resolveFirstCheckpointRace(String, Checkpoint)} stores when it moves a position earlier, so a
+     * {@code notOlderThan(writeVersion)} save is allowed again.
      * <p>
      * The blocking {@code DurableSubscriptionModel} calls this before it starts a subscription from a checkpoint
      * already stored. A node that has lost its lease then can't store the checkpoint of a later event over the one

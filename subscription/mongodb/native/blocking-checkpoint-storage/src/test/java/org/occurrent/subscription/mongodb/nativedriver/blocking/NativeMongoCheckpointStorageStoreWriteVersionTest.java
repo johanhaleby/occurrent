@@ -34,6 +34,7 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -165,6 +166,22 @@ class NativeMongoCheckpointStorageStoreWriteVersionTest {
                 });
 
         assertThat(storedDocument()).as("stored document").isEqualTo(before);
+    }
+
+    @Test
+    void removes_the_moved_earlier_mark_and_keeps_the_stored_checkpoint() {
+        storage.save(subscriptionId, operationTimeCheckpoint(900));
+        storage.save(subscriptionId, resumeTokenCheckpoint());
+        Checkpoint earlier = operationTimeCheckpoint(100);
+        storage.resolveFirstCheckpointRace(subscriptionId, earlier);
+        assertThat(storedDocument().get(MongoCommons.POSITION_MOVED_EARLIER)).as("mark before").isEqualTo(true);
+
+        Optional<Checkpoint> answer = storage.storeWriteVersion(subscriptionId, 3);
+
+        assertThat(answer).as("answer").hasValueSatisfying(checkpoint -> assertThat(checkpoint.asString()).isEqualTo(earlier.asString()));
+        assertThat(storedDocument()).as("stored document").doesNotContainKey(MongoCommons.POSITION_MOVED_EARLIER);
+        assertThat(storage.read(subscriptionId).asString()).as("stored position").isEqualTo(earlier.asString());
+        assertThat(storage.writeVersion(subscriptionId)).as("stored version").hasValue(3L);
     }
 
     @Test

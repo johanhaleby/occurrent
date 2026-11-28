@@ -357,7 +357,17 @@ class PinnedLiveStartLostFromTheOplogMongoTest {
         public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
             if (bean instanceof LiveStartCheckpoints starter) {
                 Pin pin = requireNonNull(beanFactory).getBean(Pin.class);
-                return (LiveStartCheckpoints) liveStart -> pin.pinned(starter.checkpointOf(liveStart));
+                return new LiveStartCheckpoints() {
+                    @Override
+                    public @Nullable Checkpoint checkpointOf(String liveStart) {
+                        return pin.pinned(starter.checkpointOf(liveStart));
+                    }
+
+                    @Override
+                    public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                        return starter.ordersCheckpointsIn(checkpointStorage);
+                    }
+                };
             }
             return bean;
         }

@@ -659,7 +659,10 @@ public class OccurrentProperties {
              * start when the one it wires does not. Set this to {@code false} to write every checkpoint
              * unconditionally, which is what a storage that only supports {@code any()} can do. A node that has lost
              * its lease can then still move a checkpoint backwards, and the events between the two positions are
-             * delivered again.
+             * delivered again. Events can also be skipped. When a node starts the subscription at an earlier position
+             * than the node that holds the lease, and its start writes that position over the stored one, the next
+             * save of the node that holds the lease writes its later position over it. No node then delivers the
+             * events between the two positions, see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0186-a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier.md">ADR 186</a>.
              */
             private boolean fenceCheckpoints = true;
 

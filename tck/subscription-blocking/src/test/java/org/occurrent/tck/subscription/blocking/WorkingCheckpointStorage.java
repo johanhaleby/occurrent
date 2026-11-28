@@ -24,6 +24,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 /**
@@ -38,6 +39,15 @@ class WorkingCheckpointStorage implements CheckpointStorage {
 
     private final Map<String, Checkpoint> checkpoints = new HashMap<>();
     private final Map<String, Long> versions = new HashMap<>();
+    private final boolean overridesResolutionWithoutCreatingACheckpoint;
+
+    WorkingCheckpointStorage() {
+        this(true);
+    }
+
+    WorkingCheckpointStorage(boolean overridesResolutionWithoutCreatingACheckpoint) {
+        this.overridesResolutionWithoutCreatingACheckpoint = overridesResolutionWithoutCreatingACheckpoint;
+    }
 
     @Override
     public @Nullable Checkpoint read(String subscriptionId) {
@@ -87,5 +97,23 @@ class WorkingCheckpointStorage implements CheckpointStorage {
     @Override
     public boolean exists(String subscriptionId) {
         return checkpoints.containsKey(subscriptionId);
+    }
+
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        if (!overridesResolutionWithoutCreatingACheckpoint) {
+            return CheckpointStorage.super.resolveFirstCheckpointRaceWithoutCreatingACheckpoint(subscriptionId, candidate, writeVersion);
+        }
+        CheckpointWriteCondition condition = CheckpointWriteCondition.notOlderThan(writeVersion);
+        Long stored = versions.get(subscriptionId);
+        if (stored != null && stored > writeVersion) {
+            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
+        }
+        Checkpoint storedCheckpoint = checkpoints.get(subscriptionId);
+        if (storedCheckpoint == null || !storedCheckpoint.asString().equals(candidate.asString())) {
+            return Optional.empty();
+        }
+        versions.put(subscriptionId, writeVersion);
+        return Optional.of(storedCheckpoint);
     }
 }

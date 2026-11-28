@@ -136,6 +136,12 @@ other sections compile fine and behave differently, so read them first.
   A `CheckpointStorage` of your own gets the version stored with the first position in one write only once it
   implements the three-argument `resolveFirstCheckpointRace`, and with a checkpoint already stored only once it
   implements `storeWriteVersion`. Compiles unchanged.
+- [A save from a later position is refused once a start position moved it earlier](#a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier).
+  On the MongoDB checkpoint storages, a durable subscription stops delivering at a refused save until it is paused and
+  resumed, which `CompetingConsumerSubscriptionModel` does. Compiles unchanged.
+- [A first-position race compares a resume token by where its delivery started](#a-first-position-race-compares-a-resume-token-by-where-its-delivery-started).
+  On the MongoDB checkpoint storages, `resolveFirstCheckpointRace` writes an earlier operation time over a stored
+  resume token whose delivery started later, where 0.34.0 answered empty. Compiles unchanged.
 - [A quiet position whose save throws a checked exception is logged](#a-quiet-position-whose-save-throws-a-checked-exception-is-logged).
   A checked exception that a `CheckpointStorage` throws from the save of a quiet position no longer reaches the
   wrapped subscription model. Compiles unchanged.
@@ -673,6 +679,94 @@ that had lost its lease can write over the first position, which delivers events
 version stored with the first position in one write, override the three-argument `resolveFirstCheckpointRace` as its
 javadoc describes. One that doesn't override `storeWriteVersion` stores no version with a checkpoint already stored,
 and the subscription starts from that checkpoint as in 0.34.0. Override it as its javadoc describes to close that.
+There is no OpenRewrite recipe for this.
+
+## A save from a later position is refused once a start position moved it earlier
+
+### Who is affected
+
+An application whose blocking `DurableSubscriptionModel` has a `CheckpointWriteVersionSource` and stores its
+checkpoints in `NativeMongoCheckpointStorage` or `SpringMongoCheckpointStorage`, with the same subscription started on
+more than one node, as under `CompetingConsumerSubscriptionModel`. Compiles unchanged. `ReactorCheckpointStorage`
+refuses the same saves. `ReactorDurableSubscriptionModel` makes one only after a cancel of the id whose checkpoint
+delete a subscribe of the same id took over, and then saves once more, as below.
+
+### What changes
+
+Node H stores its first position and its version, and delivers from that position. When node B starts the same
+subscription at the present, at an earlier position, B's position is stored and keeps H's version. In 0.34.0 the next
+save of H stored a later position over B's, and no node delivered the events between the two.
+
+From 0.35.0 the MongoDB checkpoint storages refuse that save. A `notOlderThan` write of a resume token or an operation
+time throws `CheckpointWriteConditionNotFulfilledException`, with a stored version that isn't newer than the version
+of the write, until a write replaces the stored checkpoint. Storing a version with the stored checkpoint, as a plain
+`resumeSubscription(id)` does, ends the refusal too.
+
+The durable model calls `handleStoredPositionMovedEarlier` on each `StartRefusalListener` added with
+`addStartRefusalListener`, or logs an error when none is added, and throws the refusal on. The MongoDB subscription
+models log it and stop delivering to the subscription, and nothing resumes it on its own.
+`CompetingConsumerSubscriptionModel` pauses the subscription and resumes it while this node holds the lease. The
+resume replays from B's position, so the events after H's position are delivered again.
+
+A `resumeSubscription(id, startAt)`, on the durable model or on a stream catch-up model, and the position the durable
+model stores after a lost change stream history, store this node's version with the stored checkpoint when the storage
+refuses them this way, and write once more.
+
+`ReactorDurableSubscriptionModel` saves its checkpoints with `CheckpointWriteCondition.any()`, which isn't refused and
+removes the mark, so on the reactor stack H's next save stores its later position over B's, as in 0.34.0. B starts
+from its earlier position and delivers the events between the two, but when B stops before it has delivered them all
+and a save of H's is the last one stored, the events B hadn't delivered are skipped.
+[#1598](https://github.com/johanhaleby/occurrent/issues/1598) tracks that. The model saves with `notOlderThan` only
+after a cancel whose checkpoint delete a subscribe of the same id on that node took over. When the storage refuses
+that save this way, the model logs a warning and saves the checkpoint once more with `any()`, which keeps the stored
+version, so the delete the cancel started is still refused.
+
+### What to do
+
+Under `CompetingConsumerSubscriptionModel`, nothing. Without it, add a `StartRefusalListener` to the durable model, or
+watch for the error log, and pause and resume the subscription with `pauseSubscription(id)` and
+`resumeSubscription(id)`. Make the listener's work asynchronous, since the model calls it on the delivering thread,
+which a pause from that thread would wait for.
+
+If you treat every `CheckpointWriteConditionNotFulfilledException` as a moved lease, a stored version that isn't newer
+than the version of the write means this refusal instead.
+
+There is no OpenRewrite recipe for this.
+
+## A first-position race compares a resume token by where its delivery started
+
+### Who is affected
+
+An application that stores checkpoints in `NativeMongoCheckpointStorage`, `SpringMongoCheckpointStorage` or
+`ReactorCheckpointStorage` and starts the same subscription on more than one node, and code of your own that calls
+the two-argument `resolveFirstCheckpointRace` on one of them. Compiles unchanged.
+
+### What changes
+
+Each checkpoint these storages write from 0.35.0 on keeps a `lineageOrigin` field, the operation time of the first
+position its delivery started from. A checkpoint written over nothing stored takes it from the operation time it
+stores, every later write keeps it, and a first-position race that writes its candidate sets it to the candidate's
+operation time.
+
+Node H stores its first position and then the resume token of an event it delivered. Node B read an earlier position
+before that and stores it only now. In 0.34.0 the two-argument `resolveFirstCheckpointRace` answered empty for H's
+resume token, B kept it, and no node delivered the events between B's position and H's. From 0.35.0 the call writes
+B's position over the resume token when its `lineageOrigin` is later than B's position, stores the
+`positionMovedEarlier` mark with it, and answers B's position. That mark refuses H's next `notOlderThan` save, as
+[a save from a later position is refused once a start position moved it earlier](#a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier)
+describes. B starts there. The
+three-argument `resolveFirstCheckpointRace` compares the same way.
+
+A checkpoint that a version before 0.35.0 stored has no `lineageOrigin`, and is compared as in 0.34.0. So is a
+checkpoint that a node still on 0.34.0 writes again, since that write doesn't keep the field. An ordinary restart keeps
+its stored checkpoint, because its `lineageOrigin` is earlier than the position the restart reads.
+
+### What to do
+
+Nothing, unless code of your own reads the checkpoint documents. Those now have the `lineageOrigin` field. Upgrade
+every node of an application to 0.35.0 before you rely on this, since a node on 0.34.0 removes the field each time it
+writes a checkpoint.
+
 There is no OpenRewrite recipe for this.
 
 ## A quiet position whose save throws a checked exception is logged
@@ -4187,10 +4281,17 @@ is when it subscribes, which is once the startup scan is done, in these cases:
 - It would store that position as its first checkpoint, which every live start but `NOW` with
   `resumeBehavior = SAME_AS_START_AT` does, and Spring can't pick one `CheckpointStorage` bean, as it does with a
   single one or a `@Primary` one among several.
+- It would store that position as its first checkpoint, and the `CheckpointStorage` Spring picks isn't the MongoDB
+  storage of the starter, `SpringMongoCheckpointStorage` on the blocking starter or `ReactorCheckpointStorage` on the
+  reactive one, a subclass included. Another storage, such as `SpringRedisCheckpointStorage`, would keep a checkpoint
+  another node stored after this node read where the event store was, and the handler would skip the events between
+  the two.
 
 Such a handler misses an event written directly to the event store while the scan runs, for example from the
 `@PostConstruct` method of a bean the scan creates. In 0.34.0 it subscribed as the scan registered it, so it got that
-event when the bean was created after it had subscribed.
+event when the bean was created after it had subscribed. Over a checkpoint storage other than the MongoDB storage of
+the starter, a write a `@PostConstruct` method makes directly to the event store before the handler registers is missed
+on a first start, as in 0.34.0, on a single node as much as on several.
 
 The starter writes that first checkpoint with `CheckpointWriteCondition.ifAbsent()`. A `CheckpointStorage` of your own
 that answers `false` from `evaluatesWriteConditionsFor` fails startup instead, unless

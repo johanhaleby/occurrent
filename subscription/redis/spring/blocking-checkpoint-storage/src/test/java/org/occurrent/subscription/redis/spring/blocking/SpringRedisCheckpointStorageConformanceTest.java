@@ -112,5 +112,10 @@ class SpringRedisCheckpointStorageConformanceTest extends CheckpointStorageConfo
                     new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF"))),
                     new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)));
         }
+
+        @Override
+        public boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+            return true;
+        }
     }
 }

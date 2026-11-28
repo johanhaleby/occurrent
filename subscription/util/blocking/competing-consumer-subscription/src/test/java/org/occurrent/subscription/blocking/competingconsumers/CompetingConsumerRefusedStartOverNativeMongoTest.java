@@ -29,6 +29,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -190,6 +191,11 @@ class CompetingConsumerRefusedStartOverNativeMongoTest {
             @Override
             public void handleHeldPaused(String subscriptionId, CatchupCannotResumeException refusal) {
                 throw new AssertionError("A MongoDB model never holds a subscription paused, but was asked to for " + subscriptionId, refusal);
+            }
+
+            @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+                throw new AssertionError("A MongoDB model never reports a stored position moved earlier, but was asked to for " + subscriptionId, refusal);
             }
 
             @Override

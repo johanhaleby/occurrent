@@ -18,6 +18,7 @@
 package org.occurrent.springboot.mongo.reactor;
 
 import org.bson.BsonTimestamp;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
@@ -60,6 +61,7 @@ import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
 import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration;
 import org.occurrent.springboot.reactor.OccurrentReactorBeanNames;
 import org.occurrent.springboot.reactor.PositionOrderedEventStores;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
@@ -118,14 +120,26 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
 
     /**
      * Turns the live start a MongoDB event store reports into the operation-time checkpoint an annotated subscription's
-     * first start is pinned to. The MongoDB checkpoint storages order an operation-time checkpoint, so two nodes that
-     * pin the same subscription at the same moment keep the earlier position.
+     * first start is pinned to. A {@link ReactorCheckpointStorage} compares operation-time checkpoints, so two nodes
+     * that pin the same subscription at the same moment keep the earlier position. Over any other checkpoint storage
+     * the starter stores no first checkpoint and a first start begins where it did in 0.34.0, since such a storage would keep a checkpoint
+     * another node stored after the live start was read. A write a {@code @PostConstruct} method makes directly to the
+     * event store before the subscription registers is then missed on a first start, on a single node as much as on
+     * several.
      */
     @Bean
     LiveStartCheckpoints occurrentReactiveMongoLiveStartCheckpoints() {
-        return liveStart -> {
-            BsonTimestamp operationTime = OperationTimeLiveStart.parse(liveStart);
-            return operationTime == null ? null : new MongoOperationTimeCheckpoint(operationTime);
+        return new LiveStartCheckpoints() {
+            @Override
+            public @Nullable Checkpoint checkpointOf(String liveStart) {
+                BsonTimestamp operationTime = OperationTimeLiveStart.parse(liveStart);
+                return operationTime == null ? null : new MongoOperationTimeCheckpoint(operationTime);
+            }
+
+            @Override
+            public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                return checkpointStorage instanceof ReactorCheckpointStorage;
+            }
         };
     }
 

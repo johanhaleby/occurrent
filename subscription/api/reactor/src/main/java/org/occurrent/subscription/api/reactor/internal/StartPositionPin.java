@@ -59,11 +59,14 @@ public final class StartPositionPin {
      * @param subscriptionId           The subscription whose first position is pinned
      * @param checkpointAlreadyExisted Whether a checkpoint was stored when the caller read {@code position}, asked before it
      * @param position                 The position to pin
-     * @return A {@link Mono} that completes once the first position is settled. It errors with
-     * {@link StartPositionAlreadyPinnedException} when a checkpoint arrived after {@code position} was read, the storage
-     * can't order the two, and it holds another position.
+     * @return A {@link Mono} of the checkpoint the subscription goes on from once the first position is settled. That
+     * is {@code position} when it is written or is the one stored, and the stored checkpoint when the storage orders it
+     * as earlier. It completes empty when a checkpoint was stored before {@code position} was read and the storage
+     * doesn't order the two, since the stored one is kept and this class can't tell where it is. It errors
+     * with {@link StartPositionAlreadyPinnedException} when a checkpoint arrived after {@code position} was read, the
+     * storage can't order the two, and it holds another position.
      */
-    public static Mono<Void> pin(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
+    public static Mono<Checkpoint> pin(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
         requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(position, "position cannot be null");
@@ -75,25 +78,24 @@ public final class StartPositionPin {
             return saveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
         }
         return Mono.defer(() -> checkpointStorage.save(subscriptionId, position, CheckpointWriteCondition.ifAbsent()))
-                .then()
+                .thenReturn(position)
                 .onErrorResume(CheckpointWriteConditionNotFulfilledException.class,
                         __ -> checkpointStorage.resolveFirstCheckpointRace(subscriptionId, position)
                                 .switchIfEmpty(Mono.defer(() -> checkpointAlreadyExisted ? Mono.empty()
-                                        : refuseUnlessTheStoredPositionIsTheOneRead(checkpointStorage, subscriptionId, position)))
-                                .then());
+                                        : refuseUnlessTheStoredPositionIsTheOneRead(checkpointStorage, subscriptionId, position))));
     }
 
     // Reached only when the caller accepts the loss of an unconditional first write, as the Spring Boot starters do
     // with occurrent.subscription.start-when-first-position-can-be-overwritten. A stored checkpoint is left alone,
     // because an unconditional write would move the subscription off it.
-    private static Mono<Void> saveUnconditionally(CheckpointStorage storage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
+    private static Mono<Checkpoint> saveUnconditionally(CheckpointStorage storage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
         if (checkpointAlreadyExisted) {
             return Mono.empty();
         }
         return Mono.defer(() -> {
             log.warn(UNCONDITIONAL_WRITE_WARNING, storage.getClass().getName(), subscriptionId);
             return storage.save(subscriptionId, position);
-        }).then();
+        }).thenReturn(position);
     }
 
     // Something was stored between the read and this write, where this class cannot order it against the position

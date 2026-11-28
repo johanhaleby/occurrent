@@ -30,9 +30,9 @@ import java.util.List;
  * constructing a new instance. The suite never cleans up on an implementation's behalf, because what needs cleaning
  * is exactly the part a contract cannot describe.
  * <p>
- * There is one thing the suite has to be told rather than ask, and it is {@link #preservesCheckpointType(Checkpoint)}.
- * Every storage round-trips the value, but they disagree about whether the {@link Checkpoint} that comes back is the
- * same type that went in, and nothing on {@code CheckpointStorage} reports which way a given storage goes.
+ * Some things the suite has to be told rather than ask. One is {@link #preservesCheckpointType(Checkpoint)}. Every
+ * storage round-trips the value, but they disagree about whether the {@link Checkpoint} that comes back is the same
+ * type that went in, and nothing on {@code CheckpointStorage} reports which way a given storage goes.
  */
 @NullMarked
 public interface CheckpointStorageFixture {
@@ -94,6 +94,40 @@ public interface CheckpointStorageFixture {
      */
     default List<Checkpoint> additionalCheckpoints() {
         return List.of();
+    }
+
+    /**
+     * Two change stream positions of this storage, the earlier one first, for a storage that refuses a
+     * {@link org.occurrent.subscription.CheckpointWriteCondition#notOlderThan(long) notOlderThan} save of a change
+     * stream position once {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint)} moved the stored
+     * position earlier.
+     * <p>
+     * The node that stored the later position, with its version, may already deliver from it, and its next save would
+     * otherwise skip the events between the two positions. Occurrent's MongoDB storages refuse that save and answer
+     * two operation times here. The empty list, the default, means the storage doesn't move a stored position earlier
+     * that way, and the suite asserts that a save from a later position is accepted instead of refused. This is data
+     * rather than a flag because the suite can't build a position that the storage ranks without naming its types.
+     */
+    default List<Checkpoint> startPositionsEarlierFirst() {
+        return List.of();
+    }
+
+    /**
+     * Whether this storage overrides
+     * {@link CheckpointStorage#resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String, Checkpoint, long)}.
+     * <p>
+     * {@code false}, the default, means the storage keeps the default of that method, and the suite asserts that it
+     * answers empty and writes nothing for every input, a negative or older version included. {@code true} means the
+     * suite asserts everything the method's javadoc promises a storage that overrides it. The fixtures of Occurrent's
+     * MongoDB, Redis and blocking in-memory storages answer {@code true}.
+     * <p>
+     * A fixture that answers {@code false} for a storage that overrides the method as documented fails, since the
+     * storage then answers a checkpoint the suite expects empty. One that answers {@code true} for a storage that keeps
+     * the default fails too. This is a declaration because nothing on {@code CheckpointStorage} reports whether the
+     * method was overridden.
+     */
+    default boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+        return false;
     }
 
     /**

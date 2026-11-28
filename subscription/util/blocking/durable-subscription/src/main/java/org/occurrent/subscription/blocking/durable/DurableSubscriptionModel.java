@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
@@ -29,7 +30,9 @@ import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.*;
+import org.occurrent.subscription.api.blocking.StartRefusalReportingSubscriptions.StartRefusalListener;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +53,7 @@ import java.util.StringJoiner;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -137,6 +141,20 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * before the position that stored. A wrapped model that evaluates the start position again then starts from the
  * checkpoint stored.
  * <p>
+ * A subscribe with {@link StartAt#checkpoint(Checkpoint)} of the checkpoint stored, which the Spring Boot starter
+ * passes when it settled its start boundary without a competing consumer, also stores the version with that checkpoint
+ * before it starts there, through
+ * {@link CheckpointStorage#resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String, Checkpoint, long)} with that
+ * checkpoint as the position. Without it, a mark another node's first position left stored would refuse this node's
+ * first save of a delivered event. The start is the caller's, so when the storage holds a newer write version or the
+ * call fails, this model logs it and starts from that checkpoint anyway. When another node moved the stored checkpoint
+ * earlier between this model's read and the call, the storage keeps that earlier one and removes the mark, and this
+ * model starts from the checkpoint the storage answers instead. Starting at the caller's checkpoint then would let this
+ * node's saves move storage past the events the other node replays. When a cancel on another node deleted the
+ * checkpoint between the read and the call, the storage writes nothing, so the subscription starts at the caller's
+ * checkpoint without a version, as in 0.34.0, and the first checkpoint save of a delivered event stores the version.
+ * A subscribe of an id this model already runs or holds paused stores no version, and the wrapped model refuses it with {@link DuplicateSubscriptionIdException}.
+ * <p>
  * Without a version, or for a storage whose three-argument {@code resolveFirstCheckpointRace} answers empty, the first
  * position is written with
  * {@link CheckpointWriteCondition#ifAbsent()} and no write version, as in 0.34.0, so of two nodes recording one at the
@@ -158,7 +176,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * The position is recorded once the wrapped model's {@code subscribe(..)} has returned, or earlier if the wrapped model
  * evaluates the start position before then, and the wrapped model gets no start position before it is stored. So with
  * the MongoDB subscription models Occurrent ships, a subscribe that the wrapped model refuses with
- * {@link DuplicateSubscriptionIdException}, because it already holds the id, stores no position.
+ * {@link DuplicateSubscriptionIdException}, because it already holds the id, stores no position and no version.
  * <p>
  * An evaluation of the start position never waits for {@code subscribe(..)} to return. When {@code subscribe(..)} or
  * another evaluation of the same subscribe has decided the position or is writing it to storage, the evaluation takes
@@ -226,6 +244,16 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * history was lost, for the id rather than for one subscribe. When a wrapped model of your own reports either for the
  * held subscription, that position can replace the checkpoint of a later {@code subscribe(..)} of the id.
  * <p>
+ * A MongoDB checkpoint storage refuses the save of a delivered event or a quiet position, with a stored version that
+ * isn't newer than the version of the save, once another node's start position moved the stored position earlier,
+ * see {@link CheckpointWriteCondition#notOlderThan(long)}. This model then tells each listener added with
+ * {@link #addStartRefusalListener(StartRefusalListener)} through
+ * {@link StartRefusalListener#handleStoredPositionMovedEarlier(String, CheckpointWriteConditionNotFulfilledException)},
+ * or logs an error when none is added, and throws the refusal on, which ends delivery in the MongoDB subscription
+ * models. It doesn't resume the subscription itself. A pause and a {@link #resumeSubscription(String)} store this
+ * node's version with the stored checkpoint and replay from it, and the blocking
+ * {@code CompetingConsumerSubscriptionModel} does both while this node holds the lease.
+ * <p>
  * A wrapped model of your own has three requirements that this model doesn't check:
  * <ul>
  * <li>It refuses an id it already holds before it evaluates the start position. A model that evaluates first can
@@ -240,9 +268,13 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * </ul>
  */
 @NullMarked
-public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions,
+        StartRefusalReportingSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
+
+    // Told about a save refused because another node's start position moved the stored position earlier
+    private final List<StartRefusalListener> startRefusalListeners = new CopyOnWriteArrayList<>();
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     // The stillWanted of a two-argument globalCheckpoint or canResumeFrom running on this thread, for the one-argument
@@ -554,6 +586,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     }
                 });
             } catch (CheckpointWriteConditionNotFulfilledException e) {
+                reportIfStoredPositionMovedEarlier(subscriptionId, e, writeCondition);
                 throw e;
             } catch (Exception loggedAbove) {
                 // Tried again after the interval
@@ -578,11 +611,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             locks.addAll(saveLocksOf(writing));
             underLocks(locks, () -> {
                 try {
-                    storage.save(subscriptionId, restartedFrom, writeCondition);
+                    saveRepositioning(subscriptionId, restartedFrom, writeCondition);
                     writing.forEach(registration -> registration.restartPositionStored(restartedFrom));
                 } catch (CheckpointWriteConditionNotFulfilledException e) {
                     writing.forEach(CheckpointRegistration::storedUnknown);
-                    log.warn("Did not store the position subscription {} restarts from after its history was lost, since another node has written its checkpoint with a newer lease: {}",
+                    log.warn("Did not store the position subscription {} restarts from after its history was lost, since the checkpoint storage refused the write: {}",
                             subscriptionId, e.getMessage());
                 } catch (Throwable e) {
                     // Throwable, since a storage written in Kotlin can throw a checked exception
@@ -593,6 +626,27 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
             });
         });
+    }
+
+    // For a write that moves the subscription to a position of its own, a resume at a position or a restart after a lost
+    // history. Once another node's start position moved the stored position earlier, the storage refuses it, and nothing
+    // else would take that refusal away, so the resume would be refused on every try. This node's version is stored
+    // with the stored checkpoint first, which takes the refusal away and still refuses a newer version, and the write is
+    // made once more. The subscription delivers from the position written, not from the one this node delivered from
+    // before. After a lost history the stored position is earlier than the one whose history was lost, so no run can
+    // replay from it, and a resume there would restart from the present again and skip what this run delivers until then
+    private void saveRepositioning(String subscriptionId, Checkpoint position, CheckpointWriteCondition writeCondition) {
+        try {
+            storage.save(subscriptionId, position, writeCondition);
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            if (!(writeCondition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan) || !storedPositionMovedEarlier(e, writeCondition)) {
+                throw e;
+            }
+            if (storage.storeWriteVersion(subscriptionId, notOlderThan.writeVersion()).isEmpty()) {
+                throw e;
+            }
+            storage.save(subscriptionId, position, writeCondition);
+        }
     }
 
     /**
@@ -721,7 +775,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                         Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
                         toStore = checkpoint;
                         boolean saved = registration.saveUnlessCancelledRepositionedOrSuperseded(delivery, checkpoint, () -> {
-                            storage.save(subscriptionId, checkpoint, writeCondition);
+                            try {
+                                storage.save(subscriptionId, checkpoint, writeCondition);
+                            } catch (CheckpointWriteConditionNotFulfilledException e) {
+                                reportIfStoredPositionMovedEarlier(subscriptionId, e, writeCondition);
+                                throw e;
+                            }
                             registration.lastWrite.set(System.nanoTime());
                         });
                         if (!saved) {
@@ -912,6 +971,34 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
         OptionalLong version = writeVersionSource.writeVersion(subscriptionId);
         return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
+    }
+
+    // A notOlderThan(v) write is refused with a stored version that isn't newer than v only when another node's start
+    // position moved the stored position earlier, as the MongoDB storages refuse it
+    private static boolean storedPositionMovedEarlier(CheckpointWriteConditionNotFulfilledException refusal, CheckpointWriteCondition writeCondition) {
+        return writeCondition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan
+               && (refusal.storedVersion.isEmpty() || refusal.storedVersion.getAsLong() <= notOlderThan.writeVersion());
+    }
+
+    // This node may have delivered events after the stored position, so the subscription has to replay from it, and only
+    // a resume does that. The caller throws the refusal on, which ends delivery in the wrapped model
+    private void reportIfStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal, CheckpointWriteCondition writeCondition) {
+        if (!storedPositionMovedEarlier(refusal, writeCondition)) {
+            return;
+        }
+        if (startRefusalListeners.isEmpty()) {
+            log.error("The checkpoint save of subscription {} was refused, since another node's start position moved its stored " +
+                      "position earlier, and this node may have delivered events after that position. Delivery stops here, and " +
+                      "nothing resumes it. Pause and resume the subscription to replay from the stored position.", subscriptionId, refusal);
+            return;
+        }
+        for (StartRefusalListener listener : startRefusalListeners) {
+            try {
+                listener.handleStoredPositionMovedEarlier(subscriptionId, refusal);
+            } catch (RuntimeException e) {
+                log.error("A listener failed to handle the refused checkpoint save of subscription {}.", subscriptionId, e);
+            }
+        }
     }
 
     // Thrown on the subscriber's own thread once the wrapped model's subscribe has returned, so the refusal reaches
@@ -1215,9 +1302,75 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 return StartAt.checkpoint(checkpoint);
             });
         } else {
-            startAtToUse = originalStartAt;
+            if (originalStartAt instanceof StartAt.StartAtCheckpoint startAtCheckpoint && !heldOnThisNode(subscriptionId)) {
+                Checkpoint startsFrom = storeThisNodesWriteVersionWithTheStoredCheckpointAt(subscriptionId, startAtCheckpoint.checkpoint);
+                startAtToUse = startsFrom == startAtCheckpoint.checkpoint ? originalStartAt : StartAt.checkpoint(startsFrom);
+            } else {
+                startAtToUse = originalStartAt;
+            }
         }
         return startAtToUse;
+    }
+
+    // The wrapped model refuses a subscribe of such an id as a duplicate, so it stores no version. Storing one would
+    // remove the mark a first-position race stores, and the next save of the subscription that already runs would write
+    // a later position over the earlier one without being refused. A wrapped model that was shut down answers neither
+    // running nor paused and still refuses the id, which the tracked ids catch
+    private boolean heldOnThisNode(String subscriptionId) {
+        SubscriptionModel wrapped = getWrappedSubscriptionModel();
+        return checkpointedSubscriptions.contains(subscriptionId) || wrapped.isRunning(subscriptionId) || wrapped.isPaused(subscriptionId);
+    }
+
+    // A start at the checkpoint stored goes on from it, so this node's version is stored with it, as for a start at the
+    // model default. That also removes the mark a first-position race stores when it moves the stored checkpoint
+    // earlier, which would refuse this node's own saves from that checkpoint. Runs under the id lock, so no cancel or
+    // resume of the id on this node comes between the read and the write. Nothing is written when another checkpoint
+    // is stored, or none, and the version source isn't asked then, so a start at a checkpoint of the caller's own reads
+    // no version before its first event. When a newer version is stored, or the write fails, the subscription still
+    // starts at that checkpoint.
+    //
+    // Another node can still move the stored checkpoint earlier between the read and the write. The storage then keeps
+    // that earlier checkpoint, stores this node's version with it and removes the mark, so this node no longer starts at
+    // startAt but at the checkpoint the storage answers. Starting at startAt instead would let this node's saves move
+    // storage past the events the other node replays from the earlier checkpoint, and lose them should that node stop
+    // before it reaches startAt. The storage never answers a checkpoint later than startAt, so this skips nothing.
+    // A cancel on another node between the read and the write deletes the checkpoint, and the storage writes nothing
+    // then, so the subscription starts at startAt without a version, as in 0.34.0
+    private Checkpoint storeThisNodesWriteVersionWithTheStoredCheckpointAt(String subscriptionId, Checkpoint startAt) {
+        Checkpoint stored;
+        try {
+            stored = storage.read(subscriptionId);
+        } catch (Exception e) {
+            // Exception, since a storage written in Kotlin can throw a checked exception
+            log.warn("Could not read the checkpoint stored for subscription {}, so this node's write version was not stored " +
+                     "with the checkpoint {} it starts at. It starts there anyway.", subscriptionId, startAt.asString(), e);
+            return startAt;
+        }
+        if (stored == null || !stored.asString().equals(startAt.asString())) {
+            return startAt;
+        }
+        OptionalLong writeVersion = writeVersionOfStoredCheckpoint(subscriptionId);
+        if (writeVersion.isEmpty()) {
+            return startAt;
+        }
+        try {
+            Optional<Checkpoint> governs = storage.resolveFirstCheckpointRaceWithoutCreatingACheckpoint(subscriptionId, stored, writeVersion.getAsLong());
+            if (governs.isEmpty() || governs.get().asString().equals(startAt.asString())) {
+                return startAt;
+            }
+            log.info("Another node moved the checkpoint stored for subscription {} earlier, to {}, after this node read {} " +
+                     "there and before it stored its write version with it. The subscription starts at {}.",
+                    subscriptionId, governs.get().asString(), startAt.asString(), governs.get().asString());
+            return governs.get();
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            log.debug("A newer write version is stored for subscription {}, so this node's version {} was not stored with the " +
+                      "checkpoint {} it starts at.", subscriptionId, writeVersion.getAsLong(), startAt.asString());
+        } catch (Exception e) {
+            // Exception, since a storage written in Kotlin can throw a checked exception
+            log.warn("Could not store this node's write version with the checkpoint {} that subscription {} starts at. It " +
+                     "starts there anyway.", startAt.asString(), subscriptionId, e);
+        }
+        return startAt;
     }
 
     // Read once the subscribe is tracked, so a registration it replaced has stopped writing and what is read was stored
@@ -1445,7 +1598,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * the checkpoint of its event over the stored position once it returns, and neither does a quiet position read
      * before this call. That holds when this call throws too.
      * When the checkpoint storage refuses the write with {@link CheckpointWriteConditionNotFulfilledException}, because another
-     * node has written with a newer lease, the exception propagates and the subscription stays paused. When the wrapped
+     * node has written with a newer lease, the exception propagates and the subscription stays paused. When it refuses
+     * the write because another node's start position moved the stored position earlier, this model first stores this
+     * node's version with the stored checkpoint, the way {@link #resumeSubscription(String)} does, and writes the
+     * position once more. A restart after a lost history stores its position the same way. When the wrapped
      * model's resume throws after the write, the checkpoint stored before is put back with the write condition the
      * position was stored with, and the exception propagates, so a failed resume leaves the stored position as it was
      * before the call. A checkpoint another node has written with a newer lease in the meantime refuses the put-back. A catch-up model that shares the
@@ -1517,7 +1673,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                         writing.forEach(registration -> registration.mayStoreThisNodesWriteVersion(notOlderThan.writeVersion()));
                     }
                     try {
-                        storage.save(subscriptionId, position, writeCondition);
+                        saveRepositioning(subscriptionId, position, writeCondition);
                     } catch (Throwable failure) {
                         writing.forEach(CheckpointRegistration::repositioning);
                         writing.forEach(registration -> registration.repositionMayBeStored(position, previous));
@@ -1803,6 +1959,53 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public boolean redeliversAnAttemptNotMade() {
         return RedeliveringSubscriptions.findIn(subscriptionModel).map(RedeliveringSubscriptions::redeliversAnAttemptNotMade).orElse(false);
+    }
+
+    /**
+     * Tells {@code listener} through {@link StartRefusalListener#handleStoredPositionMovedEarlier} about each checkpoint
+     * save of this model the storage refused because another node's start position moved the stored position
+     * earlier, and passes it on to the wrapped model, so a start position the wrapped model refuses still reaches it.
+     * This model is found before the wrapped model when a caller looks the capability up, so without passing it on,
+     * those refusals would never reach the listener.
+     */
+    @Override
+    public void addStartRefusalListener(StartRefusalListener listener) {
+        requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        startRefusalListeners.add(listener);
+        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.addStartRefusalListener(listener));
+    }
+
+    @Override
+    public void removeStartRefusalListener(StartRefusalListener listener) {
+        requireNonNull(listener, StartRefusalListener.class.getSimpleName() + " cannot be null");
+        startRefusalListeners.remove(listener);
+        StartRefusalReportingSubscriptions.findIn(subscriptionModel).ifPresent(wrapped -> wrapped.removeStartRefusalListener(listener));
+    }
+
+    /**
+     * Answers what the wrapped model answers, since only the wrapped model holds a subscription paused for want of a
+     * position at the present, and listeners are passed on to it.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, UnsupportedStartAtException refusal) {
+        return StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+    }
+
+    /**
+     * Answers what the wrapped model answers, since listeners are passed on to it.
+     */
+    @Override
+    public boolean isHeldPausedFor(String subscriptionId, CatchupCannotResumeException refusal) {
+        return StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(wrapped -> wrapped.isHeldPausedFor(subscriptionId, refusal)).orElse(false);
+    }
+
+    /**
+     * Answers what the wrapped model answers, since only the wrapped model refuses a start position after
+     * {@code subscribe} has returned, and {@code false} when it doesn't report its refusals.
+     */
+    @Override
+    public boolean reportsStartRefusals() {
+        return StartRefusalReportingSubscriptions.findIn(subscriptionModel).map(StartRefusalReportingSubscriptions::reportsStartRefusals).orElse(false);
     }
 
     /**

@@ -8,6 +8,12 @@ Accepted. Closes #771, together with #738 before it. Amends [ADR 116](0116-a-che
 closing paragraph and [ADR 86](0086-a-manual-subscription-is-registered-not-started.md)'s fourth amendment, both of
 which named this as the open question. Builds on the `ifAbsent()` pin both amendments record.
 
+Amended by [ADR 186](0186-a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier.md). On the
+MongoDB storages, a `notOlderThan` save from the node that delivers from the later position is refused once the
+earlier one wins, and that node replays from the earlier one once it is paused and resumed. A stored resume token or
+generic checkpoint is compared by the operation time of the first position its delivery started from, when 0.35.0 or
+later stored it.
+
 ## Context
 
 `ManualStartSubscriptionModel.pinStartPosition` and `ReactorDurableSubscriptionModel`'s own first-position pin write

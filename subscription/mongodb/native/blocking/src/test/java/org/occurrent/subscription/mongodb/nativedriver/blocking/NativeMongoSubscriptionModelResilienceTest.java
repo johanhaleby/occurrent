@@ -505,6 +505,11 @@ public class NativeMongoSubscriptionModelResilienceTest {
             }
 
             @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+                throw new AssertionError("A MongoDB model never reports a stored position moved earlier, but was asked to for " + subscriptionId, refusal);
+            }
+
+            @Override
             public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
                 throw new AssertionError("A lost history is refused, not held paused, but was held for " + subscriptionId, refusal);
             }

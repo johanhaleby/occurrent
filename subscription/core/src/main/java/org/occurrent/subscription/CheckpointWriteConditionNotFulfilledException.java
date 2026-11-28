@@ -26,12 +26,17 @@ import java.util.StringJoiner;
 /**
  * A {@code CheckpointStorage} refused a checkpoint write because its {@link CheckpointWriteCondition} was not met.
  * <p>
- * This means the node that attempted the write is not the one the stored version belongs to, most often because its
- * lease moved to another node while it was still delivering. That is the state of another machine rather than a
+ * Most often this means the node that attempted the write is not the one the stored version belongs to, because its
+ * lease moved to another node while it was still delivering. With the MongoDB checkpoint storages it can also mean
+ * that another node's start position moved the stored position earlier, see
+ * {@link CheckpointWriteCondition#notOlderThan(long)}, and the stored version is then not newer than the version of the
+ * write. Either way it is the state of another machine rather than a
  * mistake in the calling code, so unlike {@code WriteConditionNotFulfilledException} on the event store side,
  * passing a different argument does not fix it, and this does not join
  * {@link SubscriptionRefusedException}'s sealed family. It extends {@link IllegalStateException} instead, and it
  * must never be retried on the path that threw it, since retrying only repeats the write that was already refused.
+ * A write made again after a three-argument {@code resolveFirstCheckpointRace} that kept the stored checkpoint is not
+ * such a retry, since that resolve stored this node's version and ended the refusal for a moved start position.
  */
 @NullMarked
 public class CheckpointWriteConditionNotFulfilledException extends IllegalStateException {

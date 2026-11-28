@@ -43,6 +43,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -154,6 +155,37 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
         );
     }
 
+    @Test
+    void a_start_at_the_stored_checkpoint_whose_checkpoint_a_cancel_deletes_before_the_version_is_stored_starts_there_and_stores_nothing() {
+        HoldingStorage storage = new HoldingStorage();
+        storage.delegate.save(SUBSCRIPTION_ID, STORED);
+        storage.beforeTheFirstResolution = () -> storage.delegate.delete(SUBSCRIPTION_ID);
+        AtomicInteger versionsAsked = new AtomicInteger();
+        CapturingFeed feed = new CapturingFeed() {
+            @Override
+            public boolean isRunning(String subscriptionId) {
+                return false;
+            }
+        };
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> {
+            versionsAsked.incrementAndGet();
+            return OptionalLong.of(2);
+        });
+
+        Throwable thrown = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, StartAt.checkpoint(STORED), __ -> {
+        }));
+
+        assertAll(
+                () -> assertThat(thrown).as("thrown by subscribe").isNull(),
+                () -> assertThat(storage.resolutions.get()).as("resolutions asked of the storage").isEqualTo(1),
+                () -> assertThat(versionsAsked).as("asks of the version source").hasValue(1),
+                () -> assertThat(feed.startAt).as("start position of the wrapped model").isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                        startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo(STORED.asString())),
+                () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID)).as("stored checkpoint").isNull(),
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty()
+        );
+    }
+
     /**
      * Over {@link InMemoryCheckpointStorage}, holds a read of one thread right after the read returned, until released.
      */
@@ -162,6 +194,17 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
         final CountDownLatch readReturned = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         private volatile @Nullable Thread held;
+        @Nullable Runnable beforeTheFirstResolution;
+        final AtomicInteger resolutions = new AtomicInteger();
+
+        private void beforeAResolution() {
+            resolutions.incrementAndGet();
+            Runnable hook = beforeTheFirstResolution;
+            beforeTheFirstResolution = null;
+            if (hook != null) {
+                hook.run();
+            }
+        }
 
         void holdReadsOf(Thread thread) {
             held = thread;
@@ -209,7 +252,14 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
 
         @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            beforeAResolution();
             return delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+        }
+
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            beforeAResolution();
+            return delegate.resolveFirstCheckpointRaceWithoutCreatingACheckpoint(subscriptionId, candidate, writeVersion);
         }
 
         @Override
@@ -221,7 +271,7 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
     /**
      * Keeps the start position it is given and evaluates nothing, so every evaluation is the test's own.
      */
-    private static final class CapturingFeed extends NoOpFeed {
+    private static class CapturingFeed extends NoOpFeed {
         volatile StartAt startAt;
 
         @Override

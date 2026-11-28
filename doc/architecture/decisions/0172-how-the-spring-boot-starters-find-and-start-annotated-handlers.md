@@ -231,22 +231,37 @@ begins there, except in the cases the rest of this section lists. That answers t
 the startup writes too. They start live the same way, and a `@Projection` and a `@Saga` start at `DEFAULT` unless
 they set `startAt`.
 
-- With a `CheckpointStorage` that Spring can pick, a single one or a `@Primary` one among several, the starter stores
-  the live start as the subscription's first checkpoint, with `CheckpointWriteCondition.ifAbsent()`, and starts it at
-  the subscription model's default, which resumes from that checkpoint. A storage that answers `false` from
+- With a `CheckpointStorage` that Spring can pick, a single one or a `@Primary` one among several, that is the MongoDB
+  storage of the starter, `SpringMongoCheckpointStorage` on the blocking starter or `ReactorCheckpointStorage` on the
+  reactive one, a subclass included, the starter stores the live start as the subscription's first checkpoint, with
+  `CheckpointWriteCondition.ifAbsent()`, and starts it at the subscription model's default, which resumes from that
+  checkpoint. A storage that answers `false` from
   `evaluatesWriteConditionsFor` fails the startup instead, unless
   `occurrent.subscription.start-when-first-position-can-be-overwritten` is set, and then gets an unconditional write
   with a warning, as the durable models do, per
   [ADR 184](0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
 - At `NOW` with `resumeBehavior = SAME_AS_START_AT`, nothing is stored and the live subscription model starts there.
+- Over any other `CheckpointStorage`, such as `SpringRedisCheckpointStorage`, the starter stores nothing and the
+  subscription starts as in 0.34.0. The live start is read long before the subscription asks the storage whether a
+  checkpoint is stored, and such a storage keeps a checkpoint another node stored in between, so a subscription
+  started at the live start would skip the events between the two. A write a `@PostConstruct` method makes directly
+  to the event store before the subscription registers is then missed on a first start, as in 0.34.0, on a single
+  node as much as on several. The starter asks `LiveStartCheckpoints.ordersCheckpointsIn`, which the MongoDB
+  starters answer for their own storage only.
 - A subscription that has a checkpoint stored already, or whose start the application's `SubscriptionResumePoints`
-  gives, starts as in 0.34.0. So does any other one when Spring can't pick a `CheckpointStorage`.
+  gives, starts as in 0.34.0. So does any other one when Spring can't pick a `CheckpointStorage`. A checkpoint that
+  another node stored after this node read its live start is different. On the MongoDB storage of the starter, when
+  that node's first position is later than the live start, the first-position race of
+  [ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md) writes the live start
+  over it, as [ADR 186](0186-a-save-from-a-later-position-is-refused-once-a-start-position-moved-it-earlier.md)
+  records, and the subscription starts from the live start.
 
 A subscription starts where the event store is when it subscribes, which decision point 3 places after the startup
 scan, also in three cases where the starter has no live start to give it. On the reactor starter a bean built on a Reactor non-blocking thread reads none,
 since the read blocks. An event store bean behind a Spring AOP proxy is read through its single target, and one
 without a single target is skipped with a warning, since calling the proxy would run its advice. Only the MongoDB
-starters turn a live start into a checkpoint, through the `LiveStartCheckpoints` bean they declare.
+starters turn a live start into a checkpoint, through the `LiveStartCheckpoints` bean they declare, and only over the
+MongoDB storage of the starter.
 
 The live start comes from the store the subscription model reads, the one Spring injects as its `EventStoreQueries`,
 or as its `DcbEventStore` when the `STREAM` capability is off, so the only one or the `@Primary` one. Another bean over

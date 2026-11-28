@@ -26,6 +26,8 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Optional;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -78,10 +80,14 @@ public final class StartPositionPin {
      * @param subscriptionId           The subscription whose first position is pinned
      * @param checkpointAlreadyExisted Whether a checkpoint was stored when the caller read {@code position}, asked before it
      * @param position                 The position to pin
+     * @return The checkpoint the subscription goes on from once the first position is settled. That is
+     * {@code position} when it is written or is the one stored, and the stored checkpoint when the storage orders it as
+     * earlier. It is {@code null} when a checkpoint was stored before {@code position} was read and the storage doesn't
+     * order the two, since the stored one is kept and this class can't tell where it is.
      * @throws StartPositionAlreadyPinnedException when a checkpoint arrived after {@code position} was read, the storage
      *                                             can't order the two, and it holds another position
      */
-    public static void pinOrSaveUnconditionally(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
+    public static @Nullable Checkpoint pinOrSaveUnconditionally(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
         requireArguments(checkpointStorage, subscriptionId, position);
         // Written with ifAbsent() rather than an exists() check followed by a save(), because those are two calls with
         // nothing holding them together, so two nodes registering the same subscription id at the same moment would
@@ -94,10 +100,9 @@ public final class StartPositionPin {
         // trusting checkpointAlreadyExisted alone would be. checkpointAlreadyExisted stays as the fallback's own
         // signal, for a storage that answered resolveFirstCheckpointRace empty. See ADR 130.
         if (!checkpointStorage.evaluatesWriteConditionsFor(subscriptionId)) {
-            saveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
-            return;
+            return saveUnconditionally(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
         }
-        pinIfAbsent(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
+        return pinIfAbsent(checkpointStorage, subscriptionId, checkpointAlreadyExisted, position);
     }
 
     private static void requireArguments(CheckpointStorage checkpointStorage, String subscriptionId, Checkpoint position) {
@@ -106,32 +111,36 @@ public final class StartPositionPin {
         requireNonNull(position, "position cannot be null");
     }
 
-    private static void pinIfAbsent(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
+    private static @Nullable Checkpoint pinIfAbsent(CheckpointStorage checkpointStorage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
         try {
             checkpointStorage.save(subscriptionId, position, CheckpointWriteCondition.ifAbsent());
+            return position;
         } catch (CheckpointWriteConditionNotFulfilledException e) {
-            if (checkpointStorage.resolveFirstCheckpointRace(subscriptionId, position).isPresent()) {
+            Optional<Checkpoint> settled = checkpointStorage.resolveFirstCheckpointRace(subscriptionId, position);
+            if (settled.isPresent()) {
                 // Settled by position: either this node's own position was durably written in place of a stored one
                 // it proved later, or the stored one was confirmed earlier than or equal to this node's own. Neither
                 // outcome can have skipped anything this node's position would have covered.
-                return;
+                return settled.get();
             }
             if (checkpointAlreadyExisted) {
-                return;
+                return null;
             }
             refuseUnlessTheStoredPositionIsTheOneRead(checkpointStorage, subscriptionId, position);
+            return position;
         }
     }
 
     // Reached only when the caller accepts the loss of an unconditional first write, as the Spring Boot starters do
     // with occurrent.subscription.start-when-first-position-can-be-overwritten. A stored checkpoint is left alone,
     // because an unconditional write would move the subscription off it.
-    private static void saveUnconditionally(CheckpointStorage storage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
+    private static @Nullable Checkpoint saveUnconditionally(CheckpointStorage storage, String subscriptionId, boolean checkpointAlreadyExisted, Checkpoint position) {
         if (checkpointAlreadyExisted) {
-            return;
+            return null;
         }
         log.warn(UNCONDITIONAL_WRITE_WARNING, storage.getClass().getName(), subscriptionId);
         storage.save(subscriptionId, position);
+        return position;
     }
 
     // Something was stored between the read above and this write, so it was written where this class cannot order

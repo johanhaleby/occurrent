@@ -1731,10 +1731,36 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // On the condition that the takeover of a delete of the id set for the generation, see takeOverPositionDelete, and
-    // as with no delete running otherwise
+    // as with no delete running otherwise. A refusal for a start position that moved the stored position earlier is
+    // saved again as with no delete running, since ReactorMongoSubscriptionModel would otherwise run the action again
+    // for as long as the mark stays stored
     private Mono<Checkpoint> savePosition(String subscriptionId, PositionWriter writer, Checkpoint checkpoint) {
         @Nullable CheckpointWriteCondition condition = writer.takeOver.writeCondition;
-        return condition == null ? storage.save(subscriptionId, checkpoint) : storage.save(subscriptionId, checkpoint, condition);
+        if (condition == null) {
+            return storage.save(subscriptionId, checkpoint);
+        }
+        return storage.save(subscriptionId, checkpoint, condition)
+                .onErrorResume(CheckpointWriteConditionNotFulfilledException.class, refusal -> storedPositionMovedEarlier(refusal, condition)
+                        ? saveOverAnEarlierStartPosition(subscriptionId, checkpoint, refusal)
+                        : Mono.error(refusal));
+    }
+
+    // The MongoDB storages refuse a notOlderThan(v) save with a stored version that isn't newer than v only when a
+    // start position moved the stored position earlier. Same test as DurableSubscriptionModel
+    private static boolean storedPositionMovedEarlier(CheckpointWriteConditionNotFulfilledException refusal, CheckpointWriteCondition condition) {
+        return condition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan
+               && (refusal.storedVersion.isEmpty() || refusal.storedVersion.getAsLong() <= notOlderThan.writeVersion());
+    }
+
+    // The save without a condition keeps the stored version, so the try of the delete and the write back are still
+    // refused, and it removes the mark
+    private Mono<Checkpoint> saveOverAnEarlierStartPosition(String subscriptionId, Checkpoint checkpoint, CheckpointWriteConditionNotFulfilledException refusal) {
+        log.warn("The checkpoint save of subscription {} was refused, since a start position moved its stored position earlier. " +
+                 "Saving {} without a write condition, as a save with no checkpoint delete taken over is. The subscription that stored " +
+                 "the earlier position delivers the events between it and {}, and when it stops before it has delivered them " +
+                 "all and a save of this subscription is the last one stored, the ones it hadn't delivered are skipped.",
+                subscriptionId, checkpoint.asString(), checkpoint.asString(), refusal);
+        return storage.save(subscriptionId, checkpoint);
     }
 
     // The reactor counterpart of the blocking DurableSubscriptionModel#generateStartAtPositionFrom, for the
@@ -2640,7 +2666,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // Writes the start position read after a takeover that wrote a checkpoint back at once, at the version of the
     // position writes, so neither the try of the delete nor the write back removes or replaces it. A refusal means a
-    // checkpoint at a higher version is stored, and the subscription starts from that one.
+    // checkpoint at a higher version is stored, or a start position that moved the stored position earlier, and the
+    // subscription starts from that one.
     private Mono<Checkpoint> holdStartPosition(String subscriptionId, Checkpoint read, TakeOver readAfter, PositionWriter writer) {
         CheckpointWriteCondition condition = requireNonNull(readAfter.writeCondition, "writeCondition");
         return writePosition(subscriptionId, writer, read, () -> storage.save(subscriptionId, read, condition), Mono.just(read))
@@ -3786,7 +3813,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Cached, so it writes once whoever waits for it. A refusal means a newer checkpoint is stored already, written at
-    // a higher version or after the try ended, which the try does not delete. Any other failure is logged at WARN and
+    // a higher version or after the try ended, which the try does not delete, or a start position that moved the
+    // stored position earlier. Any other failure is logged at WARN and
     // the write is tried again after a delay that about doubles, as a failed try of the delete is, so it never fails
     // what waits for it. A subscription of the id that waits for it starts once it has succeeded, see
     // takeOverPositionDelete. It ends without writing once every call that took triedBy over has given it back, which a

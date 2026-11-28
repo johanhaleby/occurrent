@@ -36,6 +36,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.internal.LiveStartCheckpoints;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -189,9 +190,17 @@ class ReactiveStartBoundaryEventStoreChoiceMongoTest {
         @Override
         public Object postProcessAfterInitialization(Object bean, String beanName) {
             if (bean instanceof LiveStartCheckpoints checkpoints) {
-                return (LiveStartCheckpoints) liveStart -> {
-                    Observed.liveStartsTurnedIntoCheckpoints.add(liveStart);
-                    return checkpoints.checkpointOf(liveStart);
+                return new LiveStartCheckpoints() {
+                    @Override
+                    public @Nullable Checkpoint checkpointOf(String liveStart) {
+                        Observed.liveStartsTurnedIntoCheckpoints.add(liveStart);
+                        return checkpoints.checkpointOf(liveStart);
+                    }
+
+                    @Override
+                    public boolean ordersCheckpointsIn(Object checkpointStorage) {
+                        return checkpoints.ordersCheckpointsIn(checkpointStorage);
+                    }
                 };
             }
             return bean;

@@ -37,6 +37,7 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * The contract every reactive {@link CheckpointStorage} owes, the reactive twin of
@@ -487,6 +488,105 @@ public abstract class CheckpointStorageConformance {
                             + "it arms the fence at version zero for a caller that never asked for a fence at all, "
                             + "refusing the very next notOlderThan(0) write it should have accepted")
                     .isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("a start position that moved the stored position earlier")
+    class StartPositionMovedTheStoredPositionEarlier {
+
+        private static final long VERSION = 4;
+
+        private Checkpoint earlier;
+        private Checkpoint later;
+        private boolean refusesASaveFromTheLaterPosition;
+
+        @BeforeEach
+        void theStartPositionsTheFixtureDeclares() {
+            List<Checkpoint> positions = requireNonNull(fixture().startPositionsEarlierFirst(), "startPositionsEarlierFirst() returned null");
+            refusesASaveFromTheLaterPosition = !positions.isEmpty();
+            if (refusesASaveFromTheLaterPosition) {
+                assertThat(positions).as("startPositionsEarlierFirst() answers two positions or none").hasSize(2);
+                earlier = positions.get(0);
+                later = positions.get(1);
+            } else {
+                earlier = new StringBasedCheckpoint("earlier-start-position");
+                later = new StringBasedCheckpoint("later-start-position");
+            }
+        }
+
+        private void assertNotOlderThanIsUnsupported() {
+            assertThatThrownBy(() -> checkpointStorage().save(subscriptionId(), later, CheckpointWriteCondition.notOlderThan(VERSION)).block())
+                    .as("a storage that declares it does not evaluate write conditions refuses anything but any()")
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        private String storedLaterPositionThatAnotherStartWasOffered() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)).block();
+            Checkpoint resolved = checkpointStorage().resolveFirstCheckpointRace(id, earlier).block();
+            if (refusesASaveFromTheLaterPosition) {
+                assertThat(requireNonNull(resolved).asString())
+                        .as("the earlier start position replaces the later stored one")
+                        .isEqualTo(earlier.asString());
+            }
+            return id;
+        }
+
+        @Test
+        void a_save_from_a_later_position_with_the_version_stored_with_it_is_refused() {
+            if (!fixture().evaluatesWriteConditions()) {
+                assertNotOlderThanIsUnsupported();
+                return;
+            }
+            String id = storedLaterPositionThatAnotherStartWasOffered();
+
+            Throwable thrown = catchThrowable(() -> checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)).block());
+
+            if (!refusesASaveFromTheLaterPosition) {
+                assertThat(thrown).as("thrown by a storage that doesn't move a stored position earlier, so nothing was skipped").isNull();
+                assertThat(requireNonNull(checkpointStorage().read(id).block()).asString()).as("stored checkpoint").isEqualTo(later.asString());
+                assertThat(storedVersion(id)).as("stored version").isEqualTo(VERSION);
+                return;
+            }
+            assertThat(thrown)
+                    .as("the node that stored the later position would skip what lies between the two positions")
+                    .isInstanceOfSatisfying(CheckpointWriteConditionNotFulfilledException.class,
+                            refusal -> assertThat(refusal.storedVersion).as("version stored when refused")
+                                    .satisfiesAnyOf(version -> assertThat(version).isEmpty(), version -> assertThat(version.getAsLong()).isLessThanOrEqualTo(VERSION)));
+            assertThat(requireNonNull(checkpointStorage().read(id).block()).asString())
+                    .as("a refused write must not change the stored checkpoint")
+                    .isEqualTo(earlier.asString());
+            assertThat(storedVersion(id)).as("a refused write must not change the stored version").isEqualTo(VERSION);
+        }
+
+        @Test
+        void a_save_of_a_checkpoint_that_does_not_go_on_from_a_change_stream_position_is_not_refused() {
+            if (!fixture().evaluatesWriteConditions()) {
+                assertNotOlderThanIsUnsupported();
+                return;
+            }
+            String id = storedLaterPositionThatAnotherStartWasOffered();
+
+            checkpointStorage().save(id, new StringBasedCheckpoint("a-generic-position"), CheckpointWriteCondition.notOlderThan(VERSION)).block();
+
+            assertThat(requireNonNull(checkpointStorage().read(id).block()).asString()).isEqualTo("a-generic-position");
+        }
+
+        @Test
+        void a_write_that_goes_through_takes_the_refusal_away() {
+            if (!fixture().evaluatesWriteConditions()) {
+                assertNotOlderThanIsUnsupported();
+                return;
+            }
+            String id = storedLaterPositionThatAnotherStartWasOffered();
+
+            checkpointStorage().save(id, earlier, CheckpointWriteCondition.any()).block();
+            Throwable thrown = catchThrowable(() -> checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)).block());
+
+            assertThat(thrown).as("thrown by a save from the later position once a write went through").isNull();
+            assertThat(requireNonNull(checkpointStorage().read(id).block()).asString()).as("stored checkpoint").isEqualTo(later.asString());
+            assertThat(storedVersion(id)).as("stored version").isEqualTo(VERSION);
         }
     }
 

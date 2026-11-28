@@ -44,6 +44,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -419,13 +420,15 @@ class DurableSubscriptionModelQuietPositionTest {
         // delivers e2 again and then e3, which the persist predicate declines
         CountDownLatch reading = new CountDownLatch(1);
         CountDownLatch answer = new CountDownLatch(1);
+        AtomicReference<Thread> heldThread = new AtomicReference<>();
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage,
-                new DurableSubscriptionModelConfig(declines("e3")).saveQuietPositionEvery(INTERVAL), secondReadHeld(reading, answer));
+                new DurableSubscriptionModelConfig(declines("e3")).saveQuietPositionEvery(INTERVAL), secondReadHeld(reading, answer, heldThread));
         model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
         });
         wrapped.deliver("id", new StringBasedCheckpoint("e1"));
         Thread closedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e2")));
         assertThat(reading.await(5, SECONDS)).isTrue();
+        assertThat(heldThread.get()).as("thread whose read of the write version is held, the closed run's read for e2").isSameAs(closedRun);
         wrapped.deliver("id", new StringBasedCheckpoint("e2"));
         wrapped.deliver("id", new StringBasedCheckpoint("e3"));
         Thread.sleep(INTERVAL.toMillis() + 50);
@@ -450,12 +453,13 @@ class DurableSubscriptionModelQuietPositionTest {
         // e2 again and then e3, which the predicate declines
         CountDownLatch reading = new CountDownLatch(1);
         CountDownLatch answer = new CountDownLatch(1);
+        AtomicReference<Thread> heldThread = new AtomicReference<>();
         CountDownLatch e3Started = new CountDownLatch(1);
         CountDownLatch e3MayBeBuffered = new CountDownLatch(1);
         List<String> buffer = new ArrayList<>();
         List<String> writtenOut = new CopyOnWriteArrayList<>();
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage,
-                new DurableSubscriptionModelConfig(declines("e3")).saveQuietPositionEvery(INTERVAL), secondReadHeld(reading, answer));
+                new DurableSubscriptionModelConfig(declines("e3")).saveQuietPositionEvery(INTERVAL), secondReadHeld(reading, answer, heldThread));
         model.subscribe("id", null, StartAt.checkpoint(START), cloudEvent -> {
             String position = positionOf(cloudEvent);
             if (position.equals("e3")) {
@@ -473,6 +477,7 @@ class DurableSubscriptionModelQuietPositionTest {
         wrapped.deliver("id", new StringBasedCheckpoint("e1"));
         Thread closedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e2")));
         assertThat(reading.await(5, SECONDS)).isTrue();
+        assertThat(heldThread.get()).as("thread whose read of the write version is held, the closed run's read for e2").isSameAs(closedRun);
         wrapped.deliver("id", new StringBasedCheckpoint("e2"));
         Thread resumedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e3")));
         assertThat(e3Started.await(5, SECONDS)).isTrue();
@@ -1094,11 +1099,12 @@ class DurableSubscriptionModelQuietPositionTest {
         return CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent).asString();
     }
 
-    // Holds the second read of the write version, the one for the second event, until answer is counted down
-    private static CheckpointWriteVersionSource secondReadHeld(CountDownLatch reading, CountDownLatch answer) {
+    // Holds the second read of the write version, the one for the second event, until answer is counted down, and records the thread it holds
+    private static CheckpointWriteVersionSource secondReadHeld(CountDownLatch reading, CountDownLatch answer, AtomicReference<Thread> heldThread) {
         AtomicInteger reads = new AtomicInteger();
         return subscriptionId -> {
             if (reads.incrementAndGet() == 2) {
+                heldThread.set(Thread.currentThread());
                 reading.countDown();
                 awaitQuietly(answer);
             }

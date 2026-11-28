@@ -322,6 +322,11 @@ public class SpringMongoSubscriptionModelTest {
             }
 
             @Override
+            public void handleStoredPositionMovedEarlier(String subscriptionId, CheckpointWriteConditionNotFulfilledException refusal) {
+                throw new AssertionError("A MongoDB model never reports a stored position moved earlier, but was asked to for " + subscriptionId, refusal);
+            }
+
+            @Override
             public void handleHeldPaused(String subscriptionId, UnsupportedStartAtException refusal) {
             }
         };

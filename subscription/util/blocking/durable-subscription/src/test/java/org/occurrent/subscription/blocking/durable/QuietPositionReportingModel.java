@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -48,6 +49,9 @@ class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, Q
     final Map<String, StartAt> startAts = new ConcurrentHashMap<>();
     // Whether subscribe evaluates the StartAt it got before it returns, as a model that opens its feed there does
     volatile boolean evaluatesStartAtInSubscribe;
+    // Whether subscribe throws a DuplicateSubscriptionIdException for an id already subscribed, running, paused or
+    // not, as ChangeStreamSubscriptions does even after its shutdown, when it answers neither running nor paused
+    volatile boolean refusesAnIdItAlreadyHolds;
 
     // Evaluates the StartAt the latest subscribe of the id got, as a model does each time it opens its feed
     @Nullable StartAt evaluateStartAt(String subscriptionId) {
@@ -95,6 +99,9 @@ class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, Q
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        if (refusesAnIdItAlreadyHolds && actions.containsKey(subscriptionId)) {
+            throw new DuplicateSubscriptionIdException(subscriptionId);
+        }
         actions.put(subscriptionId, action);
         startAts.put(subscriptionId, startAt);
         if (evaluatesStartAtInSubscribe) {
