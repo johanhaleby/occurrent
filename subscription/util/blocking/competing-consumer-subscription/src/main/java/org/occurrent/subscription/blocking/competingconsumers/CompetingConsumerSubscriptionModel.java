@@ -22,6 +22,7 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.Competi
 import org.occurrent.subscription.internal.HistoryLossMessages;
 import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.internal.LostStartHold;
+import org.occurrent.subscription.internal.UnwantedDelivery;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,6 +31,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -3082,13 +3084,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * {@link #awaitTheLease}. When an interrupt ended the wait and the interrupt flag was clear as the event came, the
      * action runs with the flag clear, and the flag is set again once the action returns or throws. One that withdraws
      * the event sets the flag in {@link #awaitTheLease}. Otherwise the flag is not changed here, so an interrupt that comes after the wait, or while the lease strategy is asked and it then reports
-     * the lease held, can be set while the action runs.
+     * the lease held, can be set while the action runs. The action runs with no {@link UnwantedDelivery} stage on the
+     * thread, so an event it delivers on this thread to another subscription isn't withdrawn because the wrapped model no
+     * longer wants the event of this subscription.
      */
     private Consumer<CloudEvent> deliveredUnderTheLease(SubscriptionIdAndSubscriberId key, Delivery delivery, Consumer<CloudEvent> action) {
         return event -> {
             boolean interruptedWhileWaiting = awaitTheLease(key, delivery);
             try {
-                action.accept(event);
+                // With no stage on the thread, so an event the action delivers to another subscription on this thread
+                // doesn't read the one the wrapped model set for this event
+                UnwantedDelivery.without(() -> action.accept(event));
             } finally {
                 if (interruptedWhileWaiting) {
                     Thread.currentThread().interrupt();
@@ -3116,6 +3122,15 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * only asks, or starts the wrapped model, does nothing to the event. A consumer in {@code prohibitionsLeftToATry}
      * counts as not holding the lease. Three causes below still return without the lease, each with a warning: a
      * forgotten subscription, the delivering thread itself and an interrupt before {@code shutdown()} has begun.
+     * <p>
+     * Over any wrapped model, it also throws {@link AttemptNotMade} once the wrapped model tells it through
+     * {@link UnwantedDelivery} that it no longer wants the event, as a catch-up model does when a cancel or a stop ends
+     * the replay that delivered the event. It throws then even when the wrapped model tells it while the lease strategy is
+     * asked and the lease strategy answers that this node holds the lease. That catch-up model reads the event again when
+     * it runs the replay again. Over a wrapped model that doesn't declare {@link RedeliveringSubscriptions} with
+     * {@code true}, this holds only until one of the causes below lets the event through. A cancel or a stop this model
+     * makes is such a cause, and it begins before the wrapped model can tell it, so the event is then delivered without
+     * the lease.
      * <p>
      * Over any other wrapped model it also returns without the lease strategy reporting the lease held, and the event is
      * then delivered as it would be without the lease strategy. It is never dropped, but the node that holds the lease
@@ -3173,6 +3188,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         long waitMillis = DELIVERY_FIRST_WAIT_MILLIS;
         boolean waited = false;
         FailedLooks failedLooks = new FailedLooks();
+        BooleanSupplier unwanted = unwantedByTheWrappedModel(key.subscriptionId(), delivery);
         // Counted before the first look, so a prohibition told while the lease strategy is asked finds the event
         delivery.waiting.incrementAndGet();
         try {
@@ -3187,7 +3203,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     }
                     return false;
                 }
-                if (mayDeliver(key, delivery, failedLooks)) {
+                boolean leaseHeld = mayDeliver(key, delivery, failedLooks);
+                // Read after the lease strategy answers, so a cancel or a stop that withdraws the event while the
+                // lease strategy is asked withdraws it even when the answer is that this node holds the lease
+                if (unwanted.getAsBoolean()) {
+                    throw withdrawn(key, UNWANTED_BY_THE_WRAPPED_MODEL);
+                }
+                if (leaseHeld) {
                     return false;
                 }
                 if (!waited) {
@@ -3202,7 +3224,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 boolean onThisThread = callsIntoTheWrappedModelOnThisThread.get()[0] > 0;
                 try {
                     if (!wrappedModelRedelivers) {
-                        if (onThisThread || delivery.calledSince(callsSeen, waitMillis)) {
+                        if (onThisThread || delivery.calledSince(callsSeen, waitMillis, unwanted)) {
                             logWhileWaiting(() -> logDebug("Delivering an event without the lease, since this model calls the wrapped model for the subscription or has forgotten it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));
                             warnOnceOfALetThrough(key);
                             return false;
@@ -3211,9 +3233,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         warnOfALetThrough(key, "the thread that delivers it is inside a call this model makes into the wrapped model, which can't return while the event waits");
                         return false;
                     } else {
-                        AfterAClosingCall after = delivery.closedSince(closingCallsSeen, waitMillis, () -> wrappedModelShutDownBegun);
+                        AfterAClosingCall after = delivery.closedSince(closingCallsSeen, waitMillis, () -> wrappedModelShutDownBegun, unwanted);
                         if (after == AfterAClosingCall.SHUT_DOWN) {
                             throw withdrawn(key, "this model shuts the wrapped model down");
+                        } else if (after == AfterAClosingCall.UNWANTED) {
+                            throw withdrawn(key, UNWANTED_BY_THE_WRAPPED_MODEL);
                         } else if (after == AfterAClosingCall.WITHDRAWN) {
                             throw withdrawn(key, "this model paused, cancelled or stopped it in the wrapped model while the event waited");
                         } else if (after == AfterAClosingCall.FORGOTTEN) {
@@ -3248,6 +3272,31 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } finally {
             delivery.waiting.decrementAndGet();
         }
+    }
+
+    private static final String UNWANTED_BY_THE_WRAPPED_MODEL = "the wrapped model no longer wants it, as when a cancel or a stop ends the catch-up replay that delivered it";
+
+    // Whether the wrapped model no longer wants the event delivered on this thread, which wakes the waits of delivery
+    // once it no longer does. Never, when no model that this model wraps set a stage for the call to this subscription.
+    private BooleanSupplier unwantedByTheWrappedModel(String subscriptionId, Delivery delivery) {
+        CompletionStage<Void> stage = UnwantedDelivery.ofTheCallOnThisThread(subscriptionId, this::wraps);
+        if (stage == null) {
+            return () -> false;
+        }
+        CompletableFuture<Void> unwanted = stage.toCompletableFuture();
+        unwanted.whenComplete((ignored, alsoIgnored) -> delivery.wakeTheWaitingEvents());
+        return unwanted::isDone;
+    }
+
+    // Whether model is the delegate or a model the delegate wraps, directly or through other wrappers. The walk ends at a
+    // wrapper it has already passed, so wrappers that wrap each other in a cycle don't wrap model unless one of them is it
+    private boolean wraps(Object model) {
+        Set<SubscriptionModel> passed = Collections.newSetFromMap(new IdentityHashMap<>());
+        SubscriptionModel wrapped = delegate;
+        while (wrapped != model && wrapped instanceof SubscriptionModelWrapper wrapper && passed.add(wrapped)) {
+            wrapped = wrapper.getWrappedSubscriptionModel();
+        }
+        return wrapped == model;
     }
 
     // Thrown from awaitTheLease, so the wrapped model doesn't move the position past the event and delivers it again
@@ -3408,6 +3457,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
         }
 
+        // Wakes every event of the subscription in calledSince or closedSince, so each looks again at what ends its wait
+        private void wakeTheWaitingEvents() {
+            lock.lock();
+            try {
+                callBegun.signalAll();
+                closingCallReturned.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+
         private void forget() {
             lock.lock();
             try {
@@ -3419,11 +3479,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
 
         // Whether a call has begun since callsSeen or is under way, or the subscription is forgotten, waiting at most
-        // waitMillis for one of them
-        private boolean calledSince(long callsSeen, long waitMillis) throws InterruptedException {
+        // waitMillis for one of them, and no longer once unwanted answers true
+        private boolean calledSince(long callsSeen, long waitMillis, BooleanSupplier unwanted) throws InterruptedException {
             lock.lock();
             try {
-                if (!forgotten && callsUnderWay == 0 && callsBegun == callsSeen) {
+                if (!forgotten && callsUnderWay == 0 && callsBegun == callsSeen && !unwanted.getAsBoolean()) {
                     callBegun.await(waitMillis, TimeUnit.MILLISECONDS);
                 }
                 return forgotten || callsUnderWay > 0 || callsBegun != callsSeen;
@@ -3437,15 +3497,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         // event is withdrawn if one of them returned without throwing, and otherwise goes on waiting, with seen moved
         // past the ones that threw. A closing call that returned comes before a forgotten subscription, since a cancel
         // forgets the subscription once its call into the wrapped model has returned. Once shutDownBegun reports a
-        // shutdown of the wrapped model begun, the event is withdrawn without waiting for any call to return.
-        private AfterAClosingCall closedSince(ClosingCallsSeen seen, long waitMillis, BooleanSupplier shutDownBegun) throws InterruptedException {
+        // shutdown of the wrapped model begun, the event is withdrawn without waiting for any call to return, and so it is
+        // once unwanted answers true.
+        private AfterAClosingCall closedSince(ClosingCallsSeen seen, long waitMillis, BooleanSupplier shutDownBegun, BooleanSupplier unwanted) throws InterruptedException {
             lock.lock();
             try {
-                if (!forgotten && closingCallsUnderWay == 0 && closingCallsBegun == seen.begun) {
+                if (!forgotten && closingCallsUnderWay == 0 && closingCallsBegun == seen.begun && !unwanted.getAsBoolean()) {
                     callBegun.await(waitMillis, TimeUnit.MILLISECONDS);
                 }
                 if (shutDownBegun.getAsBoolean()) {
                     return AfterAClosingCall.SHUT_DOWN;
+                }
+                if (unwanted.getAsBoolean()) {
+                    return AfterAClosingCall.UNWANTED;
                 }
                 if (closingCallsUnderWay == 0 && closingCallsBegun == seen.begun) {
                     return forgotten ? AfterAClosingCall.FORGOTTEN : AfterAClosingCall.NONE_BEGUN;
@@ -3453,6 +3517,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 while (closingCallsUnderWay > 0) {
                     if (shutDownBegun.getAsBoolean()) {
                         return AfterAClosingCall.SHUT_DOWN;
+                    }
+                    if (unwanted.getAsBoolean()) {
+                        return AfterAClosingCall.UNWANTED;
                     }
                     closingCallReturned.await();
                 }
@@ -3479,7 +3546,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     private enum AfterAClosingCall {
-        NONE_BEGUN, WITHDRAWN, EVERY_ONE_THREW, FORGOTTEN, SHUT_DOWN
+        NONE_BEGUN, WITHDRAWN, EVERY_ONE_THREW, FORGOTTEN, SHUT_DOWN, UNWANTED
     }
 
     /**

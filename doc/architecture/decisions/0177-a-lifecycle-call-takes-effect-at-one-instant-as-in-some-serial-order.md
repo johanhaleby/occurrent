@@ -77,6 +77,21 @@ S2 covers pause in every phase. A `pauseSubscription(X)` that returns while X st
 replay before the next event, and X is then held paused. Today a pause during a subscribe-started catch-up takes effect
 only at the handover ([#1256](https://github.com/johanhaleby/occurrent/issues/1256)).
 
+A call to the action that a replay started before a `cancelSubscription(X)` or `stop()` took effect can still be
+running when that call has taken effect. Once the call has let go of the handover lock, it waits up
+to 1 second for the action to return. Past that it returns all the same and logs a `WARN` naming X. A cancel then also
+waits, with no time limit, for a catch-up position store the replay began before the cancel took effect, so that store
+has returned before the cancel deletes the stored position. Only the wait for the action ends after a second. The
+replay decides under the handover lock whether to store and stores after it lets go of the lock, so a pause or a stop
+doesn't wait for the store. A `resumeSubscription(X, startAt)` that comes after the stop waits up to 10
+seconds for that store before it stores the position it was given, and throws when the store takes longer. After a cancel the
+replay delivers no further event, and after a stop none until `start(true)` or `resumeSubscription(X)` runs it again. S2 holds either way, because the replay let the event through before the call took effect. A call made from inside
+X's action doesn't wait for that action, which can only return after the call does. A cancel of X after a `stop()`
+parked its replay doesn't wait again, since the stop did. `shutdown()` doesn't wait. A `pauseSubscription(X)` doesn't
+wait either. It ends a replay at once only while the replay waits to run again after a failure, when no action runs,
+and otherwise takes effect at the handover ([#1256](https://github.com/johanhaleby/occurrent/issues/1256)), after the
+replay's last call to the action has returned.
+
 ### Blocking catch-up
 
 What the rule compares for each id:
@@ -156,7 +171,7 @@ The rule needs one lock for each scope, taken in a fixed order:
 | 1 | `ManualStartSubscriptionModel` model lock | its `start(..)`, `stop()` and registration |
 | 2 | catch-up model lock, read and write | `start(..)`, `stop()` and `shutdown()` exclusively, across the loop over every id and the wrapped model's own `start(..)` or `stop()`. Every per-id call shared, around its claim. Replay threads never take it. The composite `CatchupSubscriptionModel` and its children share one model lock, as they share the claims. Its `start(..)` and `stop()` take it exclusively across every child's `beginStart()` or `stopReplay()` and the wrapped model's call |
 | 3 | per-id claim (`lifecycleClaims`) | each lifecycle call on X, as today |
-| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check and the write of a catch-up checkpoint |
+| 4 | per-id handover lock | the replay thread at every step it takes on its own, including the check that lets each event through to the action and the check that decides to store a catch-up checkpoint and records the store as under way, but never while it runs the action or across a catch-up checkpoint store |
 | 5 | `lifecycleLock` | short reads and writes of shared fields, nothing taken under it |
 
 The model lock replaces the reasoning behind `lifecycleGeneration`, `liveDelegateResumes` and `stoppedByFailedStart`.
@@ -180,6 +195,9 @@ because it would wait for a per-id call that can only finish on that thread.
 
 Handover locks are counted and removed like claims. ADR 131 says its registry of handover locks is never reclaimed.
 Under this rule it keeps an entry only while a call or a replay thread uses it ([#1257](https://github.com/johanhaleby/occurrent/issues/1257)).
+A replay thread holds the lock for one decision at a time, to let one event through or to begin one store, so between
+two events the entry is gone, and a
+cancel, a pause or a stop takes the lock even when no entry exists.
 
 ### Reactor catch-up
 
@@ -290,31 +308,28 @@ that fixes that issue enables it. The timeout results are not exercised, because
 These are disabled today:
 
 * [#1237](https://github.com/johanhaleby/occurrent/issues/1237), a `stop()` that overlaps a `start(..)` ends with the
-  model running and a replay parked. Both mixed serial-order properties.
+  model running and a replay parked. Both mixed serial-order properties. Also S2 without a pause, where a
+  `start(false)` that runs inside a `stop()` lets the parked replay's action start after the stop returned.
 * [#1256](https://github.com/johanhaleby/occurrent/issues/1256), a pause during a replay that a subscribe started
   returns, and the replay keeps delivering to the action until the handover. S2 with a pause, the mixed serial-order
   property with a pause, and 1 example.
-* [#1515](https://github.com/johanhaleby/occurrent/issues/1515), an action starts after a cancel of its id returned,
-  although the subscribe had returned before the cancel began. S2 without a pause.
 * [#1516](https://github.com/johanhaleby/occurrent/issues/1516), `resumeSubscription(id)` after `stop()` returns
   normally and the model stays stopped, when the subscribe it resumes overlapped the stop. The mixed serial-order
   property without a pause, and 1 example.
-* [#1517](https://github.com/johanhaleby/occurrent/issues/1517), a cancel returns while the action of the subscription
-  it cancels still runs, and a new subscribe of the same id enters a second call to the action. S1.
 * [#1520](https://github.com/johanhaleby/occurrent/issues/1520), a `start(true)` whose wrapped model throws after it
   started keeps the parked replays parked. The serial property on scripts that can hold such a call, and 1 example.
 * [#1524](https://github.com/johanhaleby/occurrent/issues/1524), a second `pauseSubscription(X)` during a replay that a
   subscribe started returns normally instead of throwing `SubscriptionNotRunningException`. Both serial-order
   properties with a pause, and 1 example.
-* [#1526](https://github.com/johanhaleby/occurrent/issues/1526), a replay calls the action once more after `stop()`
-  returned. S2 on scripts of only subscribes and a `stop()`.
 * [#1293](https://github.com/johanhaleby/occurrent/issues/1293) item 32, a catch-up that is cancelled once its history
   has been read still returns true and writes the marker. 2 handover properties and 2 examples.
 
-Each disabled S1 and serial-order property has an enabled copy that runs the same check on scripts without the calls
-its issues need, such as a second pause of one id, or a `stop()` in the same script as a `start(..)` or a resume.
-The copy's name says which calls it drops. The three S2 properties have no enabled copy. Without the pause or the
-cancel, S2 checks only a `stop()`, and a script of only subscribes and a `stop()` already hits #1526.
+Each disabled serial-order property has an enabled copy that runs the same check on scripts without the calls its
+issues need, such as a second pause of one id, or a `stop()` in the same script as a `start(..)` or a resume. The
+copy's name says which calls it drops. Both S1 properties are enabled. Of the S2 properties two are enabled.
+`s2_with_only_subscribe_and_stop_calls_no_action_starts_after_a_stop_has_returned` runs scripts of only subscribes and
+a `stop()`, and `s2_with_only_subscribe_cancel_and_stop_calls_no_action_starts_after_a_cancel_or_a_stop_has_returned`
+adds cancels to them, so S2 after a cancel is checked only without a pause, a start or a resume in the script.
 
 The reactor harness comes with L3.
 

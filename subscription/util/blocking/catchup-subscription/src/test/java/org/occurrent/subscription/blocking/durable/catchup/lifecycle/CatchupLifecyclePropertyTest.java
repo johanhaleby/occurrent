@@ -48,6 +48,11 @@ class CatchupLifecyclePropertyTest {
     }
 
     @Provide
+    Arbitrary<Scenario> subscribeCancelAndStopScenarios() {
+        return LifecycleScripts.subscribeCancelAndStopScenarios();
+    }
+
+    @Provide
     Arbitrary<Scenario> mixedScenariosWithoutPauseAndWithoutAStopTogetherWithAStartOrAResumeOrAStartTrueAfterEffect() {
         return LifecycleScripts.withoutAStartTrueThatThrowsAfterItTookEffect(LifecycleScripts.withoutAStopTogetherWithAStartOrAResume(LifecycleScripts.mixedScenariosWithoutPause()));
     }
@@ -102,7 +107,6 @@ class CatchupLifecyclePropertyTest {
         }
     }
 
-    @Disabled("#1517: a cancel(a) returns while the first subscription's action still runs, and a new subscribe(a) enters a second call to the action. Shrunk plain history=0us start=300us [[subscribe(a), cancel(a), subscribe(a)], [subscribe(a)]], seed -4125118514468404878")
     @Property(tries = 200)
     void s1_at_most_one_action_is_in_flight_per_id(@ForAll("mixedScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
@@ -117,16 +121,21 @@ class CatchupLifecyclePropertyTest {
         assertThat(run.notes).as(run.toString()).isEmpty();
     }
 
-    @Disabled("#1515: b's action started after cancel(b) returned, although subscribe(b) had returned before the cancel began. Shrunk composite start=300us [[subscribe(a), resume(a), cancel(b)], [subscribe(b), subscribe(a), subscribe(a)], [resume(a)]], seed 3712755869129851291. Reproduced as plain [[subscribe(a), subscribe(b), cancel(a)], [subscribe(a), subscribe(b), cancel(b)], [subscribe(a), subscribe(a), subscribe(a)]], same seed")
+    @Disabled("#1237: a start(false) that runs inside a stop() clears what the stop set, so the stop's park runs the replay again and its action starts after the stop returned. Shrunk plain history=0us start=0us [[subscribe(a), start(false)], [subscribe(a), cancel(b), stop]] and [[subscribe(a), stop], [subscribe(a), start(false)]], seed -781864361498931721, at 1000 tries")
     @Property(tries = 200)
     void s2_without_pause_no_action_starts_after_a_cancel_or_a_stop_has_returned(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
         assertThat(run.monitor.s2Violations).as(run.toString()).isEmpty();
     }
 
-    @Disabled("#1526: a subscribe whose replay is still running delivers after stop() returned, with no start or resume in the scenario. Shrunk plain history=0us [[subscribe(b)], [subscribe(b), stop], [subscribe(a), subscribe(a)]], seed 6696418332374223471, first red on try 2068")
     @Property(tries = 3000)
     void s2_with_only_subscribe_and_stop_calls_no_action_starts_after_a_stop_has_returned(@ForAll("subscribeAndStopScenarios") Scenario scenario) {
+        Run run = InterleavingRunner.run(scenario, false);
+        assertThat(run.monitor.s2Violations).as(run.toString()).isEmpty();
+    }
+
+    @Property(tries = 3000)
+    void s2_with_only_subscribe_cancel_and_stop_calls_no_action_starts_after_a_cancel_or_a_stop_has_returned(@ForAll("subscribeCancelAndStopScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
         assertThat(run.monitor.s2Violations).as(run.toString()).isEmpty();
     }

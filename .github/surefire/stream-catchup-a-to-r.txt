@@ -1,0 +1,5 @@
+# Surefire exclude patterns for the subscription-util-blocking shard in maven.yml. They leave out the
+# stream-catchup-subscription test classes that the stream-catchup-blocking shard runs with -Dtest, so
+# keep this pattern and that one naming the same classes. An excludes file adds to Surefire's default
+# includes and excludes instead of replacing them, which -Dtest would do.
+%regex[.*/StreamCatchup[A-R][^/]*]

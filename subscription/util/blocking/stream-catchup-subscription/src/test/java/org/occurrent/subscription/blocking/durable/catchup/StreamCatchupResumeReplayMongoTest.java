@@ -85,6 +85,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
@@ -357,7 +358,7 @@ class StreamCatchupResumeReplayMongoTest {
         // is descheduled right after it has given up the handover lock
         givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
         GapLock gapLock = new GapLock(storage);
-        handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+        plantHandoverLock(catchupB, subscriptionId, gapLock);
         storage.failTheNextHandoverReads(1);
         gapLock.armed = true;
         catchupB.resumeSubscription(subscriptionId);
@@ -536,7 +537,7 @@ class StreamCatchupResumeReplayMongoTest {
         modelLogger.addAppender(decisionLog);
         try {
             UndecidedFailureGapLock gapLock = new UndecidedFailureGapLock(decisionLog);
-            handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+            plantHandoverLock(catchupB, subscriptionId, gapLock);
             readerOfB.failTheNext(1);
             gapLock.armed = true;
             catchupB.resumeSubscription(subscriptionId);
@@ -1068,7 +1069,7 @@ class StreamCatchupResumeReplayMongoTest {
         // is descheduled right after it has given up the handover lock, so the replay waits to run again
         givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
         GapLock gapLock = new GapLock(storage);
-        handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+        plantHandoverLock(catchupB, subscriptionId, gapLock);
         storage.failTheNextHandoverReads(1);
         gapLock.armed = true;
         catchupB.resumeSubscription(subscriptionId);
@@ -1635,7 +1636,7 @@ class StreamCatchupResumeReplayMongoTest {
         // is descheduled right after it has given up the handover lock
         givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
         GapLock gapLock = new GapLock(storage);
-        handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+        plantHandoverLock(catchupB, subscriptionId, gapLock);
         storage.failTheNextHandoverReads(1);
         gapLock.armed = true;
         catchupB.resumeSubscription(subscriptionId);
@@ -1674,7 +1675,7 @@ class StreamCatchupResumeReplayMongoTest {
         // is descheduled right after it has given up the handover lock
         givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
         GapLock gapLock = new GapLock(storage);
-        handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+        plantHandoverLock(catchupB, subscriptionId, gapLock);
         storage.failTheNextHandoverReads(1);
         gapLock.armed = true;
         catchupB.resumeSubscription(subscriptionId);
@@ -2792,11 +2793,20 @@ class StreamCatchupResumeReplayMongoTest {
         ((CatchupSubscription) resumed.get(10, SECONDS)).delegatedSubscription().get(10, SECONDS);
     }
 
-    @SuppressWarnings("unchecked")
-    private static ConcurrentMap<String, ReentrantLock> handoverLocksOf(AbstractCatchupSubscriptionModel model) throws Exception {
+    // Puts lock behind the handover lock of subscriptionId, as the model makes one for an id, with the user count of one
+    // that nothing releases, so the entry stays however the calls that take the lock come and go
+    private static void plantHandoverLock(AbstractCatchupSubscriptionModel model, String subscriptionId, ReentrantLock lock) throws Exception {
         Field field = AbstractCatchupSubscriptionModel.class.getDeclaredField("handoverLocks");
         field.setAccessible(true);
-        return (ConcurrentMap<String, ReentrantLock>) field.get(model);
+        @SuppressWarnings("unchecked")
+        ConcurrentMap<String, AbstractCatchupSubscriptionModel.CountedLock> locks = (ConcurrentMap<String, AbstractCatchupSubscriptionModel.CountedLock>) field.get(model);
+        Constructor<AbstractCatchupSubscriptionModel.CountedLock> constructor = AbstractCatchupSubscriptionModel.CountedLock.class.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        AbstractCatchupSubscriptionModel.CountedLock entry = constructor.newInstance();
+        Field lockOfEntry = AbstractCatchupSubscriptionModel.CountedLock.class.getDeclaredField("lock");
+        lockOfEntry.setAccessible(true);
+        lockOfEntry.set(entry, lock);
+        locks.put(subscriptionId, entry);
     }
 
     @SuppressWarnings("unchecked")

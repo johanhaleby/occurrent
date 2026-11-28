@@ -118,8 +118,23 @@ import java.util.stream.Stream;
  * {@code subscribePaused}, {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription},
  * {@code start} or {@code stop}. Its {@code isPaused}, {@code isRunning} and {@code canResumeFrom}, and the
  * {@code subscriptionIds} of its {@link org.occurrent.subscription.api.blocking.IntrospectableSubscriptions} when it
- * has one, must answer truthfully at every moment. What this model does over a wrapped model that breaks either rule
- * is unspecified.
+ * has one, must answer truthfully at every moment. Its {@code cancelSubscription} must not wait for a call to the
+ * subscriber's action that is under way. That call can be waiting for a replay a cancel or a stop ended to return from
+ * the action, and the cancel would then not return before that replay does, or never when that replay's action
+ * cancels the same subscription. Its {@code pauseSubscription} must not wait for such a call without a time limit
+ * either. This model holds a lock that replay needs to return while it calls that method, so such a pause would never
+ * return. Its {@code resumeSubscription} and {@code start} must not call the action from another thread while a call
+ * from before the pause can still be under way. That call can be waiting for such a replay, and both calls would then
+ * reach the action together once the replay returns. The MongoDB subscription models wait for that call with no time
+ * limit on the resumed run's own thread, in {@code ChangeStreamSubscriptions.waitForThePreviousRuns}, and
+ * {@code InMemorySubscriptionModel} calls the action of one subscription from one thread. A later subscribe of the
+ * same id after a cancel is a new subscription there, whose calls can run beside a call of the cancelled one. Since a
+ * cancel doesn't wait, such a call can still be in the action when the cancel returns. This model lets a call reach
+ * the action only while the subscription is still the one subscribed, or while this model shuts down, also when a
+ * replay handed the subscription to the wrapped model once it had caught up. A later subscribe of the same id calls the
+ * action only once every call from before the cancel has returned. A call it doesn't let through throws
+ * {@code AttemptNotMade}, and the wrapped model must not store its position past an event whose action threw. What
+ * this model does over a wrapped model that breaks any of these rules is unspecified.
  * </p>
  */
 @NullMarked
@@ -315,13 +330,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 .filter(Objects::nonNull);
     }
 
-    // stopReplay() rather than a child's own stop(), which would reach the shared live delegate once per child. The
-    // children have to be told so a replay already in flight stops delivering and is parked. A child that fails to park
-    // a replay doesn't keep the others or the live delegate from stopping.
+    // stopReplayLeavingTheActions() rather than a child's own stop(), which would reach the shared live delegate once
+    // per child. The children have to be told so a replay already in flight stops delivering and is parked. A child
+    // that fails to park a replay doesn't keep the others or the live delegate from stopping. The stop then waits once,
+    // up to a second in all, for the actions the children's replays let through, before the live delegate stops.
     @Override
     public void stop() {
+        List<AbstractCatchupSubscriptionModel.ActionInFlight> admitted = new ArrayList<>();
         List<Runnable> steps = new ArrayList<>();
-        presentCatchupModels().forEach(model -> steps.add(model::stopReplay));
+        presentCatchupModels().forEach(model -> steps.add(() -> model.stopReplayLeavingTheActions(admitted)));
+        steps.add(() -> AbstractCatchupSubscriptionModel.awaitTheAdmittedActions(admitted, "stop"));
         steps.add(getWrappedSubscriptionModel()::stop);
         AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
     }
@@ -491,6 +509,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * @throws org.occurrent.subscription.SubscriptionAlreadyRunningException if a catch-up of this model made the
      *         subscription and it runs, as that description says. In 0.34.0 the wrapped model was asked to resume it and
      *         threw its own exception.
+     * @throws IllegalStateException if a replay in the way, or a position store a stopped replay began, doesn't return
+     *         within ten seconds, as that description says. Nothing is stored then, so the caller can call this again.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
@@ -578,7 +598,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         // the live delegate has the subscription or the handover has failed. A replay a subscribe started stops
         // counting as one this model runs before the live delegate has the subscription.
         try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId);
-             AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().tryLockHandover(subscriptionId)) {
+             AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().lockHandover(subscriptionId)) {
             AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.runsReplayHere(subscriptionId)).findFirst().orElse(null);
             if (replaying != null) {
                 replaying.pauseSubscription(subscriptionId);
@@ -591,7 +611,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public void cancelSubscription(String subscriptionId) {
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own
-        // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once.
+        // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once. The
+        // child that runs the replay waits up to a second for an action it let through before the delegate's cancel.
         try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claimWithoutWaitingForAsks(subscriptionId)) {
             Runnable cancelAskedSubscribes = anyCatchupModel().askedSubscribesToCancel(subscriptionId);
             boolean nothingKept = anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
@@ -614,6 +635,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @PreDestroy
     @Override
     public void shutdown() {
+        // Every child flagged before any forgets the state they share, see flagShuttingDown
+        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::flagShuttingDown);
         if (streamCatchupSubscriptionModel != null) {
             streamCatchupSubscriptionModel.markShuttingDown();
         }

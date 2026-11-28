@@ -53,12 +53,22 @@ final class LifecycleScripts {
 
     /**
      * Only subscribe and stop calls. With no pause and no cancel, a stop is the only call that makes S2 bind, so the
-     * other kinds only dilute the scenarios that can reach it. Cancel is left out for the shape of #1515, a cancel
-     * after the subscribe returned still sees the replay deliver after it returned.
+     * other kinds only dilute the scenarios that can reach it. A cancel is in {@link #subscribeCancelAndStopScenarios}.
      */
     static Arbitrary<Scenario> subscribeAndStopScenarios() {
         return scenarios(Arbitraries.frequencyOf(
                 Tuple.of(3, id().map(id -> LifecycleCall.of(Kind.SUBSCRIBE, id))),
+                Tuple.of(2, Arbitraries.just(LifecycleCall.of(Kind.STOP, null)))));
+    }
+
+    /**
+     * Only subscribe, cancel (by id) and stop calls. With no pause, a cancel and a stop are the only calls that make S2
+     * bind, so the other kinds only dilute the scenarios that can reach it, the shape of #1515.
+     */
+    static Arbitrary<Scenario> subscribeCancelAndStopScenarios() {
+        return scenarios(Arbitraries.frequencyOf(
+                Tuple.of(3, id().map(id -> LifecycleCall.of(Kind.SUBSCRIBE, id))),
+                Tuple.of(2, id().map(id -> LifecycleCall.of(Kind.CANCEL, id))),
                 Tuple.of(2, Arbitraries.just(LifecycleCall.of(Kind.STOP, null)))));
     }
 

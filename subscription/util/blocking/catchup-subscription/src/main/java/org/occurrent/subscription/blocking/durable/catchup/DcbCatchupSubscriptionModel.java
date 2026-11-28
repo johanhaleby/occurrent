@@ -28,7 +28,6 @@ import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReadScope;
 import org.occurrent.eventstore.api.dcb.internal.DcbCatchupReads;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
@@ -102,6 +101,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     @Override
     protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+        @Nullable Subscribed made = recordOfThisSubscribe(subscriptionId);
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         // A dynamic start that resolves to the model default takes the same resume decision as the default itself,
         // so a replay that stopped in the middle resumes from the position it stored instead of going live
@@ -109,7 +109,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused, made);
             }
             requestedStartAt = startAtGeneratedByDynamic;
         }
@@ -119,7 +119,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             refuseIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, requestedStartAt), action, holdPaused);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, requestedStartAt), action, holdPaused, made);
             }
             firstStartAt = StartAt.checkpoint(checkpoint);
         } else {
@@ -130,11 +130,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
         if (!isDcbCatchupPosition(subscriptionId, firstStartAt)) {
             return subscribeLiveUnlessItsStartIsLost(subscriptionId, firstStartAt, holdPaused,
-                    paused -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, paused));
+                    paused -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, firstStartAt), action, paused, made));
         }
 
         Subscription heldPaused = refuseOrHoldIfItsStoredLiveStartIsLost(subscriptionId, firstStartAt,
-                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, liveStart), action, true));
+                liveStart -> subscribeLiveWithoutCatchup(subscriptionId, filter, goingLiveFrom(startAt, liveStart), action, true, made));
         if (heldPaused != null) {
             return heldPaused;
         }
@@ -142,7 +142,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the
         // stored position does not move back
         Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId,
-                lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? firstStartAt : StartAt.checkpoint(lastStored)), holdPaused);
+                lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? firstStartAt : StartAt.checkpoint(lastStored)), holdPaused, made);
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
@@ -160,8 +160,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * before this while a catch-up for the id is in progress, under the same per-id lock as that catch-up's handover,
      * and a cancelled catch-up doesn't hand over.
      */
-    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, dcbLiveConsumer(action, null), holdPaused);
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused, @Nullable Subscribed made) {
+        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, dcbLiveConsumer(action, null), holdPaused, made);
     }
 
     private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache) {
@@ -264,39 +264,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         Long storedReplayTo = replayStart.replayTo();
         long replayTo = storedReplayTo == null ? reader.currentHead() : storedReplayTo;
         pipeline.replay(replayStart.replayFrom(), replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, replayStart, replayTo), catchupPhaseCache,
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup,
+                        e -> replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)), catchupPhaseCache,
                 () -> historyRead(subscriptionId));
-    }
-
-    /**
-     * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the DCB
-     * subscription position for events matching {@code persistDuringCatchup}, the attempt's own predicate, so its count
-     * runs on across windows. Each event is delivered as a {@link CheckpointAwareCloudEvent} with the checkpoint the
-     * replay stores after it, derived once, so the delivered and the stored checkpoint are the same.
-     */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup, PositionReplayStart replayStart, long replayTo) {
-        // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
-        // resource-backed read does not leak its cursor.
-        try (cloudEvents) {
-            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId));
-            if (cache != null) {
-                // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
-                // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the
-                // handover seam. Without the filter the overlapping re-reads would deliver duplicates.
-                takeWhile = takeWhile.filter(e -> !cache.contains(CatchupEventKey.of(e))).peek(e -> cache.add(CatchupEventKey.of(e)));
-            }
-            takeWhile
-                    .map(e -> new CheckpointAwareCloudEvent(e, replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)))
-                    .peek(action)
-                    // Rechecked here, not just by takeWhile before action ran: see the blocking stream catch-up's
-                    // identical reasoning, action can outlast this attempt's ownership. Not shouldKeepReplaying, for
-                    // the same reason. The action has completed, so a stop or a shutdown does not keep its position
-                    // from being stored, and a replay that runs again after a stop starts from there.
-                    .filter(e -> isSafeToPersistFor(subscriptionId))
-                    .filter(e -> persistDuringCatchup.test(e.getOriginalCloudEvent()))
-                    .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
-                            cfg -> saveCatchupCheckpoint(subscriptionId, cfg, e.getCheckpoint())));
-        }
     }
 
     // One per catch-up attempt, shared by all its windows, so an EveryN configured for the whole model counts this
