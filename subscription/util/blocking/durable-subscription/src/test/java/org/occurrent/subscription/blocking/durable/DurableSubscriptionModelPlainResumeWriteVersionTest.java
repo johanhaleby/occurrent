@@ -109,39 +109,42 @@ class DurableSubscriptionModelPlainResumeWriteVersionTest {
     }
 
     @Test
-    void another_checkpoint_stored_between_the_read_and_the_stamp_is_read_again_and_the_wrapped_model_resumes_there_with_this_nodes_version() {
+    void a_plain_resume_stores_the_version_once_and_goes_on_with_the_checkpoint_stored_after_its_read_when_the_storage_stores_no_version() {
         DurableSubscriptionModel durable = pausedAfterSubscribingAtStart();
         anotherNodeStoresWhilePaused(STORED_BY_ANOTHER_NODE, OptionalLong.empty());
-        storage.beforeTheFirstThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, STORED_BETWEEN_THE_READ_AND_THE_STAMP);
+        storage.answersEmptyWithoutStoring = true;
+        storage.beforeTheFirstStoreWriteVersion = () -> storage.delegate.save(SUBSCRIPTION_ID, STORED_BETWEEN_THE_READ_AND_THE_STAMP);
+        int readsBefore = storage.reads.get();
+        int storesBefore = storage.storeWriteVersionCalls.get();
 
         durable.resumeSubscription(SUBSCRIPTION_ID);
 
-        Throwable thrown = catchThrowable(() -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stale-node-position"), CheckpointWriteCondition.notOlderThan(1)));
         assertAll(
+                () -> assertThat(storage.storeWriteVersionCalls.get() - storesBefore).as("calls of storeWriteVersion by the resume").isEqualTo(1),
+                () -> assertThat(storage.reads.get() - readsBefore).as("reads by the resume, one before the stamp and one after the empty answer").isEqualTo(2),
+                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_BETWEEN_THE_READ_AND_THE_STAMP),
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(STORED_BETWEEN_THE_READ_AND_THE_STAMP.asString()),
-                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
-                () -> assertThat(thrown).as("save with an older version").isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
-                () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_BETWEEN_THE_READ_AND_THE_STAMP)
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty()
         );
     }
 
     @Test
-    void a_storage_that_answers_empty_for_the_very_checkpoint_it_holds_resumes_there_without_a_version() {
-        StorageWithoutResolvers withoutResolvers = new StorageWithoutResolvers();
-        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, withoutResolvers, id -> OptionalLong.of(2));
+    void a_storage_that_keeps_the_default_store_write_version_resumes_at_the_checkpoint_it_holds_without_a_version() {
+        StorageWithTheDefaultStoreWriteVersion withTheDefault = new StorageWithTheDefaultStoreWriteVersion();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, withTheDefault, id -> OptionalLong.of(2));
         durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(START), cloudEvent -> {
         });
         durable.pauseSubscription(SUBSCRIPTION_ID);
-        withoutResolvers.delegate.delete(SUBSCRIPTION_ID);
-        withoutResolvers.delegate.save(SUBSCRIPTION_ID, STORED_BY_ANOTHER_NODE);
+        withTheDefault.delegate.delete(SUBSCRIPTION_ID);
+        withTheDefault.delegate.save(SUBSCRIPTION_ID, STORED_BY_ANOTHER_NODE);
 
         Throwable thrown = catchThrowable(() -> durable.resumeSubscription(SUBSCRIPTION_ID));
 
         assertAll(
                 () -> assertThat(thrown).as("thrown by resumeSubscription").isNull(),
                 () -> assertThat(wrapped.resumedAt).as("checkpoints the wrapped model was asked to resume at").containsExactly(STORED_BY_ANOTHER_NODE),
-                () -> assertThat(withoutResolvers.delegate.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(STORED_BY_ANOTHER_NODE.asString()),
-                () -> assertThat(withoutResolvers.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty()
+                () -> assertThat(withTheDefault.delegate.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(STORED_BY_ANOTHER_NODE.asString()),
+                () -> assertThat(withTheDefault.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty()
         );
     }
 
@@ -149,13 +152,13 @@ class DurableSubscriptionModelPlainResumeWriteVersionTest {
     void a_plain_resume_when_the_stored_checkpoint_is_still_the_one_stored_before_the_subscriptions_own_start_stores_this_nodes_version_with_it_and_leaves_the_resume_to_the_wrapped_model() {
         storage.delegate.save(SUBSCRIPTION_ID, STORED_BEFORE_THE_OWN_START);
         DurableSubscriptionModel durable = pausedAfterSubscribingAtStart();
-        int resolversBefore = storage.threeArgumentResolverCalls.get();
+        int storesBefore = storage.storeWriteVersionCalls.get();
         int savesBefore = storage.conditionsSaved.size();
 
         durable.resumeSubscription(SUBSCRIPTION_ID);
 
         assertAll(
-                () -> assertThat(storage.threeArgumentResolverCalls).as("calls of the three-argument resolver by the resume").hasValue(resolversBefore + 1),
+                () -> assertThat(storage.storeWriteVersionCalls).as("calls of storeWriteVersion by the resume").hasValue(storesBefore + 1),
                 () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
                 () -> assertThat(storage.conditionsSaved).as("saves by the resume").hasSize(savesBefore),
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString()).as("stored checkpoint").isEqualTo(STORED_BEFORE_THE_OWN_START.asString()),
@@ -220,17 +223,21 @@ class DurableSubscriptionModelPlainResumeWriteVersionTest {
     }
 
     /**
-     * Over {@link InMemoryCheckpointStorage}, records what is saved through it, counts the calls of the three-argument
-     * {@code resolveFirstCheckpointRace} and runs a hook once, right before the first of them.
+     * Over {@link InMemoryCheckpointStorage}, records what is saved through it, counts the reads and the calls of
+     * {@code storeWriteVersion} and runs a hook once, right before the first of those calls. It can answer that call
+     * empty without storing, as a storage that stores no version does.
      */
     private static final class HookedStorage implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
         final List<CheckpointWriteCondition> conditionsSaved = new ArrayList<>();
-        final AtomicInteger threeArgumentResolverCalls = new AtomicInteger();
-        @Nullable Runnable beforeTheFirstThreeArgumentResolver;
+        final AtomicInteger storeWriteVersionCalls = new AtomicInteger();
+        final AtomicInteger reads = new AtomicInteger();
+        @Nullable Runnable beforeTheFirstStoreWriteVersion;
+        boolean answersEmptyWithoutStoring;
 
         @Override
         public @Nullable Checkpoint read(String subscriptionId) {
+            reads.incrementAndGet();
             return delegate.read(subscriptionId);
         }
 
@@ -261,21 +268,21 @@ class DurableSubscriptionModelPlainResumeWriteVersionTest {
         }
 
         @Override
-        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
-            threeArgumentResolverCalls.incrementAndGet();
-            Runnable before = beforeTheFirstThreeArgumentResolver;
-            beforeTheFirstThreeArgumentResolver = null;
+        public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+            storeWriteVersionCalls.incrementAndGet();
+            Runnable before = beforeTheFirstStoreWriteVersion;
+            beforeTheFirstStoreWriteVersion = null;
             if (before != null) {
                 before.run();
             }
-            return delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+            return answersEmptyWithoutStoring ? Optional.empty() : delegate.storeWriteVersion(subscriptionId, writeVersion);
         }
     }
 
     /**
-     * Keeps the default {@code resolveFirstCheckpointRace}, which answers empty whatever is stored.
+     * Keeps the default {@code storeWriteVersion}, which answers empty and writes nothing whatever is stored.
      */
-    private static final class StorageWithoutResolvers implements CheckpointStorage {
+    private static final class StorageWithTheDefaultStoreWriteVersion implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
 
         @Override

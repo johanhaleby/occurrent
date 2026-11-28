@@ -82,6 +82,7 @@ class DurableSubscriptionModelOwnStartStampThatThrewTest {
         Checkpoint storedByTheFirstResume = storage.read(SUBSCRIPTION_ID);
         OptionalLong versionStoredByTheFirstResume = storage.writeVersion(SUBSCRIPTION_ID);
         boolean pausedAfterTheFirstResume = wrapped.isPaused(SUBSCRIPTION_ID);
+        assertThat(firstResume).as("test setup, thrown by the first resume").isSameAs(storage.failure);
         durable.resumeSubscription(SUBSCRIPTION_ID);
         wrapped.deliverTheRest(SUBSCRIPTION_ID);
 
@@ -103,7 +104,8 @@ class DurableSubscriptionModelOwnStartStampThatThrewTest {
     void a_plain_resume_goes_on_from_the_replay_and_delivers_every_event_when_this_nodes_version_has_moved_on_since_the_resume_that_stored_the_older_one_and_threw() {
         DurableSubscriptionModel durable = pausedHalfWayThroughTheReplay();
         storage.throwAfterTheNextStamp = true;
-        catchThrowable(() -> durable.resumeSubscription(SUBSCRIPTION_ID));
+        Throwable firstResume = catchThrowable(() -> durable.resumeSubscription(SUBSCRIPTION_ID));
+        assertThat(firstResume).as("test setup, thrown by the first resume").isSameAs(storage.failure);
         thisNodesVersion.set(3);
 
         durable.resumeSubscription(SUBSCRIPTION_ID);
@@ -121,7 +123,8 @@ class DurableSubscriptionModelOwnStartStampThatThrewTest {
     void a_plain_resume_goes_on_from_the_replay_when_the_version_stored_is_one_of_several_this_node_has_offered_and_the_latest_never_reached_the_storage() {
         DurableSubscriptionModel durable = pausedHalfWayThroughTheReplay();
         storage.throwAfterTheNextStamp = true;
-        catchThrowable(() -> durable.resumeSubscription(SUBSCRIPTION_ID));
+        Throwable firstResume = catchThrowable(() -> durable.resumeSubscription(SUBSCRIPTION_ID));
+        assertThat(firstResume).as("test setup, thrown by the first resume").isSameAs(storage.failure);
         thisNodesVersion.set(3);
         storage.throwBeforeTheNextStamp = true;
         Throwable secondResume = catchThrowable(() -> durable.resumeSubscription(SUBSCRIPTION_ID));
@@ -181,7 +184,7 @@ class DurableSubscriptionModelOwnStartStampThatThrewTest {
     }
 
     /**
-     * Fails the three-argument {@code resolveFirstCheckpointRace} once, after it stored, as a lost acknowledgement does,
+     * Fails {@code storeWriteVersion} once, after it stored, as a lost acknowledgement does,
      * or before it stored.
      */
     private static final class StampThatThrowsStorage extends InMemoryCheckpointStorage {
@@ -190,12 +193,12 @@ class DurableSubscriptionModelOwnStartStampThatThrewTest {
         volatile boolean throwBeforeTheNextStamp;
 
         @Override
-        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
             if (throwBeforeTheNextStamp) {
                 throwBeforeTheNextStamp = false;
                 throw failure;
             }
-            Optional<Checkpoint> resolved = super.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+            Optional<Checkpoint> resolved = super.storeWriteVersion(subscriptionId, writeVersion);
             if (throwAfterTheNextStamp) {
                 throwAfterTheNextStamp = false;
                 throw failure;

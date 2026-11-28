@@ -136,8 +136,8 @@ class DurableSubscriptionModelOwnStartStampThatThrewMongoTest {
     }
 
     /**
-     * Delegates to {@link NativeMongoCheckpointStorage} and throws once after the three-argument
-     * {@code resolveFirstCheckpointRace} has stored, as a lost acknowledgement does.
+     * Delegates to {@link NativeMongoCheckpointStorage} and throws once after {@code storeWriteVersion} has stored,
+     * as a lost acknowledgement does.
      */
     private static final class StampThatThrowsStorage implements CheckpointStorage {
         final NativeMongoCheckpointStorage delegate;
@@ -190,7 +190,12 @@ class DurableSubscriptionModelOwnStartStampThatThrewMongoTest {
 
         @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
-            Optional<Checkpoint> resolved = delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+            return delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+        }
+
+        @Override
+        public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+            Optional<Checkpoint> resolved = delegate.storeWriteVersion(subscriptionId, writeVersion);
             if (throwAfterTheNextStamp) {
                 throwAfterTheNextStamp = false;
                 throw failure;

@@ -53,11 +53,10 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 /**
  * An evaluation of the start position from the model default reads a stored checkpoint P and, with a write version
  * configured, stores this node's version with it. When a resume, a resume at a position or a restart after a lost
- * history stores a position R2 after that read and before that store, storing P again could replace R2 with an earlier
- * position, so a later evaluation is refused and R2 stays stored. An evaluation that read P while the subscribe
- * settled the first position stores nothing from that read, so it reads again, finds R2 and starts from it. The storage
- * here stores the checkpoint it is asked to resolve whatever it holds, as a MongoDB storage does for an earlier
- * operation time, so storing the version with P, when it isn't refused, shows as P stored.
+ * history stores a position R2 after that read and before that store, a later evaluation is refused, so it doesn't
+ * start from P, and R2 stays stored. An evaluation that read P while the subscribe
+ * settled the first position stores nothing from that read, so it reads again, finds R2 and starts from it, with the
+ * version stored through {@code storeWriteVersion}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
@@ -222,8 +221,6 @@ class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
 
     /**
      * Over {@link InMemoryCheckpointStorage}, holds the next read of one thread right after it returned, until released.
-     * Resolving a checkpoint with a version stores it whatever is stored, as a MongoDB storage does for an earlier
-     * operation time.
      */
     private static final class HoldingStorage implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
@@ -272,8 +269,8 @@ class DurableSubscriptionModelRepositionBetweenReadAndStampTest {
         }
 
         @Override
-        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
-            return Optional.of(delegate.save(subscriptionId, candidate, CheckpointWriteCondition.notOlderThan(writeVersion)));
+        public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+            return delegate.storeWriteVersion(subscriptionId, writeVersion);
         }
     }
 
