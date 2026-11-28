@@ -188,8 +188,10 @@ public final class HandoverMessages {
      */
     public static String acceptedFromOwnDelivery(String noun) {
         return "A live event was fed to this " + noun + " from inside one of its own deliveries or callbacks while it "
-                + "was not live. It would wait for work this same thread holds up, so it is refused instead. Feed live "
-                + "events from another thread.";
+                + "was not live. It would wait for work this same thread holds up, so it is refused instead. Write the "
+                + "event to the event store, so this " + noun + " gets it the way it gets its other events. A handler "
+                + "that lets this exception escape during the catch-up fails the catch-up for good, and this " + noun
+                + " then refuses every later event.";
     }
 
     /**
@@ -203,7 +205,9 @@ public final class HandoverMessages {
         return "A live event was fed to this " + noun + " and waited on from inside the handler or a callback of "
                 + "another catch-up feed or subscription while this " + noun + " was not live. A catch-up of the other "
                 + "one can be waiting for this thread, so the two could wait for each other, and the event is refused "
-                + "instead. Feed it without waiting for it, or from another thread that this handler does not wait for.";
+                + "instead. Write the event to the event store, so this " + noun + " gets it the way it gets its other "
+                + "events. A handler that lets this exception escape during its own catch-up fails that catch-up for "
+                + "good, and its feed or subscription then refuses every later event.";
     }
 
     /**

@@ -6,6 +6,9 @@ Date: 2026-08-07
 
 Accepted. Unit B3 of the post-0.31.0 API review remediation arc (#588), which trails the 0.32.0 tag.
 
+Amended by [ADR 187](0187-a-blocking-catch-up-goes-live-only-once-it-holds-nothing.md). The drain goes live only once
+a round of deliveries finds nothing left to deliver, where this ADR had it go live before it delivered what it reserved.
+
 ## Context
 
 `BlockingHandover` is the shared engine behind `CatchupThenPushSubscriptionModel` and the projection DSL's
