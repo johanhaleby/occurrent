@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
@@ -610,6 +611,10 @@ class StreamPositionCatchupLateCommitMongoTest {
             assertThat(failure).isInstanceOf(CatchupCannotResumeException.class)
                     .hasMessageContaining("sub")
                     .hasMessageContaining("after position 2")
+                    .hasMessageContaining("If the subscription stores its checkpoint, cancel it first, which deletes that checkpoint. ")
+                    .hasMessageNotContaining("Cancel the subscription first, which deletes the checkpoint stored for it.")
+                    .hasMessageContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                    .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
                     .hasMessageContaining("EventMetadata.getCheckpoint()");
             // And the stored position is as it was, with nothing delivered
             assertThat(storage.read("sub")).as("the stored checkpoint").isNotNull().extracting(Checkpoint::asString).isEqualTo(GlobalCheckpoint.of(2).asString());

@@ -536,6 +536,12 @@ class ReactiveGenericApplicationServiceFailureAfterWriteTest {
     }
 
     private static final class FailingOnceDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicReference<Throwable> failure;
 
         FailingOnceDispatcher(Throwable failure) {
@@ -558,6 +564,12 @@ class ReactiveGenericApplicationServiceFailureAfterWriteTest {
 
     // Lets the first dispatch through and fails the second, which is the dispatch of a run that an executor started after the first
     private static final class FailingOnSecondDispatchDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicInteger dispatches = new AtomicInteger();
         private final Throwable failure;
 
@@ -578,6 +590,12 @@ class ReactiveGenericApplicationServiceFailureAfterWriteTest {
 
     // A handler written in Kotlin can throw a checked exception out of dispatch without declaring it
     private static final class SneakilyThrowingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicReference<Throwable> failure;
 
         SneakilyThrowingDispatcher(Throwable failure) {
@@ -605,6 +623,12 @@ class ReactiveGenericApplicationServiceFailureAfterWriteTest {
     }
 
     private static final class RecordingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final List<String> dispatchedEventIds = new CopyOnWriteArrayList<>();
 
         @Override

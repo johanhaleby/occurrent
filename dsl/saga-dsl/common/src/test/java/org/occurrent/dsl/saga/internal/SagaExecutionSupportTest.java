@@ -142,7 +142,7 @@ class SagaExecutionSupportTest {
 
     private static SagaEnvelope<OrderState> activeEnvelope(String sagaId, OrderState state, long version, List<TimerEntry> timers,
                                                             Map<String, Long> streamWatermarks, Long positionWatermark) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, streamWatermarks, positionWatermark, NOW, NOW, null, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, streamWatermarks, positionWatermark, NOW, NOW, null, null, true, null, Map.of(), null);
     }
 
     @Nested
@@ -187,7 +187,7 @@ class SagaExecutionSupportTest {
     class TerminalInstance {
 
         private SagaEnvelope<OrderState> completed(OrderState state) {
-            return new SagaEnvelope<>("o1", state, SagaStatus.COMPLETED, 2, List.of(), Map.of(), null, NOW.minusSeconds(120), NOW.minusSeconds(60), NOW.minusSeconds(60), null);
+            return new SagaEnvelope<>("o1", state, SagaStatus.COMPLETED, 2, List.of(), Map.of(), null, NOW.minusSeconds(120), NOW.minusSeconds(60), NOW.minusSeconds(60), null, true, null, Map.of(), null);
         }
 
         @Test
@@ -721,13 +721,13 @@ class SagaExecutionSupportTest {
 
         private SagaEnvelope<OrderState> envelope(Map<String, Long> streamWatermarks, Map<String, StreamMarks> streamMarks) {
             return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), streamWatermarks, null,
-                    NOW, NOW, null, null, true, null, streamMarks);
+                    NOW, NOW, null, null, true, null, streamMarks, null);
         }
 
         /** An instance stored before 0.35.0, which has a watermark per stream and no marks. */
         private SagaEnvelope<OrderState> withoutMarks(Map<String, Long> streamWatermarks) {
             return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), streamWatermarks, null,
-                    NOW, NOW, null, null, true, null);
+                    NOW, NOW, null, null, true, null, Map.of(), null);
         }
 
         /** As {@link #marked()}, with the given versions pending for stream s1. */
@@ -1294,13 +1294,13 @@ class SagaExecutionSupportTest {
             private static final String OTHER_STREAM = "s2";
 
             private SagaFailure failureOf(String input) {
-                return new SagaFailure(input, null, NOW, IllegalStateException.class.getName(), "boom");
+                return new SagaFailure(input, null, NOW, IllegalStateException.class.getName(), "boom", null, null);
             }
 
             /** An instance stored before 0.35.0, with a watermark of 30 for s1 and for s2 and no marks. */
             private SagaEnvelope<OrderState> withoutMarksFailingOn(String input) {
                 return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(),
-                        Map.of(STREAM, 30L, OTHER_STREAM, 30L), null, NOW, NOW, null, null, true, failureOf(input), Map.of());
+                        Map.of(STREAM, 30L, OTHER_STREAM, 30L), null, NOW, NOW, null, null, true, failureOf(input), Map.of(), null);
             }
 
             /** An instance with marks, which fixed a floor of 30 for s1 and for s2. */
@@ -1308,7 +1308,7 @@ class SagaExecutionSupportTest {
                 StreamMarks marks = new StreamMarks(30, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)));
                 return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(),
                         Map.of(STREAM, 30L, OTHER_STREAM, 30L), null, NOW, NOW, null, null, true, failureOf(input),
-                        Map.of(STREAM, marks, OTHER_STREAM, marks));
+                        Map.of(STREAM, marks, OTHER_STREAM, marks), null);
             }
 
             @Test
@@ -1393,16 +1393,16 @@ class SagaExecutionSupportTest {
 
             /** Type A is at 30 under a window of 4, so version 5 is far behind it and was never applied. */
             private SagaEnvelope<OrderState> failingOn(String input, Instant firstFailedAt) {
-                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom", null, null);
                 return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM, 30L), null,
-                        NOW, NOW, null, null, true, record, Map.of(STREAM, new StreamMarks(0, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)))));
+                        NOW, NOW, null, null, true, record, Map.of(STREAM, new StreamMarks(0, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)))), null);
             }
 
             /** As {@link #failingOn}, with the given versions pending for stream s1. */
             private SagaEnvelope<OrderState> failingOnWithPending(String input, Instant firstFailedAt, Map<String, List<Long>> pending) {
-                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom", null, null);
                 return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM, 30L), null,
-                        NOW, NOW, null, null, true, record, Map.of(STREAM, new StreamMarks(0, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)), pending)));
+                        NOW, NOW, null, null, true, record, Map.of(STREAM, new StreamMarks(0, Map.of(TYPE_A, new TypeMark(30, List.of(), 26)), pending)), null);
             }
 
             private Outcome<OrderState, OrderCommand> applyOrderPlaced(SagaEnvelope<OrderState> current, EventMeta meta) {
@@ -1535,9 +1535,9 @@ class SagaExecutionSupportTest {
             @Test
             void a_version_listed_as_pending_by_a_retry_is_still_new_after_the_instance_moved_past_the_window_and_failed_on_another_input() {
                 // Given an instance stored before 0.35.0, which has a watermark of 4 and no marks, failing on version 5
-                SagaFailure legacyRecord = new SagaFailure(STREAM + "@5", null, NOW, IllegalStateException.class.getName(), "boom");
+                SagaFailure legacyRecord = new SagaFailure(STREAM + "@5", null, NOW, IllegalStateException.class.getName(), "boom", null, null);
                 SagaEnvelope<OrderState> legacy = new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(),
-                        Map.of(STREAM, 4L), null, NOW, NOW, null, null, true, legacyRecord);
+                        Map.of(STREAM, 4L), null, NOW, NOW, null, null, true, legacyRecord, Map.of(), null);
                 FailureRecord<OrderState> retry = SagaExecutionSupport.onFailure(orderFulfillment(), "o1", legacy, meta(TYPE_A, 5), failure, NOW.plusSeconds(60), budget, WINDOW);
 
                 // When versions 6 to 30 are applied and then version 31 fails
@@ -2137,17 +2137,17 @@ class SagaExecutionSupportTest {
 
             private SagaEnvelope<OrderState> withStatus(SagaStatus status) {
                 return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 1, List.of(), Map.of(STREAM, 30L), null, NOW, NOW,
-                        status == SagaStatus.COMPLETED ? NOW : null, null, true, null, marked().streamMarks());
+                        status == SagaStatus.COMPLETED ? NOW : null, null, true, null, marked().streamMarks(), null);
             }
 
             @Test
             void a_late_arrival_that_the_instance_has_not_applied_is_recorded_as_pending_and_nothing_else_changes() {
                 // Given
-                SagaFailure otherFailure = new SagaFailure(STREAM + "@31", null, NOW, IllegalStateException.class.getName(), "boom");
+                SagaFailure otherFailure = new SagaFailure(STREAM + "@31", null, NOW, IllegalStateException.class.getName(), "boom", null, null);
                 List<TimerEntry> timers = List.of(new TimerEntry(PAYMENT_TIMER, 123_000L));
                 Map<String, TypeMark> byType = marked().streamMarks().get(STREAM).byType();
                 SagaEnvelope<OrderState> current = new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 7, timers, Map.of(STREAM, 30L),
-                        null, NOW, NOW, null, null, true, otherFailure, Map.of(STREAM, new StreamMarks(10, byType, Map.of(TYPE_B, List.of(11L)))));
+                        null, NOW, NOW, null, null, true, otherFailure, Map.of(STREAM, new StreamMarks(10, byType, Map.of(TYPE_B, List.of(11L)))), null);
 
                 // When
                 FailureRecord<OrderState> record = recording(current, meta(TYPE_A, 29));
@@ -2159,7 +2159,7 @@ class SagaExecutionSupportTest {
                         () -> assertThat(record.expectedVersion()).isEqualTo(7L),
                         () -> assertThat(record.envelope()).isEqualTo(new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 8, timers,
                                 Map.of(STREAM, 30L), null, NOW, later, null, null, true, otherFailure,
-                                Map.of(STREAM, new StreamMarks(10, byType, Map.of(TYPE_A, List.of(29L), TYPE_B, List.of(11L)), List.of(), Map.of(29L, later)))))
+                                Map.of(STREAM, new StreamMarks(10, byType, Map.of(TYPE_A, List.of(29L), TYPE_B, List.of(11L)), List.of(), Map.of(29L, later))), null))
                 );
             }
 
@@ -2301,7 +2301,7 @@ class SagaExecutionSupportTest {
                         () -> assertThat(record.expectedVersion()).isZero(),
                         () -> assertThat(record.envelope()).isEqualTo(new SagaEnvelope<>("o1", orderFulfillment().initialState(), SagaStatus.ACTIVE, 1,
                                 List.of(), Map.of(), null, later, later, null, null, false, null,
-                                Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)), List.of(), Map.of(1L, later)))))
+                                Map.of(STREAM, new StreamMarks(Long.MIN_VALUE, Map.of(), Map.of(TYPE_A, List.of(1L)), List.of(), Map.of(1L, later))), null))
                 );
             }
 
@@ -2433,9 +2433,9 @@ class SagaExecutionSupportTest {
             }
 
             private SagaEnvelope<OrderState> failingOn(String input, SagaEnvelope<OrderState> current) {
-                SagaFailure record = new SagaFailure(input, null, NOW, IllegalStateException.class.getName(), "boom");
+                SagaFailure record = new SagaFailure(input, null, NOW, IllegalStateException.class.getName(), "boom", null, null);
                 return new SagaEnvelope<>("o1", current.state(), SagaStatus.ACTIVE, 1, List.of(), current.streamWatermarks(), null,
-                        NOW, NOW, null, null, true, record, current.streamMarks());
+                        NOW, NOW, null, null, true, record, current.streamMarks(), null);
             }
 
             @Test
@@ -2567,9 +2567,9 @@ class SagaExecutionSupportTest {
 
             private SagaEnvelope<OrderState> failingOn(String input, Instant firstFailedAt, Map<String, Long> streamWatermarks,
                                                       Map<String, StreamMarks> streamMarks) {
-                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+                SagaFailure record = new SagaFailure(input, null, firstFailedAt, IllegalStateException.class.getName(), "boom", null, null);
                 return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), streamWatermarks, null,
-                        NOW, NOW, null, null, true, record, streamMarks);
+                        NOW, NOW, null, null, true, record, streamMarks, null);
             }
 
             /** An instance stored before pending existed. It is failing on s1@5 with nothing pending and a watermark of 4, with or without marks of floor 4. */
@@ -3114,9 +3114,9 @@ class SagaExecutionSupportTest {
 
             /** An instance stored before pending existed. It is failing on s1@5 since NOW with nothing pending and a watermark of 4. */
             private SagaEnvelope<OrderState> storedBeforePending() {
-                SagaFailure record = new SagaFailure(STREAM + "@5", null, NOW, IllegalStateException.class.getName(), "boom");
+                SagaFailure record = new SagaFailure(STREAM + "@5", null, NOW, IllegalStateException.class.getName(), "boom", null, null);
                 return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 1, List.of(), Map.of(STREAM, 4L), null,
-                        NOW, NOW, null, null, true, record, Map.of());
+                        NOW, NOW, null, null, true, record, Map.of(), null);
             }
 
             @Test

@@ -25,6 +25,7 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.ExecuteOptions;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.application.service.blocking.TransactionExecutor;
+import org.occurrent.application.service.internal.EventsAsWritten;
 import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -125,10 +126,28 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             throw new UnsupportedOperationException("The provided EventStore implementation does not support reading with a StreamReadFilter. EventStore must implement ReadEventStreamWithFilter in order to use filters when reading.");
         }
 
+        // Before anything is read, so a refused write reads nothing, see beforeWrite()
+        SynchronousEventDispatcher.WriteCheck writeCheck = synchronousEventDispatcher == null ? SynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite();
+        // Closed once the write and its dispatch are done, so a pause or a stop meanwhile waits for them
+        Written<WriteResult, E> written;
+        try (writeCheck) {
+            written = executeAdmitted(streamId, executeOptions, functionThatCallsDomainModel, filter, writeCheck);
+        }
+        // After the write check closed, so a side effect that waits for a pause or a stop never waits for this write
+        if (sideEffect != null) {
+            sideEffect.accept(written.newDomainEvents());
+        }
+        return written.result();
+    }
+
+    private record Written<R, E>(R result, List<E> newDomainEvents) {
+    }
+
+    private Written<WriteResult, E> executeAdmitted(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel,
+                                                    @Nullable StreamReadFilter filter, SynchronousEventDispatcher.WriteCheck writeCheck) {
         // @formatter:off
               record Attempt<T1 extends @Nullable Object, T2>(T1 v1, T2 v2) {}
               // @formatter:on
-
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
         FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
@@ -156,6 +175,9 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                 }
 
                 List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                if (writeCheck != SynchronousEventDispatcher.WriteCheck.NONE) {
+                    writeCheck.check(EventsAsWritten.inStream(streamId, eventStream.version(), newEvents));
+                }
                 WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
 
                 if (dispatchSynchronously && !newEvents.isEmpty()) {
@@ -186,10 +208,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
 
         failureAfterWrite.rethrowIfHeld();
 
-        if (sideEffect != null) {
-            sideEffect.accept(result.v2);
-        }
-        return result.v1;
+        return new Written<>(Objects.requireNonNull(result.v1), result.v2);
     }
 
     private @Nullable StreamReadFilter resolveFilter(ExecuteOptions<E> executeOptions) {

@@ -31,14 +31,13 @@ import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
 import org.springframework.stereotype.Component;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import tools.jackson.databind.ObjectMapper;
@@ -50,6 +49,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -63,44 +63,40 @@ import static org.awaitility.Awaitility.await;
  */
 @DisplayName("Reactive Projection annotation (agnostic, async catch-up)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@SpringBootTest(
-        classes = ReactiveAgnosticProjectionAnnotationMongoTest.StreamApplication.class,
-        properties = {
-                "occurrent.event-store.capabilities=stream",
-                "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:reactive-agnostic-projection-test"
-        }
-)
-@Import(ReactiveAgnosticProjectionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
-@Timeout(60)
+@Timeout(120)
 class ReactiveAgnosticProjectionAnnotationMongoTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:reactive-agnostic-projection-test");
     private static final String VIEW_ID = "names";
 
-    @Autowired
-    private ApplicationService<TestEvent> applicationService;
-
-    @Autowired
-    private ViewStateRepository<CountState, String> store;
+    @Container
+    static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     @Test
+    @SuppressWarnings("unchecked")
     void replays_stream_history_then_folds_live_events() {
-        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(store.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(2)));
+        // The history is written by a context with subscriptions off, since the application service refuses a write while the application starts
+        SpringApplication.run(StreamApplication.class, bootArgs("--occurrent.subscription.enabled=false", "--test.history=true")).close();
 
-        applicationService.execute("stream-live", __ -> List.of(new Registered("live-1"))).block();
-        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
-                assertThat(store.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(3)));
+        try (ConfigurableApplicationContext context = SpringApplication.run(StreamApplication.class, bootArgs())) {
+            ViewStateRepository<CountState, String> store = context.getBean(ViewStateRepository.class);
+            ApplicationService<TestEvent> applicationService = context.getBean(ApplicationService.class);
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(store.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(2)));
+
+            applicationService.execute("stream-live", __ -> List.of(new Registered("live-1"))).block();
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(store.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(3)));
+        }
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class MongoDbContainerConfiguration {
-        @Bean
-        @ServiceConnection
-        MongoDBContainer mongoDbContainer() {
-            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
-        }
+    private static String[] bootArgs(String... more) {
+        return Stream.concat(Stream.of(
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("reactive-agnostic-projection"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE), Stream.of(more)).toArray(String[]::new);
     }
 
     @SpringBootApplication
@@ -127,8 +123,9 @@ class ReactiveAgnosticProjectionAnnotationMongoTest {
             return ViewStateRepository.create(map::get, map::put);
         }
 
-        // Writes two stream events during singleton init, so they exist before the projection registers and catches up.
+        // Writes two stream events when test.history is set, so they exist before the projection registers and catches up.
         @Bean
+        @ConditionalOnProperty(name = "test.history", havingValue = "true")
         HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService) {
             return new HistoryAppender(applicationService);
         }

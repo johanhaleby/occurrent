@@ -31,6 +31,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -48,6 +49,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -72,6 +74,9 @@ class SameAsStartAtCatchupChainMongoTest {
     @Test
     void a_same_as_start_at_subscription_replays_goes_live_and_stores_no_checkpoint() {
         // Given
+        // The start of a subscription at the present is read when the event store bean is created, so only what is
+        // written before the context starts is history for the subscription to replay.
+        SpringApplication.run(ChainApplication.class, bootArgs("same-as-start-at-chain", "--occurrent.subscription.enabled=false", "--test.history=historic-1,historic-2")).close();
         ConfigurableApplicationContext ctx = SpringApplication.run(ChainApplication.class, bootArgs("same-as-start-at-chain"));
         try {
             Subscriber subscriber = ctx.getBean(Subscriber.class);
@@ -94,13 +99,12 @@ class SameAsStartAtCatchupChainMongoTest {
         }
     }
 
-    private static String[] bootArgs(String databaseName) {
-        return new String[]{
+    private static String[] bootArgs(String databaseName, String... more) {
+        return Stream.concat(Stream.of(
                 "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
-                "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName
-        };
+                "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName), Stream.of(more)).toArray(String[]::new);
     }
 
     @SpringBootApplication
@@ -120,10 +124,10 @@ class SameAsStartAtCatchupChainMongoTest {
                     .build();
         }
 
-        // Appends the history before the subscriber starts, so the subscription replays it
+        // Appends the history of test.history, which only the context that writes before the application starts is given
         @Bean
-        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService) {
-            return new HistoryAppender(applicationService);
+        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService, @Value("${test.history:}") List<String> history) {
+            return new HistoryAppender(applicationService, history);
         }
 
         @Bean
@@ -135,15 +139,16 @@ class SameAsStartAtCatchupChainMongoTest {
 
     static class HistoryAppender {
         private final ApplicationService<TestEvent> applicationService;
+        private final List<String> history;
 
-        HistoryAppender(ApplicationService<TestEvent> applicationService) {
+        HistoryAppender(ApplicationService<TestEvent> applicationService, List<String> history) {
             this.applicationService = applicationService;
+            this.history = history;
         }
 
         @PostConstruct
         void appendHistory() {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("historic-1")));
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("historic-2")));
+            history.forEach(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))));
         }
     }
 

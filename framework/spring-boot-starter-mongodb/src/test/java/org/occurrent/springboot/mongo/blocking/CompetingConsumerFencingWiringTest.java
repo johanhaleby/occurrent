@@ -68,7 +68,7 @@ class CompetingConsumerFencingWiringTest {
                     OccurrentMongoAutoConfigurationCharacterizationTest.TestEventTypeMapperConfiguration.class)
             .withBean(MongoDatabaseFactory.class, () -> mock(MongoDatabaseFactory.class))
             .withBean(MongoTemplate.class, () -> mock(MongoTemplate.class))
-            .withBean(SpringMongoEventStore.class, () -> mock(SpringMongoEventStore.class))
+            .withBean(SpringMongoEventStore.class, MockedMongoEventStore::withoutLiveStart)
             .withPropertyValues(
                     "occurrent.event-store.enabled=true",
                     "occurrent.subscription.mode=auto",

@@ -50,7 +50,8 @@ import java.lang.annotation.*;
  * <h4>Mode and Startup Behavior</h4>
  * <p>
  * {@link #mode()} chooses asynchronous delivery (the default, eventually consistent, catching up from history) or
- * synchronous (read-your-writes, updated on the write path in the write transaction). Synchronous mode is mutually
+ * synchronous (updated on the write path, in the write transaction when there is one, for the writes described on
+ * {@link #mode()}). Synchronous mode is mutually
  * exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
  * </p>
  * <p>
@@ -147,11 +148,23 @@ public @interface Projection {
     Capability capability() default Capability.AGNOSTIC;
 
     /**
-     * The processing mode for events. {@link Mode#ASYNC} (the default) processes events
-     * asynchronously and eventually updates the read model. {@link Mode#SYNCHRONOUS} guarantees
-     * read-your-writes semantics: the command that triggered an event sees the projection state
-     * immediately. Synchronous mode is mutually exclusive with {@link #startAt()},
-     * {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
+     * The processing mode for events. {@link Mode#ASYNC} (the default) processes events asynchronously and eventually
+     * updates the read model. {@link Mode#SYNCHRONOUS} updates the read model as part of each write through the
+     * application service of this process, so once that write returns the read model has its events. Any other event
+     * reaches it only if your code passes that event to the {@code SynchronousSubscriptionModel} while the projection
+     * is running, which {@link SynchronousSubscription} describes. It has no replay, so without that a synchronous
+     * projection added to an application whose event store already has events starts empty, and a write made directly
+     * to the event store, or by another process, doesn't reach it. So every process that writes must run the same
+     * synchronous projections. Without a transaction executor the update is best-effort.
+     * <p>
+     * To read your own writes over the events already stored, use {@link Mode#ASYNC} with {@link #startAt()} set to
+     * {@link StartPosition#BEGINNING} and {@link #recordAppliedAppends()} set to {@code true}, and wait for the write
+     * with {@code waitUntilApplied}.
+     * </p>
+     * <p>
+     * Synchronous mode is mutually exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()},
+     * {@link #resumeBehavior()}, and {@link #startupMode()}.
+     * </p>
      */
     Mode mode() default Mode.ASYNC;
 
@@ -244,7 +257,10 @@ public @interface Projection {
      * catch-up layer gets the warning whatever the start and whether or not that bean exists.
      * A {@link Source#PUSH} projection uses {@link #catchup()} instead, and is unaffected either way. Set
      * {@link #startAt()} to {@link StartPosition#BEGINNING} to have a rebuild replay and clear correctly, but clear
-     * its stored checkpoint too. The default {@link #resumeBehavior()} resumes from an existing checkpoint instead of
+     * its stored checkpoint too. With more than one instance, clear it with every instance stopped and start them all
+     * again with the same start, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
+     * describes. The default {@link #resumeBehavior()} resumes from an existing checkpoint instead of
      * replaying again, so a read model wiped without its checkpoint stays stale. Clear stale memberships with an
      * operator step instead if a replay is not what you want.
      * <p>

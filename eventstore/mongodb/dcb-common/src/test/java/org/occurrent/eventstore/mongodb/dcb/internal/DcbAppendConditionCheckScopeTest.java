@@ -26,7 +26,6 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.internal.DcbMarkerVersionsSupport;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.ItemQuery;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.KeySelection;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Outcome;
@@ -34,6 +33,7 @@ import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Pas
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.QueryEvents;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Refuse;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
+import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -60,17 +60,17 @@ class DcbAppendConditionCheckScopeTest {
 
     @Test
     void scope_of_a_replica_set_is_REPLICA_SET() {
-        assertThat(Scope.of(Deployment.REPLICA_SET)).isEqualTo(Scope.REPLICA_SET);
+        assertThat(Scope.of(MongoDeployment.REPLICA_SET)).isEqualTo(Scope.REPLICA_SET);
     }
 
     @Test
     void scope_of_a_mongos_is_SNAPSHOT_THROUGH_MONGOS() {
-        assertThat(Scope.of(Deployment.MONGOS)).isEqualTo(Scope.SNAPSHOT_THROUGH_MONGOS);
+        assertThat(Scope.of(MongoDeployment.MONGOS)).isEqualTo(Scope.SNAPSHOT_THROUGH_MONGOS);
     }
 
     @Test
     void scope_of_any_other_deployment_is_MARKERS_ONLY() {
-        assertThat(Scope.of(Deployment.OTHER)).isEqualTo(Scope.MARKERS_ONLY);
+        assertThat(Scope.of(MongoDeployment.OTHER)).isEqualTo(Scope.MARKERS_ONLY);
     }
 
     // snapshotHoldsTheAppendsRead

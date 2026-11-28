@@ -51,9 +51,11 @@ import java.lang.annotation.*;
  * What a failing event holds up is decided by whatever feeds the subscription, and the javadoc on
  * {@code SagaStatus.QUARANTINED} says what that can be.
  * <p>
- * An instance that keeps failing can be quarantined instead once {@code occurrent.saga.quarantine-after} is set to a
- * positive duration. Quarantine is off by default, because 0.34.0 has no operation that brings a quarantined instance
- * back. Whether a failing event is considered for quarantine and
+ * An instance that keeps failing can be quarantined instead, after {@code occurrent.saga.quarantine-after}, five
+ * minutes by default. Set {@code occurrent.saga.quarantine-enabled=false} to turn quarantine off. A quarantined
+ * instance records the events it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying them,
+ * with no event store needed. Every saga quarantines, a push saga included, and deleting a quarantined instance deletes
+ * the only copy the saga keeps of those events. Whether a failing event is considered for quarantine and
  * whether a considered one is actually quarantined are separate conditions, and the javadoc on
  * {@code SagaStatus.QUARANTINED} lists both. An instance can be past its budget and still {@code ACTIVE}, so read its
  * status rather than inferring it from the budget. What failed and where decide nothing once the saga has worked out
@@ -214,9 +216,15 @@ public @interface Saga {
      * {@link Catchup#NONE} goes straight to the live feed and needs no event store at all. Setting this on a
      * {@link Source#EVENT_STORE} saga is rejected, since that saga chooses its history with {@link #startAt()}.
      * <p>
-     * A start that finds the stored catch-up marker skips the replay, so a rebuild needs a new {@link #id()}. That new
-     * id replays the whole history into the saga, and every instance its TTL removed is recreated from its start event
-     * and dispatches its commands again. Keep completed instances for as long as the history a rebuild replays.
+     * A start that finds the stored catch-up marker skips the replay, so a rebuild needs a new {@link #id()}. Under a
+     * new id the saga replays the whole history and can repeat everything it did, the state it writes and the commands
+     * it dispatches. The default MongoDB store keeps the instances of each saga id in a {@code saga-<id>} collection,
+     * so under a new id every instance is recreated from its start event and dispatches its commands again. Stop every
+     * instance on the old id before the first one on the new id starts. Stopping them doesn't prevent the repeats.
+     * With more than one instance, what else a new id needs depends on where each instance keeps what it builds and
+     * which broker queue or consumer group it consumes, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+     * upgrade guide</a> describes.
      */
     Catchup catchup() default Catchup.FROM_EVENT_STORE;
 

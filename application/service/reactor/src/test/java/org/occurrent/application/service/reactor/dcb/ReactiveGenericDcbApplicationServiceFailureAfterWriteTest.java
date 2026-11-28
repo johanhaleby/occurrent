@@ -606,6 +606,12 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
     private static final class NeverFailingDispatcher implements ReactiveSynchronousEventDispatcher {
 
         @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
+
+        @Override
         public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             return Mono.empty();
         }
@@ -617,6 +623,12 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
     }
 
     private static final class FailingOnceDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicReference<Throwable> failure;
 
         FailingOnceDispatcher(Throwable failure) {
@@ -639,6 +651,12 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
 
     // A handler written in Kotlin can throw a checked exception out of dispatch without declaring it
     private static final class SneakilyThrowingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicReference<Throwable> failure;
 
         SneakilyThrowingDispatcher(Throwable failure) {
@@ -661,6 +679,12 @@ class ReactiveGenericDcbApplicationServiceFailureAfterWriteTest {
     }
 
     private static final class RecordingDispatcher implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final List<String> dispatchedEventIds = new CopyOnWriteArrayList<>();
 
         @Override

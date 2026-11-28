@@ -16,6 +16,11 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInput;
+import org.occurrent.dsl.saga.StoredSagaWithFirstSkippedInputKey;
+import org.occurrent.dsl.saga.codec.StoredSaga;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -34,6 +39,8 @@ import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.StreamMarks;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
+import org.occurrent.dsl.saga.SkippedInput;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.LoggerFactory;
@@ -73,9 +80,9 @@ class SagaPendingStreamVersionTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
     private static final Duration BUDGET = Duration.ofMinutes(5);
     private static final String ITEM_ADDED_TYPE = ItemAdded.class.getName();
-    private static final SagaRunnerConfig WINDOW_OF_2 = SagaRunnerConfig.defaults().withReorderWindow(2);
+    private static final SagaRunnerConfig WINDOW_OF_2 = SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(2);
     private static final SagaRunnerConfig WINDOW_OF_2_WITH_QUARANTINE = WINDOW_OF_2.withQuarantineAfter(BUDGET);
-    private static final SagaRunnerConfig WINDOW_OF_1 = SagaRunnerConfig.defaults().withReorderWindow(1);
+    private static final SagaRunnerConfig WINDOW_OF_1 = SagaRunnerConfig.defaults().disableQuarantine().withReorderWindow(1);
     private static final SagaRunnerConfig WINDOW_OF_1_WITH_QUARANTINE = WINDOW_OF_1.withQuarantineAfter(BUDGET);
 
     sealed interface BasketEvent permits BasketOpened, ItemAdded {
@@ -148,7 +155,7 @@ class SagaPendingStreamVersionTest {
     }
 
     private SagaExecution<BasketEvent, Basket, BasketCommand> execution(SagaRunnerConfig config) {
-        return new SagaExecution<>("baskets", basketSaga(), store, this::dispatch, converter, config, event -> true, now::get);
+        return new SagaExecution<>("baskets", basketSaga(), store, this::dispatch, converter, config, now::get);
     }
 
     private void dispatch(BasketCommand command) {
@@ -203,11 +210,11 @@ class SagaPendingStreamVersionTest {
     }
 
     private SagaEnvelope<Basket> stored() {
-        return inMemory.find(BASKET).orElseThrow();
+        return SagaEnvelopes.of(inMemory, null).find(BASKET).orElseThrow();
     }
 
     private List<Long> pending() {
-        StreamMarks marks = inMemory.find(BASKET).map(instance -> instance.streamMarks().get(STREAM)).orElse(null);
+        StreamMarks marks = SagaEnvelopes.of(inMemory, null).find(BASKET).map(instance -> instance.streamMarks().get(STREAM)).orElse(null);
         return marks == null ? List.of() : marks.pending().getOrDefault(ITEM_ADDED_TYPE, List.of());
     }
 
@@ -279,7 +286,7 @@ class SagaPendingStreamVersionTest {
             deliverFailing(execution, itemAddedAt(1, "one"));
 
             // Then
-            Optional<SagaEnvelope<Basket>> inserted = inMemory.find(BASKET);
+            Optional<SagaEnvelope<Basket>> inserted = SagaEnvelopes.of(inMemory, null).find(BASKET);
             assertThat(inserted).isPresent();
             assertAll(
                     () -> assertThat(inserted.get().failure()).isNull(),
@@ -821,7 +828,9 @@ class SagaPendingStreamVersionTest {
             deliverFailing(execution, itemAddedAt(2, "two"));
 
             // Then
-            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("could not list it as pending", STREAM + "@2"));
+            assertThat(errors()).singleElement().satisfies(error -> assertThat(error).contains("could not list it as pending", STREAM + "@2")
+                    .contains("because the state store threw " + storeFailure)
+                    .contains("A store that refuses to hold the event says so in that message, and refuses it again on every delivery."));
         }
 
         @Test
@@ -909,8 +918,9 @@ class SagaPendingStreamVersionTest {
      * Counts what the executor does to the store and can make it fail, without knowing which of the read and write
      * methods the executor uses for a given step.
      */
-    private static final class ObservedStore implements SagaStateStore<Basket> {
+    private static final class ObservedStore implements SagaStateStore<Basket>, SagaStateStoreSkippedInputs {
         private final SagaStateStore<Basket> delegate;
+        private final SagaStateStoreSkippedInputs delegateRecords;
         private final AtomicInteger reads = new AtomicInteger();
         private final AtomicInteger writeAttempts = new AtomicInteger();
         private final AtomicInteger writesToLose = new AtomicInteger();
@@ -920,6 +930,7 @@ class SagaPendingStreamVersionTest {
 
         ObservedStore(SagaStateStore<Basket> delegate) {
             this.delegate = delegate;
+            this.delegateRecords = (SagaStateStoreSkippedInputs) delegate;
         }
 
         void resetCounters() {
@@ -969,35 +980,90 @@ class SagaPendingStreamVersionTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<Basket>> find(String sagaId) {
+        public boolean fits(StoredSaga candidate) {
+            return delegateRecords.fits(candidate);
+        }
+
+        @Override
+        public boolean fitsWithoutState(StoredSaga saga, long expectedVersion) {
+            return delegateRecords.fitsWithoutState(saga, expectedVersion);
+        }
+
+        @Override
+        public SagaStateCodec<Basket> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             aboutToRead();
             return delegate.find(sagaId);
         }
 
         @Override
-        public Optional<SagaEnvelope<Basket>> findWithoutState(String sagaId) {
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
             aboutToRead();
             return delegate.findWithoutState(sagaId);
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<Basket> envelope, long expectedVersion) {
-            return write(() -> delegate.compareAndSave(sagaId, envelope, expectedVersion));
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return write(() -> delegate.compareAndSave(saga, expectedVersion));
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<Basket> envelope, long expectedVersion) {
-            return write(() -> delegate.compareAndSaveWithoutState(sagaId, envelope, expectedVersion));
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            return write(() -> delegate.compareAndSaveWithoutState(saga, expectedVersion));
         }
 
         @Override
-        public List<SagaEnvelope<Basket>> findWithDueTimers(Instant now, int limit) {
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return delegate.findWithDueTimers(now, limit);
         }
 
         @Override
         public void delete(String sagaId) {
             delegate.delete(sagaId);
+        }
+
+        @Override
+        public void requireAtomicTransitions() {
+            delegateRecords.requireAtomicTransitions();
+        }
+
+        @Override
+        public List<String> findReleasingSagaIds(@Nullable String after, int limit) {
+            return delegateRecords.findReleasingSagaIds(after, limit);
+        }
+
+        @Override
+        public List<SkippedInput> findSkippedInputs(String sagaId, String quarantineId, int limit) {
+            return delegateRecords.findSkippedInputs(sagaId, quarantineId, limit);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInput> findWithFirstSkippedInput(String sagaId) {
+            return delegateRecords.findWithFirstSkippedInput(sagaId);
+        }
+
+        @Override
+        public Optional<StoredSagaWithFirstSkippedInputKey> findWithFirstSkippedInputKey(String sagaId) {
+            return delegateRecords.findWithFirstSkippedInputKey(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSaveSkipped(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput input) {
+            return write(() -> delegateRecords.compareAndSaveSkipped(saga, expectedVersion, quarantineId, input));
+        }
+
+        @Override
+        public boolean compareAndSaveReplayed(StoredSaga saga, long expectedVersion, String quarantineId, SkippedInput replayed) {
+            return write(() -> delegateRecords.compareAndSaveReplayed(saga, expectedVersion, quarantineId, replayed));
+        }
+
+        @Override
+        public boolean compareAndSaveQuarantineEnded(StoredSaga saga, long expectedVersion, String quarantineId) {
+            return write(() -> delegateRecords.compareAndSaveQuarantineEnded(saga, expectedVersion, quarantineId));
         }
     }
 }

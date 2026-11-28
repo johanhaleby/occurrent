@@ -23,26 +23,32 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.springboot.common.internal.HandlerMethod;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -115,6 +121,85 @@ class SubscriptionAnnotationRegistrarTest {
         verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
         assertThat(reservedHandlers).isEmpty();
         assertThat(claimedIds).isEmpty();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_synchronous_subscription_subscribes_at_once_while_the_subscribe_call_holds_back_the_asynchronous_one() throws Exception {
+        Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+        Subscriptions<TestEvent> synchronousSubscriptions = mock(Subscriptions.class);
+        SubscriptionAnnotationRegistrar registrar = registrarOver(subscriptions, synchronousSubscriptions);
+        List<Runnable> heldBack = new ArrayList<>();
+
+        register(registrar, release -> (registration, startIsFixed, attempt) -> heldBack.add(attempt));
+
+        verify(synchronousSubscriptions, times(1)).subscribe(eq("synchronous-at-once"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+        verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+        assertThat(heldBack).as("[asynchronous subscribes handed to the subscribe call]").hasSize(1);
+
+        heldBack.forEach(Runnable::run);
+
+        verify(subscriptions, times(1)).subscribe(eq("asynchronous-after-the-scan"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void behind_the_startup_subscribes_the_asynchronous_subscription_waits_for_their_start_and_a_later_one_subscribes_at_once() throws Exception {
+        Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+        Subscriptions<TestEvent> synchronousSubscriptions = mock(Subscriptions.class);
+        SubscriptionAnnotationRegistrar registrar = registrarOver(subscriptions, synchronousSubscriptions);
+        StartupSubscribes startupSubscribes = new StartupSubscribes();
+        LateSubscriber.SubscribeCall behindTheStartupSubscribes = (registration, startIsFixed, attempt) -> startupSubscribes.run(attempt);
+
+        register(registrar, release -> behindTheStartupSubscribes);
+
+        verify(synchronousSubscriptions, times(1)).subscribe(eq("synchronous-at-once"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+        verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+
+        startupSubscribes.start();
+
+        verify(subscriptions, times(1)).subscribe(eq("asynchronous-after-the-scan"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+
+        registrar.registerSubscriptions(new LaterSubscriber(), List.of(handlerOf(LaterSubscriber.class, "later")), LaterSubscriber::new, false, release -> behindTheStartupSubscribes,
+                ConcurrentHashMap.<HandlerMethod>newKeySet()::add, ConcurrentHashMap.<String>newKeySet()::add, ignored -> {
+                }, ignored -> {
+                });
+
+        verify(subscriptions, times(1)).subscribe(eq("later-than-the-scan"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SubscriptionAnnotationRegistrar registrarOver(Subscriptions<TestEvent> subscriptions, Subscriptions<TestEvent> synchronousSubscriptions) {
+        ApplicationContext context = mock(ApplicationContext.class);
+        when(context.getBean(CloudEventConverter.class)).thenReturn(new NoopCloudEventConverter());
+        when(context.getBean(Subscriptions.class)).thenReturn(subscriptions);
+        when(context.getBean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class)).thenReturn(synchronousSubscriptions);
+        return new SubscriptionAnnotationRegistrar(context, startPositionSupport());
+    }
+
+    private static void register(SubscriptionAnnotationRegistrar registrar, Function<Runnable, LateSubscriber.SubscribeCall> subscribeCall) throws Exception {
+        AsynchronousAndSynchronousSubscriber bean = new AsynchronousAndSynchronousSubscriber();
+        registrar.registerSubscriptions(bean, List.of(handlerOf(AsynchronousAndSynchronousSubscriber.class, "asynchronous"), handlerOf(AsynchronousAndSynchronousSubscriber.class, "synchronous")),
+                () -> bean, false, subscribeCall,
+                ConcurrentHashMap.<HandlerMethod>newKeySet()::add, ConcurrentHashMap.<String>newKeySet()::add, ignored -> {
+                }, ignored -> {
+                });
+    }
+
+    static class AsynchronousAndSynchronousSubscriber {
+        @Subscription(id = "asynchronous-after-the-scan")
+        void asynchronous(TestEvent event) {
+        }
+
+        @SynchronousSubscription(id = "synchronous-at-once")
+        void synchronous(TestEvent event) {
+        }
+    }
+
+    static class LaterSubscriber {
+        @Subscription(id = "later-than-the-scan")
+        void later(TestEvent event) {
+        }
     }
 
     private static StartPositionSupport startPositionSupport() {

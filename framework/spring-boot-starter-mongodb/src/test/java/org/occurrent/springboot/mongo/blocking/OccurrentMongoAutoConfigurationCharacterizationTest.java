@@ -390,7 +390,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                         "occurrent.subscription.enabled=true",
                         "occurrent.event-store.capabilities=dcb"
                 )
-                .withBean(SpringMongoEventStore.class, () -> mock(SpringMongoEventStore.class))
+                .withBean(SpringMongoEventStore.class, MockedMongoEventStore::withoutLiveStart)
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(ApplicationService.class);
                     assertThat(context).hasSingleBean(DomainEventQueries.class);
@@ -608,7 +608,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     private ApplicationContextRunner eventStoreConfigContextRunner() {
         return contextRunner
                 .withPropertyValues("occurrent.event-store.enabled=true")
-                .withBean(SpringMongoEventStore.class, () -> mock(SpringMongoEventStore.class));
+                .withBean(SpringMongoEventStore.class, MockedMongoEventStore::withoutLiveStart);
     }
 
     private TagGenerator<TestEvent> tagsForTestEvent() {

@@ -17,6 +17,7 @@
 package org.occurrent.springboot.blocking;
 
 import org.occurrent.annotation.StartupMode;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.subscription.internal.LostStartHold;
 
 /**
@@ -28,6 +29,11 @@ import org.occurrent.subscription.internal.LostStartHold;
 final class BackgroundStartup {
 
     private BackgroundStartup() {
+    }
+
+    // Held back until the startup scan is done, see StartupSubscribes
+    static void subscribe(StartupSubscribes startupSubscribes, StartupMode startupMode, Runnable subscribe) {
+        startupSubscribes.run(() -> subscribe(startupMode, subscribe));
     }
 
     static void subscribe(StartupMode startupMode, Runnable subscribe) {

@@ -16,10 +16,14 @@
 
 package org.occurrent.dsl.saga.mongodb.spring;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
-import io.cloudevents.CloudEvent;
+import com.mongodb.client.model.Aggregates;
+import com.mongodb.client.model.Filters;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -40,31 +44,17 @@ import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
-import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.data.mongodb.core.MongoOperations;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,10 +76,11 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 class SpringMongoSagaStateStoreQuarantineBudgetTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+    private static final MongoDBContainer mongoDBContainer = FailPoint.container();
 
     private static final String COLLECTION = "saga-quarantine-budget";
     private static final String STREAM = "orders";
+    private static final int HOST_UNREACHABLE = 6;
 
     sealed interface OrderEvent permits OrderPlaced {
         String orderId();
@@ -112,6 +103,10 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
         // RetryStrategy.none(), because InMemorySubscriptionModel's own default redelivers a failing event on a fixed
         // 200 ms delay, and a redelivery arriving once the single injected MongoDB failure has been used up succeeds
         // and overwrites the very failure record these tests read. Redelivery is not what either test is about.
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-qb-" + UUID.randomUUID().toString().substring(0, 8)));
+        // retryReads is off so the failed read reaches the store and the driver does not retry it first
+        client = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).retryReads(false).build());
+        database = requireNonNull(connectionString.getDatabase());
         subscriptionModel = new InMemorySubscriptionModel(RetryStrategy.none());
         eventStore = new InMemoryEventStore(subscriptionModel);
         converter = new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test")).build();
@@ -123,11 +118,25 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
             subscription.close();
         }
         subscriptionModel.shutdown();
+        client.close();
     }
 
-    private MongoOperations mongoOperations() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("saga-qb-" + UUID.randomUUID()));
-        return new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
+    private MongoClient client;
+    private String database;
+
+    private FlakyMongoTemplate template(String failingMethod, int failures) {
+        return new FlakyMongoTemplate(client, database, failingMethod, failures);
+    }
+
+    // The store reads an instance by id through the driver, so the failure is injected on the wire
+    private FailPoint aFailedFind() {
+        return FailPoint.failing(client, "find", 1, HOST_UNREACHABLE);
+    }
+
+    // By aggregate, since find is what the fail point fails and the first find must be the runner's own
+    private void awaitTheInstanceDocument(String sagaId) {
+        await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(20))
+                .until(() -> client.getDatabase(database).getCollection(COLLECTION).aggregate(List.of(Aggregates.match(Filters.eq("_id", sagaId)))).first() != null);
     }
 
     private static Saga<OrderEvent, String, ShipOrder> shippingSaga() {
@@ -138,61 +147,22 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
                 .build();
     }
 
-    /**
-     * {@link InMemorySubscriptionModel} does not implement {@link HistoryRetainingSubscriptions}, and
-     * {@code SagaRunner} switches quarantine off entirely for a subscription model it cannot ask, regardless of
-     * {@link SagaRunnerConfig#quarantineAfter()}. Wrapping it with an always-retains answer is what makes the
-     * quarantine budget (and so the failure record these tests read) reachable at all.
-     */
-    private record RetainsEverything(InMemorySubscriptionModel delegate) implements Subscribable, HistoryRetainingSubscriptions {
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
-    /** Wraps {@code real}, throwing a {@link DataAccessResourceFailureException} on the first {@code failures} calls to the method named {@code methodName} and delegating every other call and every other method unchanged. */
-    private static MongoOperations failing(MongoOperations real, String methodName, int failures) {
-        AtomicInteger remaining = new AtomicInteger(failures);
-        InvocationHandler handler = (proxy, method, args) -> {
-            if (method.getName().equals(methodName) && remaining.getAndDecrement() > 0) {
-                throw new DataAccessResourceFailureException("simulated transient MongoDB failure in " + methodName);
-            }
-            try {
-                return method.invoke(real, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        };
-        return (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(),
-                new Class<?>[]{MongoOperations.class}, handler);
-    }
-
     @Test
     void a_transient_store_failure_does_not_start_the_instance_s_quarantine_budget() {
-        MongoOperations mongoOperations = mongoOperations();
-        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findById", 1), COLLECTION, String.class);
-        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
+        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class);
+        FailPoint failedFind = aFailedFind();
+        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(subscriptionModel, converter)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-1", converter.toCloudEvents(List.of(new OrderPlaced("order-1"))));
+        awaitTheInstanceDocument("order-1");
+        failedFind.close();
 
-        SagaStateStore<String> readStore = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, String.class);
+        SagaStateStore<String> readStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class);
         // dontCatchUncaughtExceptions(), so a store failure that is not retried away fails this test on the record it
         // wrote rather than on the exception it threw on the subscription's delivery thread. The record is the defect.
         await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            Optional<SagaEnvelope<String>> found = readStore.findWithoutState("order-1");
+            Optional<SagaEnvelope<String>> found = SagaEnvelopes.of(readStore, null).findWithoutState("order-1");
             assertThat(found).isPresent();
             assertAll(
                     () -> assertThat(found.get().failure())
@@ -210,26 +180,28 @@ class SpringMongoSagaStateStoreQuarantineBudgetTest {
 
     @Test
     void a_genuine_store_failure_does_start_the_instance_s_quarantine_budget() {
-        MongoOperations mongoOperations = mongoOperations();
-        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(failing(mongoOperations, "findById", 1), COLLECTION, String.class, null, RetryStrategy.none());
-        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsEverything(subscriptionModel), converter)
+        SagaStateStore<String> stateStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class, null, RetryStrategy.none());
+        FailPoint failedFind = aFailedFind();
+        subscription = SagaRunner.<OrderEvent, ShipOrder>agnostic(subscriptionModel, converter)
                 .run(STREAM, shippingSaga(), stateStore, dispatched::add, null, SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5)));
 
         eventStore.write("order-2", converter.toCloudEvents(List.of(new OrderPlaced("order-2"))));
+        awaitTheInstanceDocument("order-2");
+        failedFind.close();
 
-        SagaStateStore<String> readStore = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, String.class);
+        SagaStateStore<String> readStore = new SpringMongoSagaStateStore<>(template("none", 0), COLLECTION, String.class);
         // dontCatchUncaughtExceptions(): the budget is not spent on one failure, so onCloudEvent rethrows after
         // writing the record, uncaught on the subscription's delivery thread. That is the documented behaviour, not a
         // bug this poll should surface.
         await().dontCatchUncaughtExceptions().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            Optional<SagaEnvelope<String>> found = readStore.findWithoutState("order-2");
+            Optional<SagaEnvelope<String>> found = SagaEnvelopes.of(readStore, null).findWithoutState("order-2");
             assertThat(found).isPresent();
             assertThat(found.get().failure())
                     .as("with retries off, the same single MongoDB failure must reach the runner and start the quarantine budget, which is what the other test proves the default strategy prevents")
                     .isNotNull();
         });
 
-        SagaFailure failure = readStore.findWithoutState("order-2").orElseThrow().failure();
+        SagaFailure failure = SagaEnvelopes.of(readStore, null).findWithoutState("order-2").orElseThrow().failure();
         assertThat(failure.firstFailedAt()).isNotNull();
     }
 }

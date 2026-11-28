@@ -85,35 +85,35 @@ class SagaQuarantineSupportTest {
 
     private static SagaEnvelope<OrderState> active(long version, Map<String, Long> streamWatermarks, Long positionWatermark) {
         return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, version, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
-                streamWatermarks, positionWatermark, NOW.minusSeconds(60), NOW.minusSeconds(30), null, null, true, null);
+                streamWatermarks, positionWatermark, NOW.minusSeconds(60), NOW.minusSeconds(30), null, null, true, null, Map.of(), null);
     }
 
     private static SagaEnvelope<OrderState> withFailure(SagaStatus status, SagaFailure failure) {
         return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 4, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
-                Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failure);
+                Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failure, Map.of(), null);
     }
 
     /** As {@link #withFailure}, with the given version listed as pending for the stream, as an instance written by 0.35.0 or later has it. */
     private static SagaEnvelope<OrderState> withFailureAndPending(SagaStatus status, SagaFailure failure, long pendingVersion) {
         return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 4, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
                 Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failure,
-                Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(pendingVersion)))));
+                Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(pendingVersion)))), null);
     }
 
     /** As {@link #withFailureAndPending}, with the instant the pending version first failed, as an instance written by this version has it. */
     private static SagaEnvelope<OrderState> withFailureAndPendingSince(SagaStatus status, SagaFailure failure, long pendingVersion, Instant pendingSince) {
         return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), status, 4, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
                 Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failure,
-                Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(pendingVersion)), List.of(), Map.of(pendingVersion, pendingSince))));
+                Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(pendingVersion)), List.of(), Map.of(pendingVersion, pendingSince))), null);
     }
 
     private static SagaFailure failedOn(long position, Instant firstFailedAt) {
-        return new SagaFailure("o1@" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom");
+        return new SagaFailure("o1@" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom", null, null);
     }
 
     /** What 0.31.0 to 0.34.0 wrote for an event that had only a position, a key nothing produces any more. */
     private static SagaFailure failedOnLegacyPositionKey(long position, Instant firstFailedAt) {
-        return new SagaFailure("position:" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom");
+        return new SagaFailure("position:" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom", null, null);
     }
 
     /** What an event store that assigns no global position gives a saga: a stream id and a stream version, nothing else. */
@@ -122,7 +122,7 @@ class SagaQuarantineSupportTest {
     }
 
     private static SagaFailure failedWithoutPositionOn(long streamVersion, Instant firstFailedAt) {
-        return new SagaFailure("o1@" + streamVersion, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+        return new SagaFailure("o1@" + streamVersion, null, firstFailedAt, IllegalStateException.class.getName(), "boom", null, null);
     }
 
     @Nested
@@ -138,7 +138,7 @@ class SagaQuarantineSupportTest {
                     () -> assertThat(record.quarantined()).isFalse(),
                     () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(record.envelope().failure()).isEqualTo(
-                            new SagaFailure("o1@7", 7L, NOW, IllegalStateException.class.getName(), "boom")),
+                            new SagaFailure("o1@7", 7L, NOW, IllegalStateException.class.getName(), "boom", null, null)),
                     () -> assertThat(record.expectedVersion()).isEqualTo(3),
                     () -> assertThat(record.envelope().version()).isEqualTo(4)
             );
@@ -400,6 +400,68 @@ class SagaQuarantineSupportTest {
     }
 
     @Nested
+    class TheBareFailureRecord {
+
+        private List<Long> pendingOf(FailureRecord<OrderState> record) {
+            return record.envelope().streamMarks().values().stream().flatMap(marks -> marks.pending().values().stream()).flatMap(List::stream).toList();
+        }
+
+        @Test
+        void an_input_at_or_below_the_floor_that_the_marks_do_not_list_keeps_its_pending_entry_and_loses_only_its_message() {
+            // Stored before 0.35.0, so the stream is applied up to version 30 and there are no marks, and the failure record names version 5
+            // with the budget used up. A release ignores the failure record, so without the pending entry it takes version 5
+            // for an input the instance applied before the floor and deletes its record unapplied
+            SagaEnvelope<OrderState> current = new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 4, List.of(),
+                    Map.of("o1", 30L), 30L, NOW.minusSeconds(60), NOW, null, null, true, failedOn(5, NOW.minus(BUDGET)), Map.of(), null);
+            FailureRecord<OrderState> full = SagaExecutionSupport.onFailure(saga(), "o1", current, at(5), new IllegalStateException("boom"), NOW, BUDGET);
+
+            FailureRecord<OrderState> bare = SagaExecutionSupport.onFailureBare(current, at(5), full);
+
+            assertAll(
+                    () -> assertThat(full.quarantined()).as("control: the budget is used up").isTrue(),
+                    () -> assertThat(pendingOf(full)).as("control: the full record lists the input").containsExactly(5L),
+                    () -> assertThat(bare.quarantined()).isTrue(),
+                    () -> assertThat(pendingOf(bare)).as("the bare record lists the input too").containsExactly(5L),
+                    () -> assertThat(bare.envelope().failure().input()).isEqualTo("o1@5"),
+                    () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull()
+            );
+        }
+
+        @Test
+        void an_input_above_the_floor_gets_no_pending_entry_and_no_message() {
+            // Above the floor a release applies every input the marks don't show as applied, so the entry is not needed
+            SagaEnvelope<OrderState> current = active(3, Map.of("o1", 30L), 30L);
+            FailureRecord<OrderState> full = SagaExecutionSupport.onFailure(saga(), "o1", current, at(31), new IllegalStateException("boom"), NOW, BUDGET);
+
+            FailureRecord<OrderState> bare = SagaExecutionSupport.onFailureBare(current, at(31), full);
+
+            assertAll(
+                    () -> assertThat(pendingOf(full)).as("control: the full record lists the input").containsExactly(31L),
+                    () -> assertThat(pendingOf(bare)).as("the bare record does not").isEmpty(),
+                    () -> assertThat(bare.envelope().failure().input()).isEqualTo("o1@31"),
+                    () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull()
+            );
+        }
+
+        @Test
+        void the_record_that_inserts_an_instance_whose_first_input_failed_has_no_message_and_no_stream_marks() {
+            // There is no stored instance, so no marks to carry over, and the input is above the floor of a stream nothing has applied
+            FailureRecord<OrderState> full = SagaExecutionSupport.onFailure(saga(), "o1", null, at(1), new IllegalStateException("boom"), NOW, BUDGET);
+
+            FailureRecord<OrderState> bare = SagaExecutionSupport.onFailureBare(null, at(1), full);
+
+            assertAll(
+                    () -> assertThat(pendingOf(full)).as("control: the full record lists the input").containsExactly(1L),
+                    () -> assertThat(bare).isNotNull(),
+                    () -> assertThat(bare.envelope().failure().input()).isEqualTo("o1@1"),
+                    () -> assertThat(bare.envelope().failure().failureMessage()).as("no message").isNull(),
+                    () -> assertThat(bare.envelope().streamMarks()).as("no stream marks").isEmpty(),
+                    () -> assertThat(bare.expectedVersion()).isEqualTo(full.expectedVersion())
+            );
+        }
+    }
+
+    @Nested
     class AnInputThatFailedBeforeQuarantineWasTurnedOn {
 
         private final Instant t0 = NOW;
@@ -457,7 +519,7 @@ class SagaQuarantineSupportTest {
         private SagaEnvelope<OrderState> failingOn7(Map<Long, Instant> pendingSince) {
             return new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 4, List.of(new TimerEntry(TIMER, NOW.toEpochMilli())),
                     Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true, failedOn(7, t0),
-                    Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(7L)), List.of(), pendingSince)));
+                    Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(7L)), List.of(), pendingSince)), null);
         }
 
         @Test
@@ -465,7 +527,7 @@ class SagaQuarantineSupportTest {
             // Given the marks list 7 as pending without an instant, as a store that does not keep them leaves it
             SagaEnvelope<OrderState> unstamped = new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.ACTIVE, 4,
                     List.of(new TimerEntry(TIMER, NOW.toEpochMilli())), Map.of("o1", 6L), 6L, NOW.minusSeconds(60), NOW, null, null, true,
-                    failedOn(7, t0), Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(7L)), List.of())));
+                    failedOn(7, t0), Map.of("o1", new StreamMarks(6, Map.of(), Map.of("", List.of(7L)), List.of())), null);
 
             // When version 8 fails a minute later, which renames the record to 8
             FailureRecord<OrderState> replaced = SagaExecutionSupport.onFailure(
@@ -600,7 +662,7 @@ class SagaQuarantineSupportTest {
         @Test
         void is_not_confused_with_a_stream_key_whose_stream_id_merely_starts_like_it() {
             // A stream id such as "position:orders" gives the key "position:orders@3", and that is the current format.
-            SagaFailure current = new SagaFailure("position:orders@3", null, NOW.minus(Duration.ofMinutes(2)), IllegalStateException.class.getName(), "boom");
+            SagaFailure current = new SagaFailure("position:orders@3", null, NOW.minus(Duration.ofMinutes(2)), IllegalStateException.class.getName(), "boom", null, null);
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, current);
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
@@ -678,7 +740,7 @@ class SagaQuarantineSupportTest {
         @Test
         void still_runs_onStart_when_its_start_event_comes_back_because_start_detection_reads_the_marker() {
             SagaEnvelope<OrderState> quarantineOnly = new SagaEnvelope<>("o1", null, SagaStatus.ACTIVE, 1, List.of(), Map.of(),
-                    null, NOW, NOW, null, null, false, failedOn(1, NOW));
+                    null, NOW, NOW, null, null, false, failedOn(1, NOW), Map.of(), null);
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
                     saga(), "o1", quarantineOnly, SagaInput.event(new OrderPlaced("o1")), at(1), NOW);

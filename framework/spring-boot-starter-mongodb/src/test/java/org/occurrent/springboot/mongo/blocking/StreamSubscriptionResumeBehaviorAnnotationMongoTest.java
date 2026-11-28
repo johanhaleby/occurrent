@@ -39,7 +39,6 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.DependsOn;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -71,11 +70,12 @@ import static org.awaitility.Awaitility.await;
  * which is the most common real-world usage and had no restart coverage at all before this test.
  * <p>
  * The {@code NOW} scenarios boot a separate application, {@link NowRestartApplication}, because they need events
- * written while nothing is subscribed and a marker written after the subscribers are up. Each boot writes the events
- * named by {@code test.before-subscribe} before any subscription registers and, from an {@link ApplicationRunner},
- * the events named by {@code test.after-start}. The last of those is a marker: it is written after everything else, so
- * once a subscriber has received it, whatever it was going to deliver for the events before it has arrived and the
- * whole delivered list can be asserted.
+ * written while nothing is subscribed and a marker written after the subscribers are up. The events written while
+ * down go in before the context starts, since the start of a subscription at the present is read when the event store
+ * bean is created. Each boot then writes, from an {@link ApplicationRunner}, the events
+ * named by {@code test.after-start}. The last of those is a marker written after everything else, so once a
+ * subscriber has received it, whatever it was going to deliver for the events before it has arrived and the whole
+ * delivered list can be asserted.
  */
 @DisplayName("StreamSubscription resumeBehavior across an application restart")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -94,6 +94,7 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
     void default_resume_behavior_resumes_from_the_stored_position_after_restart_while_same_as_start_at_replays_from_the_beginning_again() {
         String[] args = bootArgs("stream-resume-behavior");
 
+        writeWhileDown("stream-resume-behavior", "historic-1", "historic-2");
         ConfigurableApplicationContext ctx1 = SpringApplication.run(FirstBootApplication.class, args);
         try {
             DefaultResumeSubscriber defaultSubscriber1 = ctx1.getBean(DefaultResumeSubscriber.class);
@@ -117,6 +118,7 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
         }
 
         // The application is "down": a new event is appended while nothing is subscribed.
+        writeWhileDown("stream-resume-behavior", "while-down-1", "plain-while-down-1");
         ConfigurableApplicationContext ctx2 = SpringApplication.run(SecondBootApplication.class, args);
         try {
             DefaultResumeSubscriber defaultSubscriber2 = ctx2.getBean(DefaultResumeSubscriber.class);
@@ -162,8 +164,9 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     private static <S extends RecordingSubscriber> void restartNow(String databaseName, Class<S> subscriberType,
                                                                     List<String> expectedFirstBoot, List<String> expectedSecondBoot) {
+        writeWhileDown(databaseName, "historic-1", "historic-2");
         ConfigurableApplicationContext firstBoot = SpringApplication.run(NowRestartApplication.class,
-                nowBootArgs(databaseName, "historic-1,historic-2", "live-1"));
+                nowBootArgs(databaseName, "live-1"));
         try {
             S subscriber = firstBoot.getBean(subscriberType);
             awaitDelivered(subscriber, "live-1");
@@ -172,8 +175,9 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
             firstBoot.close();
         }
 
+        writeWhileDown(databaseName, "while-down-1");
         ConfigurableApplicationContext secondBoot = SpringApplication.run(NowRestartApplication.class,
-                nowBootArgs(databaseName, "while-down-1", "live-2"));
+                nowBootArgs(databaseName, "live-2"));
         try {
             S subscriber = secondBoot.getBean(subscriberType);
             awaitDelivered(subscriber, "live-2");
@@ -188,10 +192,18 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
                 assertThat(subscriber.names()).contains(marker));
     }
 
-    private static String[] nowBootArgs(String databaseName, String beforeSubscribe, String afterStart) {
+    private static String[] nowBootArgs(String databaseName, String afterStart) {
         return Stream.concat(Arrays.stream(bootArgs(databaseName)), Stream.of(
-                "--test.before-subscribe=" + beforeSubscribe,
                 "--test.after-start=" + afterStart)).toArray(String[]::new);
+    }
+
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off writes it and is closed again.
+    private static void writeWhileDown(String databaseName, String... names) {
+        String[] args = Stream.concat(Arrays.stream(bootArgs(databaseName)), Stream.of(
+                "--occurrent.subscription.enabled=false",
+                "--test.history=" + String.join(",", names))).toArray(String[]::new);
+        SpringApplication.run(WhileDownApplication.class, args).close();
     }
 
     private static String[] bootArgs(String databaseName) {
@@ -219,20 +231,12 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
             return newConverter(typeMapper);
         }
 
-        // Appends the two historic events before any subscriber starts, so BEGINNING_OF_TIME subscriptions replay them.
         @Bean
-        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService) {
-            return new HistoryAppender(applicationService);
-        }
-
-        @Bean
-        @DependsOn("historyAppender")
         DefaultResumeSubscriber defaultResumeSubscriber() {
             return new DefaultResumeSubscriber();
         }
 
         @Bean
-        @DependsOn("historyAppender")
         SameAsStartAtSubscriber sameAsStartAtSubscriber() {
             return new SameAsStartAtSubscriber();
         }
@@ -257,28 +261,40 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
             return newConverter(typeMapper);
         }
 
-        // Appends the "while the application was down" events before any subscriber (re)starts.
         @Bean
-        OfflineAppender offlineAppender(ApplicationService<TestEvent> applicationService) {
-            return new OfflineAppender(applicationService);
-        }
-
-        @Bean
-        @DependsOn("offlineAppender")
         DefaultResumeSubscriber defaultResumeSubscriber() {
             return new DefaultResumeSubscriber();
         }
 
         @Bean
-        @DependsOn("offlineAppender")
         SameAsStartAtSubscriber sameAsStartAtSubscriber() {
             return new SameAsStartAtSubscriber();
         }
 
         @Bean
-        @DependsOn("offlineAppender")
         PlainDefaultsSubscriber plainDefaultsSubscriber() {
             return new PlainDefaultsSubscriber();
+        }
+    }
+
+    // Declares no subscriber, so it can write the history of test.history with subscriptions off
+    @SpringBootApplication
+    @EnableOccurrent
+    static class WhileDownApplication {
+
+        @Bean
+        CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return newConverter(typeMapper);
+        }
+
+        @Bean
+        WhileDownWriter whileDownWriter(ApplicationService<TestEvent> applicationService, MongoTemplate mongoOperations, @Value("${test.history}") List<String> history) {
+            return new WhileDownWriter(applicationService, mongoOperations, history);
         }
     }
 
@@ -298,10 +314,8 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
         @Bean
         NowEventWriter nowEventWriter(ApplicationService<TestEvent> applicationService,
-                                      @Value("${test.before-subscribe}") String beforeSubscribe,
-                                      @Value("${test.after-start}") String afterStart,
-                                      MongoTemplate mongoOperations) {
-            return new NowEventWriter(applicationService, beforeSubscribe, afterStart, mongoOperations);
+                                      @Value("${test.after-start}") String afterStart) {
+            return new NowEventWriter(applicationService, afterStart);
         }
 
         @Bean
@@ -324,57 +338,33 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     // --- appenders ---
 
-    static class HistoryAppender {
+    // Writes the events of test.history while the application is down. The check confirms that a NOW subscription
+    // booted afterwards would open after them.
+    static class WhileDownWriter {
         private final ApplicationService<TestEvent> applicationService;
+        private final MongoTemplate mongoOperations;
+        private final List<String> history;
 
-        HistoryAppender(ApplicationService<TestEvent> applicationService) {
+        WhileDownWriter(ApplicationService<TestEvent> applicationService, MongoTemplate mongoOperations, List<String> history) {
             this.applicationService = applicationService;
+            this.mongoOperations = mongoOperations;
+            this.history = history;
         }
 
         @PostConstruct
-        void appendHistory() {
-            append(new TestEvent("historic-1"));
-            append(new TestEvent("historic-2"));
-        }
-
-        private void append(TestEvent event) {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
-        }
-    }
-
-    static class OfflineAppender {
-        private final ApplicationService<TestEvent> applicationService;
-
-        OfflineAppender(ApplicationService<TestEvent> applicationService) {
-            this.applicationService = applicationService;
-        }
-
-        @PostConstruct
-        void appendWhileDown() {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("while-down-1")));
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("plain-while-down-1")));
+        void writeHistory() {
+            history.forEach(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))));
+            HistoryBeforeThePresent.awaitedWith(mongoOperations);
         }
     }
 
     static class NowEventWriter implements ApplicationRunner {
         private final ApplicationService<TestEvent> applicationService;
-        private final List<String> beforeSubscribe;
         private final List<String> afterStart;
-        private final MongoTemplate mongoOperations;
 
-        NowEventWriter(ApplicationService<TestEvent> applicationService, String beforeSubscribe, String afterStart, MongoTemplate mongoOperations) {
+        NowEventWriter(ApplicationService<TestEvent> applicationService, String afterStart) {
             this.applicationService = applicationService;
-            this.beforeSubscribe = List.of(beforeSubscribe.split(","));
             this.afterStart = List.of(afterStart.split(","));
-            this.mongoOperations = mongoOperations;
-        }
-
-        // Subscriptions register once every singleton exists, so these are written before any of them starts. The check
-        // confirms that a NOW subscription would open after them.
-        @PostConstruct
-        void writeBeforeSubscribe() {
-            beforeSubscribe.forEach(this::write);
-            HistoryBeforeThePresent.awaitedWith(mongoOperations);
         }
 
         @Override

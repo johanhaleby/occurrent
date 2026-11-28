@@ -39,6 +39,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.CatchupCheckpoints;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
@@ -296,7 +297,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         if (CatchupCheckpoints.isMarkedTime(position.checkpoint)) {
             throw new CatchupCannotResumeException("Cannot run DCB catch-up subscription " + subscriptionId + " from checkpoint \"" + position.checkpoint.asString()
                     + "\", because a catch-up that replays by time stored it, and a DCB catch-up replays only by position."
-                    + " Run the subscription with the StreamCatchupSubscriptionModel that stored the checkpoint, or delete the checkpoint so that the subscription starts from its StartAt again.");
+                    + " Run the subscription with the StreamCatchupSubscriptionModel that stored the checkpoint, or, when it is the checkpoint stored for the subscription, delete it so that the subscription starts from its StartAt again. "
+                    + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT);
         }
         return GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }

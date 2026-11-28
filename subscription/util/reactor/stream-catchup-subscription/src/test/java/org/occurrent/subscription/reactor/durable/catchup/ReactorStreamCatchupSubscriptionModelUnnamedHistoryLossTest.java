@@ -36,6 +36,7 @@ import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.internal.HistoryLossMessages;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.slf4j.helpers.MessageFormatter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -85,7 +86,10 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
                 .expectErrorSatisfies(failure -> assertThat(failure).as("failure")
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining("Cannot start catch-up subscription")
-                        .hasMessageContaining(LOST_TOKEN.asString()))
+                        .hasMessageContaining(LOST_TOKEN.asString())
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining("delete it first"))
                 .verify();
 
         assertAll(
@@ -102,6 +106,8 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
                 .expectErrorSatisfies(failure -> assertThat(failure).as("failure")
                         .isInstanceOf(CatchupCannotResumeException.class)
                         .hasMessageContaining(LATER_TOKEN.asString())
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
                         .hasCauseInstanceOf(HistoryLostException.class))
                 .verify();
 
@@ -111,12 +117,31 @@ class ReactorStreamCatchupSubscriptionModelUnnamedHistoryLossTest {
     }
 
     @Test
+    void the_error_logged_for_an_unnamed_flux_says_to_subscribe_again_and_names_no_stored_checkpoint_or_instances_sharing_one() {
+        live.opens(() -> Flux.just(liveEvent("e1", 1)).concatWith(Flux.error(live.lostFrom(LATER_TOKEN))));
+
+        StepVerifier.create(catchup.subscribe(Filter.all(), StartAt.checkpoint(VALID_TOKEN)))
+                .assertNext(delivered -> assertThat(delivered.getId()).isEqualTo("e1"))
+                .expectError(CatchupCannotResumeException.class)
+                .verify();
+
+        assertThat(logged.errors()).as("errors logged").singleElement().asString()
+                .isEqualTo("The subscription model no longer has the history to resume an unnamed catch-up subscription from " + LATER_TOKEN.asString() + ", so its Flux fails with CatchupCannotResumeException."
+                        + " To get every event, subscribe again from the beginning, or from a checkpoint the application kept that the subscription model still has the history back to."
+                        + " Subscribing again from now skips the events since " + LATER_TOKEN.asString() + ".")
+                .doesNotContain(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                .doesNotContain(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT);
+    }
+
+    @Test
     void a_start_from_now_that_reads_on_and_loses_the_history_fails_the_flux_instead_of_starting_from_the_present_again() {
         live.opens(() -> Flux.just(liveEvent("e1", 1)).concatWith(Flux.error(live.lostFrom(LATER_TOKEN))));
 
         StepVerifier.create(catchup.subscribe(Filter.all(), StartAt.now()))
                 .assertNext(delivered -> assertThat(delivered.getId()).isEqualTo("e1"))
-                .expectErrorSatisfies(failure -> assertThat(failure).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(LATER_TOKEN.asString()))
+                .expectErrorSatisfies(failure -> assertThat(failure).isInstanceOf(CatchupCannotResumeException.class).hasMessageContaining(LATER_TOKEN.asString())
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_WHEN_SEVERAL_INSTANCES_RUN_IT)
+                        .hasMessageNotContaining(SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT))
                 .verify();
 
         assertAll(

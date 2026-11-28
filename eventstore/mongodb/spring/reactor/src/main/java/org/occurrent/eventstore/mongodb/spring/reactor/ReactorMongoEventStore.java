@@ -59,7 +59,7 @@ import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReadScope;
 import org.occurrent.eventstore.api.reactor.internal.CatchupReads;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck;
-import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Deployment;
+import org.occurrent.mongodb.deployment.internal.MongoDeployment;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbAppendConditionCheck.Scope;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
@@ -212,7 +212,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final boolean requireRepairedEvents;
     private final boolean resumeFromMarkerVersions;
     private final boolean spreadTypeMarkerWrites;
-    private final Deployment deployment;
+    private final MongoDeployment deployment;
     private final TransactionOptions markerVersionsTransactionOptions;
     private final Duration markerVersionsCommitTimeout;
     private final MarkerVersionsReadFailures markerVersionsReadFailures = new MarkerVersionsReadFailures();
@@ -249,7 +249,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (dcbEnabled && !resumeFromMarkerVersions) {
             LOGGER.warn("resumeFromMarkerVersions is off for this event store, so DCB reads report no marker versions and DCB reads after marker versions are refused.");
         }
-        this.deployment = dcbEnabled ? DcbAppendConditionCheck.deployment(command -> mongoTemplate.executeCommand(command).block()) : Deployment.OTHER;
+        this.deployment = dcbEnabled ? MongoDeployment.detect(command -> mongoTemplate.executeCommand(command).block()) : MongoDeployment.OTHER;
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
 
@@ -351,7 +351,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<DcbEventStream> readWithoutMarkerVersions(DcbCriteria criteria, DcbReadOptions options) {
-        if (deployment != Deployment.MONGOS) {
+        if (deployment != MongoDeployment.MONGOS) {
             return readThroughTemplate(criteria, options);
         }
         // With synchronization active the template reads in the session bound to it, or binds one, so only a read without synchronization needs a session of its own
@@ -432,7 +432,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     return markerVersionsUnavailable(criteria, options, "The read runs inside a transaction the caller owns, whose writes may still abort", null);
                 }
                 // Off a replica set nothing has run in the caller's transaction yet, so a snapshot of the store's own misses none of its writes
-                return deployment == Deployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
+                return deployment == MongoDeployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options) : readInOwnTransaction(criteria, options);
             }
             return synchronization().flatMap(synchronization -> switch (synchronization) {
                 // Through the template the read joins the bound session and sees the store's writes in it
@@ -441,7 +441,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         ? markerVersionsUnavailable(criteria, options, "The read runs in a session bound to the synchronization, whose writes may still abort", null)
                         : readInOwnTransaction(criteria, options);
                 case NO_SESSION -> !options.confirmsAppendBeforeSaving() ? readInOwnTransaction(criteria, options)
-                        : deployment == Deployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options)
+                        : deployment == MongoDeployment.REPLICA_SET ? readMarkerVersionsWith(mongoTemplate, criteria, options)
                         // Binds the session transaction an append in the synchronization joins, as the read through the template does on a replica set
                         : readInOwnTransaction(criteria, options).flatMap(eventStream -> ReactiveMongoDatabaseUtils.getDatabase(mongoTemplate.getMongoDatabaseFactory(), ALWAYS).thenReturn(eventStream));
                 case INACTIVE -> readInOwnTransaction(criteria, options);

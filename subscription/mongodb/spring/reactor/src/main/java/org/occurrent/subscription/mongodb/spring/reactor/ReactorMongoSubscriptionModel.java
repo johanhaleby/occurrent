@@ -42,6 +42,7 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.api.reactor.internal.CancellableRegistration;
+import org.occurrent.subscription.internal.SharedStorageMessages;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -772,7 +773,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 restartAtThePresent.run();
                 return true;
             } else {
-                log.error("There was not enough oplog to resume {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscription, throwable);
+                // An unnamed subscription stores no checkpoint, and instances can only compete for one with an id
+                log.error("There was not enough oplog to resume {}, will not restart subscription! {}", subscription, subscriptionId == null
+                        ? "Consider using a catch-up subscription to get up to speed if needed."
+                        : "Consider removing its checkpoint from the durable storage when one stores it, or use a catch-up subscription to get up to speed if needed. "
+                          + SharedStorageMessages.CHECKPOINT_DELETE_WHEN_SEVERAL_INSTANCES_RUN_IT, throwable);
                 return false;
             }
         }

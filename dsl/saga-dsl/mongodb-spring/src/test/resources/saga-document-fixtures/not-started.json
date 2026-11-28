@@ -1,0 +1,23 @@
+{
+  "_id": "saga-not-started",
+  "status": "ACTIVE",
+  "version": {
+    "$numberLong": "1"
+  },
+  "timers": [],
+  "streamWatermarks": {},
+  "createdAt": {
+    "$numberLong": "1772600767123"
+  },
+  "updatedAt": {
+    "$numberLong": "1772601377456"
+  },
+  "started": false,
+  "state": {
+    "orderId": "order-5",
+    "customer": "erin",
+    "quantity": {
+      "$numberInt": "1"
+    }
+  }
+}

@@ -56,9 +56,9 @@ import static java.util.Objects.requireNonNull;
  *                          for it, which does not mean it is not failing (see {@link SagaInstance#failure()}). Once
  *                          written it outlives a single attempt, and {@code status} says whether the instance was
  *                          quarantined for it
- * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. A
- *                          store may pass this directly, but only when it passes a {@code null} state: that is how a
- *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the
+ * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. The
+ *                          codec passes the stored value directly, but only with a {@code null} state: that is how
+ *                          {@link SagaInstance#currentStep()} is answered from a projected read without loading the
  *                          state at all. Whenever {@code state} is present the constructor re-derives this and ignores
  *                          what was passed, so the two can never disagree.
  * @param streamMarks       what the executor knows about the versions it has applied per stream and event type, beyond the
@@ -66,6 +66,10 @@ import static java.util.Objects.requireNonNull;
  *                          of the same type, which a feed that reorders can deliver, be told from a redelivery. Empty
  *                          for an instance stored before 0.35.0, which reads as every type of a stream being applied up to
  *                          that stream's watermark
+ * @param quarantineSkipCount the {@link SkippedInput#seq()} the next input this quarantined instance skips is recorded
+ *                          under, raised by one in the write before each record. Written as 1 by the write that
+ *                          quarantines the instance, which records the input it quarantines on at 0, and {@code null} once it is active again, and on an instance
+ *                          quarantined by 0.34.0
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -81,7 +85,8 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable String currentStep,
                                                        boolean started,
                                                        @Nullable SagaFailure failure,
-                                                       Map<String, StreamMarks> streamMarks) implements SagaInstance {
+                                                       Map<String, StreamMarks> streamMarks,
+                                                       @Nullable Long quarantineSkipCount) implements SagaInstance {
 
     public SagaEnvelope {
         requireNonNull(sagaId, "sagaId cannot be null");
@@ -98,34 +103,6 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     }
 
     /**
-     * An envelope with no stream marks, which is every instance stored before 0.35.0. It reads as every event type of a
-     * stream being applied up to that stream's watermark.
-     */
-    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
-                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
-                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep,
-                        boolean started, @Nullable SagaFailure failure) {
-        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
-                completedAt, currentStep, started, failure, Map.of());
-    }
-
-    /**
-     * An envelope for an instance that has started and has no failure recorded, which is every instance built before
-     * quarantine existed.
-     *
-     * @deprecated since 0.34.0. Use the canonical constructor and pass {@code started} and {@code failure} explicitly.
-     * This overload keeps a call site written against 0.33.0 compiling, and it can only ever answer {@code true} and
-     * {@code null} for the two it does not take, so an envelope that really is quarantined cannot be built through it.
-     */
-    @Deprecated(since = "0.34.0")
-    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
-                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
-                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep) {
-        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
-                completedAt, currentStep, true, null);
-    }
-
-    /**
      * What is known of one stream's versions beyond its watermark.
      *
      * @param floor  every version at or below this was applied before the executor started recording versions per
@@ -135,11 +112,15 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *                outstanding. A version in here is applied when it arrives again however far behind the highest
      *                one applied it is, because it is known not to have been applied. Applying it removes it, and
      *                nothing else does
-     * @param legacyFailed the versions of the stream whose failure was recorded before the executor listed failed versions
-     *                as pending, ascending, so the event type is not known. A stream version names exactly one event, so
-     *                the version is enough to recognise it. It is treated like a pending version and removed when the
-     *                version is applied. It is filled only when such a failure record is replaced by another input's, so
-     *                it holds at most the one record an instance carried over from before
+     * @param legacyFailed the versions of the stream whose failure record didn't list them as pending, ascending, kept
+     *                without their event type. That is a failure recorded before the executor listed failed versions as
+     *                pending, and a failure record written without its message because the store couldn't take the
+     *                full one, which lists the version as pending only when it is at or below {@code floor}. A stream
+     *                version names exactly one event, so the version is enough to recognise it. It is treated like a
+     *                pending version and removed when the version is applied. A version is added when its failure record
+     *                is replaced by another input's while the marks don't list the version as pending, so it holds the
+     *                record an instance kept from before 0.35.0, if any, and one version for every such smaller record
+     *                replaced since without its version listed as pending
      * @param pendingSince when each version in {@code pending} or {@code legacyFailed} first failed, by version. The quarantine budget of an input
      *                runs from here, so a failure of one input never moves the clock of another. A pending version
      *                missing from it falls back to the failure record's {@code firstFailedAt} when the record names it,
@@ -184,7 +165,9 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
      *                not in here and not too far behind it was never applied, so it is applied when it arrives
      * @param horizon the highest version this mark has stopped remembering, under the reorder window in force when it was
      *                recorded. A version at or below it is skipped even if a larger window is configured later, since
-     *                the versions between the two windows are no longer in {@code applied}
+     *                the versions between the two windows are no longer in {@code applied}. A release applies a
+     *                recorded input at or below it all the same, since a record is kept only for an input no release
+     *                has applied
      */
     public record TypeMark(long mark, List<Long> applied, long horizon) {
         public TypeMark {
@@ -231,6 +214,23 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     /** Whether the instance is quarantined on an input it could not handle. */
     public boolean isQuarantined() {
         return status == SagaStatus.QUARANTINED;
+    }
+
+    /**
+     * Whether the instance is quarantined and a release of it is running, which is when its failure record has
+     * {@link SagaFailure#releasedAt()} set. The status stays {@link SagaStatus#QUARANTINED} until the release has
+     * applied every input it recorded.
+     */
+    public boolean isReleasing() {
+        return isQuarantined() && failure != null && failure.isReleasing();
+    }
+
+    /**
+     * The id of the quarantine this instance is in, see {@link SagaFailure#quarantineId()}, or {@code null} when it
+     * is not quarantined or was quarantined by 0.34.0.
+     */
+    public @Nullable String quarantineId() {
+        return isQuarantined() && failure != null ? failure.quarantineId() : null;
     }
 
     /**

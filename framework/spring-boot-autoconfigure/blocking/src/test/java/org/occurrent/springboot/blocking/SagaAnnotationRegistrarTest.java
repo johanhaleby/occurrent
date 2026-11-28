@@ -27,9 +27,11 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionResumePoints;
+import org.occurrent.springboot.common.internal.StartupSubscribes;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -37,6 +39,7 @@ import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.env.StandardEnvironment;
 
 import java.lang.reflect.Method;
 import java.net.URI;
@@ -61,6 +64,12 @@ import static org.mockito.Mockito.when;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaAnnotationRegistrarTest {
 
+    private static StartupSubscribes startedSubscribes() {
+        StartupSubscribes startupSubscribes = new StartupSubscribes();
+        startupSubscribes.start();
+        return startupSubscribes;
+    }
+
     @Test
     void registers_the_saga_and_populates_the_registry_but_skips_the_named_singleton() throws Exception {
         Subscription subscription = mock(Subscription.class);
@@ -82,7 +91,7 @@ class SagaAnnotationRegistrarTest {
 
         // A mock of the plain ApplicationContext interface, not ConfigurableApplicationContext: this is what makes
         // registerSagaInstancesSingleton take its "cannot publish" branch instead of registering the bean.
-        ApplicationContext applicationContext = mock(ApplicationContext.class);
+        ApplicationContext applicationContext = ContextWithoutBoundaryStore.mocked();
         when(applicationContext.getBean(CloudEventConverter.class)).thenReturn(converter());
         // The non-push branch resolves through AsynchronousSubscribables rather than a bare getBean(Subscribable.class)
         // (see #563), so the mock has to answer the same by-name lookup that resolution performs.
@@ -109,9 +118,16 @@ class SagaAnnotationRegistrarTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<SubscriptionResumePoints> resumePointsProvider = mock(ObjectProvider.class);
         when(applicationContext.getBeanProvider(SubscriptionResumePoints.class)).thenReturn(resumePointsProvider);
+        // Empty, since this saga has no event store to release a quarantined instance from
+        @SuppressWarnings("unchecked")
+        ObjectProvider<EventStoreQueries> eventStoreQueriesProvider = mock(ObjectProvider.class);
+        when(applicationContext.getBeanProvider(EventStoreQueries.class)).thenReturn(eventStoreQueriesProvider);
+        when(applicationContext.getBeanNamesForType(EventStoreQueries.class)).thenReturn(new String[0]);
+        // Empty, so the quarantine budget is the default
+        when(applicationContext.getEnvironment()).thenReturn(new StandardEnvironment());
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
-        SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport);
+        SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, startedSubscribes());
 
         Method factoryMethod = SagaHolder.class.getDeclaredMethod("saga");
         org.occurrent.annotation.Saga annotation = factoryMethod.getAnnotation(org.occurrent.annotation.Saga.class);

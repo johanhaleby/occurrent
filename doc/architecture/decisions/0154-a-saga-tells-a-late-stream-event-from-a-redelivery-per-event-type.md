@@ -14,6 +14,10 @@ Amended in place on 2026-11-04, before 0.35.0 shipped. A pending version is no l
 the instant it first failed, for [#1318](https://github.com/johanhaleby/occurrent/issues/1318), as
 [ADR 157](0157-a-sagas-quarantine-budget-runs-per-input.md) decides.
 
+Amended in place again on 2026-11-16, before 0.35.0 shipped, by
+[ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md). The defaulting `SagaEnvelope` constructors are
+removed, so a call to one of them stops compiling.
+
 ## Context
 
 A saga recognises a redelivered event by its `streamid` with its `streamversion`. Up to this decision it kept one
@@ -46,9 +50,12 @@ The shipped Kafka topology keeps one stream's events of one type in order, so wi
 mark per stream with a window would not be enough, because two types of one stream can be more than any window apart.
 
 **The reorder window is a `SagaRunnerConfig` field, 256 by default.** An instance records at most that many applied
-versions below the highest one, per stream and event type. The stored state therefore never holds more than streams
-times types times 256 numbers, whatever the length of the stream. `SagaRunnerConfig.withReorderWindow(int)` changes the
-window for a feed that reorders further.
+versions below the highest one, per stream and event type. A release that replays the inputs a quarantine recorded is
+the exception (ADR 178). It keeps every version it applies until the write that ends the release, which makes the
+instance `ACTIVE`, completes it or quarantines it again, so the document grows by one number per replayed input until
+then. That write trims the marks back to the window. Every instance that isn't releasing holds at most streams times
+types times 256 numbers in its stored state, whatever the length of the stream.
+`SagaRunnerConfig.withReorderWindow(int)` changes the window for a feed that reorders further.
 
 The saga does not remember every applied version. A saga that listens to some of a stream's types sees permanent gaps
 in the versions, so a record of what is missing below the mark would never close, and the state would grow with the
@@ -93,9 +100,12 @@ An instance holds one failure record, so a different input that fails replaces i
 event to `legacyFailed`, a list of stream versions kept per stream. It holds versions without an event type, because a
 record written before pending does not say which type failed, and a stream version identifies exactly one event. A
 version in that list is new however far behind it is, like a pending one. Applying it removes it from the list, and if
-it fails again with its type known it moves to pending. A record written since pending existed is already pending when
-it is replaced, so the list only ever holds the record an instance already had when it was upgraded. Nothing is dropped
-from it either.
+it fails again with its type known it moves to pending. A record written since pending existed is usually pending
+already when it is replaced. The exception is a failure record the store couldn't take in full, which the saga writes
+without its message and lists as pending only when the version is at or below the stream's `floor`, or when a later
+failure of the same event can write the listing. The saga moves a replaced event to the list only when pending doesn't
+list it. So the list holds the record an instance already had when it was upgraded, if any, and one version for every
+such smaller record replaced since while pending didn't list its version. Nothing is dropped from it either.
 
 **The horizon keeps a raised window from undoing a skip.** Trimming `applied` forgets the versions at or below
 `mark - window`, and a version the saga forgot looks the same as one it never applied. If the window were only read from
@@ -109,8 +119,23 @@ versions per type, and the legacy failed versions of the stream. A document stor
 without `legacyFailed` reads as nothing pending and nothing legacy. The floor is the stream's watermark at the moment
 the stream first got marks, and every version at or below it stays skipped whatever its type, which is what the instance did before. An instance stored
 by 0.34.0 or by the 0.35.0 build of ADR 150 has no `streamMarks`, and it reads as a floor equal to each stream's
-watermark and no marks. `streamWatermarks` is still written with the highest version of the stream across types, so a
-0.34.0 node reads a document it understands.
+watermark and no marks. `streamWatermarks` is still written with the highest version of the stream across types.
+
+**An instance with marks is stored with a status 0.34.0 can't read.** 0.34.0 knows
+nothing of `streamMarks`, and a 0.34.0 save that applies an event replaces the whole document, so such a save by a 0.34.0
+node that runs next to a 0.35.0 node would drop the marks, and the next
+0.35.0 node would skip a pending or late version as applied already. `SpringMongoSagaStateStore` therefore stores an
+`ACTIVE` instance whose `streamMarks` are not empty with the status `ACTIVE_MARKED`, and reads it back as `ACTIVE`. Its
+queries for `ACTIVE`, `findByStatus` and the timer poll, match both strings. 0.34.0 decodes the status with
+`SagaStatus.valueOf`, so it throws on such an instance instead of saving it. The subscription, or
+the source's delivery failure policy, decides what then happens to the event. A broker source that parks it doesn't
+deliver it again, and the upgrade guide says how to publish it again. A 0.34.0 node's timer poll asks for
+`ACTIVE` only, so the instance's timers wait for a 0.35.0 node. It is the mechanism ADR 178 uses for
+`QUARANTINED_RECORDING`, and a quarantined instance with a quarantine id stays `QUARANTINED_RECORDING` whatever its
+marks hold. The status depends on any marks rather than on the ones a drop would lose. Every event with a stream
+version adds marks, so the narrower rule flags nearly the same instances with a more fragile test, and flagging only
+the instances with a pending version would leave a late version exposed to a 0.34.0 save. `SagaStatus` gains no
+constant, so no `switch` over it breaks.
 
 ## Consequences
 
@@ -124,6 +149,7 @@ failed in the saga.** That is the precondition, and these are the cases that fal
 | An event arrives before the event that starts its instance | The saga skips it and the source acknowledges it. This is how it behaved before 0.35.0 | No |
 | The instance is completed or quarantined | Inert by design | Quarantine logs |
 | A version that did not fail arrives more than the window behind, without a restart replaying it | Skipped as a redelivery | One warning per stream |
+| An event without `streamid` and `streamversion`, which only `RedeliveryDetection.BEST_EFFORT` takes (ADR 109) | A redelivery runs the reactions again. So does a release that replays such an event the instance applied before it was quarantined (ADR 178) | The warning `BEST_EFFORT` logs the first time |
 
 The fifth row is the one this design cannot close. A restart from an old checkpoint delivers a long run of behind-window
 versions that are all correct skips, and a reordered version looks the same. Throwing on each would block the replay, and
@@ -134,9 +160,28 @@ defect), a listener that delivers from several threads, a Kafka topic whose part
 produced, and a RabbitMQ `prefetchCount` or a number of concurrent publishers of one stream that is larger than the
 window.
 
-A node that goes back to 0.34.0 replaces the document without `streamMarks`. The next 0.35.0 node reads it as a
-pre-0.35.0 instance, so it skips what is at or below the watermark and nothing is applied twice. A late event is lost on
-that stretch, as it was before this decision.
+Every 0.34.0 node that runs sagas stops before any 0.35.0 node starts, which takes the service that hosts the sagas
+down for the deploy. `ACTIVE_MARKED` makes a deploy that breaks that rule fail loudly, but it doesn't make that deploy
+safe. A 0.34.0 node that runs next to a 0.35.0 node throws on every event for an `ACTIVE` instance that holds stream
+marks, which a 0.35.0 node adds for every event with a stream version it handles, a failed one included. What then
+happens to the event depends on what feeds the saga. An Occurrent subscription, or a Kafka or RabbitMQ source with
+`REDELIVER`, delivers it again, so the subscription, partition or queue stalls until a 0.35.0 node gets the event,
+which without competing consumers means until the 0.34.0 node stops. A source with `PARK` parks and acknowledges it,
+and once a Kafka rebalance hands a partition to a 0.34.0 consumer, that consumer parks every event of such an
+instance. The parked messages have to be published again once every saga node runs 0.35.0, and one `reorderWindow` or
+more behind the instance is skipped with a warning. A `PushSubscriptionModel` throws the exception back to the code
+that pushed the event, and the instance never gets the event unless that code pushes it again. Nothing a 0.35.0 node
+does brings back a parked or lost event, which is why the two versions don't run side by side. The timers of such an
+instance wait while a 0.34.0 node holds the timer lease. A query written by hand for `status: "ACTIVE"` misses the
+instances stored as `ACTIVE_MARKED`.
+
+Going back to 0.34.0 is an explicit step. Once every 0.35.0 node has stopped, a query lists the `ACTIVE_MARKED`
+instances whose marks hold a version in `pending` or `legacyFailed`, which 0.34.0 never applies once a later version of
+its stream was applied. Then an `updateMany` sets `ACTIVE_MARKED` back to `ACTIVE`, and the 0.34.0 nodes start after it.
+0.34.0 ignores the marks, and a 0.34.0 save that applies an event replaces the whole document and drops them. A pending
+version below a later applied version is then skipped, and so is a late version below the watermark, as before this
+decision. The next 0.35.0 node reads such an instance as a pre-0.35.0 one, so nothing is applied twice. The upgrade
+guide gives both commands.
 
 An instance stores up to 256 extra numbers per stream and event type, and it does so even when the feed delivers in
 order, because the saga cannot know the next event will not be a late one. Each number is stored as a 64-bit integer, so
@@ -146,10 +191,14 @@ every save rewrites them.
 `@Saga` sagas use the default window. There is no property or annotation attribute for it, and one can be added when
 someone needs a different value.
 
-`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component. The previous constructors stay, so a call
-site compiles unchanged, but a record pattern over `SagaEnvelope` or `SagaRunnerConfig` has to name the new component and
-stops compiling. That is a break of the build for shipped types, and the upgrade guide lists it under the changes that
-can break the build with the before and after patterns. There is no rewrite recipe for it. The 0.34.0 change to the same
-two records got none either, and one could be added by extending `MigrateAppendResultRecordPattern`.
+`EventMeta`, `SagaEnvelope` and `SagaRunnerConfig` each gain a component. The previous `EventMeta` and
+`SagaRunnerConfig` constructors stay, so a call to one of them compiles unchanged. `SagaEnvelope` keeps only its
+canonical constructor, since [ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md) removes the ones with
+14, 13 and 11 arguments, and the `SagaFailure` ones with 6 and 5 arguments. A call to one of them stops compiling, and
+the upgrade guide shows the call to the canonical constructor. A record pattern over `SagaEnvelope` or
+`SagaRunnerConfig` has to name the new component and stops compiling too. That is a break of the build for shipped
+types, and the upgrade guide lists it under the changes that can break the build with the before and after patterns.
+There is no rewrite recipe for it. The 0.34.0 change to the same two records got none either, and one could be added
+by extending `MigrateAppendResultRecordPattern`.
 
 ADR 109 gets a pointer in its Status section.

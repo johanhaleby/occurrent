@@ -51,6 +51,7 @@ class DescriptorIdClaimTest {
     @Test
     void a_descriptor_registration_takes_its_id_and_a_later_one_for_that_id_is_refused_without_the_id_being_given_back() throws Exception {
         OccurrentBlockingAnnotationBeanPostProcessor coordinator = new OccurrentBlockingAnnotationBeanPostProcessor();
+        coordinator.setApplicationContext(ContextWithoutBoundaryStore.mocked());
 
         registerDescriptor(coordinator, "winner", "shared-id", () -> {
         });
@@ -66,6 +67,7 @@ class DescriptorIdClaimTest {
     @Test
     void a_descriptor_registration_that_fails_gives_back_the_id_it_took() throws Exception {
         OccurrentBlockingAnnotationBeanPostProcessor coordinator = new OccurrentBlockingAnnotationBeanPostProcessor();
+        coordinator.setApplicationContext(ContextWithoutBoundaryStore.mocked());
 
         assertThatThrownBy(() -> registerDescriptor(coordinator, "failing", "released-id", () -> {
             throw new IllegalStateException("the descriptor factory blew up");
@@ -113,11 +115,11 @@ class DescriptorIdClaimTest {
     private static void registerDescriptor(OccurrentBlockingAnnotationBeanPostProcessor coordinator, String beanName, String id, Runnable registration) {
         try {
             Method method = OccurrentBlockingAnnotationBeanPostProcessor.class.getDeclaredMethod(
-                    "registerDescriptor", String.class, HandlerMethod.class, String.class, String.class, Runnable.class);
+                    "registerDescriptor", String.class, HandlerMethod.class, String.class, String.class, String.class, Runnable.class);
             method.setAccessible(true);
             Method anyMethod = DescriptorIdClaimTest.class.getDeclaredMethod("canHold", Class.class, Class.class);
             HandlerMethod anyHandler = new HandlerMethod(anyMethod, DescriptorIdClaimTest.class);
-            method.invoke(coordinator, beanName, anyHandler, id,
+            method.invoke(coordinator, beanName, anyHandler, null, id,
                     "Duplicate subscription/projection id '%s', each id must be unique because it is the durable checkpoint key.".formatted(id),
                     registration);
         } catch (InvocationTargetException e) {

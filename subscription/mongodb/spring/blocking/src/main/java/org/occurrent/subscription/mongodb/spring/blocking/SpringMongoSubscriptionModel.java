@@ -36,7 +36,6 @@ import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CommitOrderedSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
-import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RedeliveringSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
@@ -81,23 +80,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions, SmartLifecycle {
-
-    /**
-     * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
-     * advances a checkpoint and removes no event, and the store keeps its events on its own terms. An event erased
-     * through {@code EventStoreOperations} is gone by that erasure rather than by the acknowledgement, so answering
-     * {@code false} for it would only strand an instance on an event nobody can supply.
-     */
-    @Override
-    public boolean retains(CloudEvent event) {
-        return true;
-    }
-
-    @Override
-    public boolean retainsEveryEvent() {
-        return true;
-    }
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, StartRefusalReportingSubscriptions, CommitOrderedSubscriptions, RedeliveringSubscriptions, SmartLifecycle {
 
     /**
      * {@code true} while {@code restartSubscriptionsOnChangeStreamHistoryLost} is off. With it on, a restart after the

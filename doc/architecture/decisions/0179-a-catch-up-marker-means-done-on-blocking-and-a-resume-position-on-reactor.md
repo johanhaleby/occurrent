@@ -119,7 +119,8 @@ and the overlap between the replay and the live feed is still de-duplicated by e
 
 A checkpoint stored under the id that is not a global position, such as a resume token a durable subscription stored
 when it used the id before, fails a reactor catch-up that reads it with an `IllegalStateException` that names the id
-and says to delete the checkpoint or subscribe under a new id. Reading it as no marker would replay from the beginning
+and says to subscribe under a new id, or to delete the checkpoint when nothing else uses it. Reading it as no marker
+would replay from the beginning
 and then write H over a checkpoint that something else owns, so that catch-up fails instead, and the checkpoint stays
 stored. On the blocking stack any stored checkpoint still reads as a finished catch-up, as in 0.34.0.
 
@@ -222,14 +223,24 @@ first and cancels nothing when the delete throws.
 An application that needs a guaranteed rebuild, or that changes the filter or the projection, subscribes under a new
 subscription id. The marker is keyed by the id alone, so a subscribe that reuses an id with another filter or another
 projection skips the replay on the blocking stack, and can resume after a stored position on the reactor stack. A
-start that does either misses the earlier events that only the new filter matches.
+start that does either misses the earlier events that only the new filter matches. Under a new id the subscription
+starts from the beginning of the history and repeats everything its handler does, the records it writes, the commands
+it dispatches and the messages it sends. Every instance on the old id stops before the first one on the new id starts.
+Stopping them doesn't prevent the repeats. With more than one instance, what else a new id needs depends on where each
+instance keeps what it builds and which broker queue or consumer group it consumes, as
+[Changing a checkpoint or marker that several instances share](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+in the 0.35.0 upgrade guide describes.
 [#1553](https://github.com/johanhaleby/occurrent/issues/1553) is about storing a fingerprint of the filter and the
 projection with the marker, so a start with a changed one replays from the beginning.
 
-A push `@Saga` is where a new id costs most. A new id replays the whole history into the saga, so every instance that
-its TTL removed is recreated from its start event and dispatches its commands again, as the `SagaStateStore` javadoc
-warns for a redelivery. Rebuilding a saga under a new id needs completed instances kept for as long as the history it
-replays.
+A push `@Saga` is where a new id costs most. Under a new id the saga replays the whole history and can repeat
+everything it did, the state it writes and the commands it dispatches. The default MongoDB store keeps the instances
+of each saga id in a `saga-<id>` collection, so under a new id every instance is recreated from its start event and
+dispatches its commands again. Every instance on the old id stops before the first one on the new id starts. Stopping
+them doesn't prevent the repeats. With more than one instance, what else a new id needs for a saga depends on where
+each instance keeps what it builds and which broker queue or consumer group it consumes, as
+[Changing a checkpoint or marker that several instances share](../../migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share)
+describes.
 
 ### Fed-back events on the reactor stack
 

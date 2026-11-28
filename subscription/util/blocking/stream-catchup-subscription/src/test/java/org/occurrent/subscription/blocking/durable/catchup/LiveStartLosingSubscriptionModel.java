@@ -218,6 +218,15 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         });
     }
 
+    // The run a pause stopped reports late that the position it was held at is gone
+    void losesTheHistoryOfWhatItHoldsPaused(String subscriptionId) {
+        Held held = paused.get(subscriptionId);
+        if (held == null || !(held.heldAt() instanceof StartAtCheckpoint at)) {
+            throw new IllegalStateException("Subscription " + subscriptionId + " is not held paused at a checkpoint");
+        }
+        historyLost(subscriptionId, held.filter(), at.checkpoint, held.action(), new OpenHandle(subscriptionId));
+    }
+
     private record Held(@Nullable SubscriptionFilter filter, Consumer<CloudEvent> action, StartAt heldAt) {
     }
 

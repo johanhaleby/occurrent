@@ -453,6 +453,12 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
     private record Reacts(Runnable command) implements SynchronousEventDispatcher {
 
         @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
+
+        @Override
         public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             command.run();
         }
@@ -465,6 +471,12 @@ class SpringTransactionExecutorOverMongoEventStoreTest {
 
     // Records a side effect through the same template as the store, so it joins the transaction the store's write is in, then fails the first dispatch
     private final class RecordsSideEffectAndFailsOnce implements SynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicBoolean failed = new AtomicBoolean();
         private final RuntimeException failure;
 

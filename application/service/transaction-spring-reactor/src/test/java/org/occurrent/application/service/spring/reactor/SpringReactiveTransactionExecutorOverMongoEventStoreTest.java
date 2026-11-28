@@ -476,6 +476,12 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
     private record Reacts(Supplier<Mono<Void>> command) implements ReactiveSynchronousEventDispatcher {
 
         @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
+
+        @Override
         public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             return Mono.defer(command);
         }
@@ -488,6 +494,12 @@ class SpringReactiveTransactionExecutorOverMongoEventStoreTest {
 
     // Records a side effect through the same template as the store, so it joins the transaction the store's write is in, then fails the first dispatch
     private final class RecordsSideEffectAndFailsOnce implements ReactiveSynchronousEventDispatcher {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         private final AtomicBoolean failed = new AtomicBoolean();
         private final RuntimeException failure;
 

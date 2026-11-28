@@ -108,7 +108,7 @@ class ReactiveNowStartAtLeftOverCheckpointMongoTest {
     // planted checkpoint before live-2.
     @Test
     void now_with_same_as_start_at_does_not_replay_from_a_catch_up_checkpoint_planted_while_paused_when_it_is_resumed() {
-        try (ConfigurableApplicationContext context = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext context = ApplicationRestart.bootWritingHistoryFirst(RestartApplication.class,
                 bootArgs("reactive-now-left-over-paused", "now-same-as-start-at", "historic-1,historic-2", "live-1"))) {
             LeftOverNowSameAsStartAt handler = context.getBean(LeftOverNowSameAsStartAt.class);
             awaitDelivered(handler, "live-1");
@@ -138,7 +138,7 @@ class ReactiveNowStartAtLeftOverCheckpointMongoTest {
     }
 
     private static List<String> restartWithLeftOverCheckpoint(String databaseName, String secondBootStartsAt) {
-        try (ConfigurableApplicationContext firstBoot = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext firstBoot = ApplicationRestart.bootWritingHistoryFirst(RestartApplication.class,
                 bootArgs(databaseName, "beginning", "historic-1,historic-2", ""))) {
             awaitDelivered(firstBoot.getBean(LeftOverBeginning.class), "historic-2");
             CheckpointStorage storage = firstBoot.getBean(CheckpointStorage.class);
@@ -155,7 +155,7 @@ class ReactiveNowStartAtLeftOverCheckpointMongoTest {
             Checkpoint planted = storage.read(LEFT_OVER_ID).block();
             assertThat(GlobalCheckpoint.isGlobalCheckpoint(planted) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(planted)).as("catch-up checkpoint").isTrue();
         }
-        try (ConfigurableApplicationContext secondBoot = SpringApplication.run(RestartApplication.class,
+        try (ConfigurableApplicationContext secondBoot = ApplicationRestart.bootWritingHistoryFirst(RestartApplication.class,
                 bootArgs(databaseName, secondBootStartsAt, "while-down-1", "live-2"))) {
             Class<? extends RecordingSubscriber> handlerType = switch (secondBootStartsAt) {
                 case "now" -> LeftOverNow.class;

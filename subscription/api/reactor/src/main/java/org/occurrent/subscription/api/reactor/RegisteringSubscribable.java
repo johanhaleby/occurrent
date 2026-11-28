@@ -34,14 +34,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
  * The reactive counterpart of the blocking {@code RegisteringSubscribable}: shared base for register-only reactive
@@ -179,6 +183,22 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     private final Object registrationLock = new Object();
     private volatile boolean running = true;
     private final DataFieldReader dataFieldReader;
+    // The writes openWriteWindow admitted that have not closed yet, by the epoch they were admitted in, with the pauses
+    // and the stop held back until they have. A pause landing between a write's check and its dispatch would skip the
+    // events of a write the check let through. A pause waits only for the writes admitted before it, since the check
+    // refuses a later one whose events it matches, so writes that keep coming can't hold it back for good. A stop
+    // waits for every open write, and admits no new one meanwhile. Guarded by writeWindows.
+    private final Object writeWindows = new Object();
+    private long writeWindowEpoch;
+    private final TreeMap<Long, Integer> openWriteWindowsByEpoch = new TreeMap<>();
+    // Each subscription whose pause waits, with the last epoch it waits for
+    private final Map<String, Long> pausing = new HashMap<>();
+    private boolean stopping;
+    // The thread that opened each write, which a pause or a stop on it must not wait for
+    private final Map<Thread, Integer> openWriteWindowsByThread = new HashMap<>();
+    // How many routings of written events are under way. A handler runs on whatever thread the store calls back on, so
+    // a pause or a stop made meanwhile may come from a handler whose own write is open, and must not wait for it.
+    private int writesRouting;
 
     /**
      * Accepts a single consumer. The default because a sink that fans out cannot keep its consumers isolated from one
@@ -255,6 +275,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         return new RegisteredSubscription(subscriptionId, true);
     }
 
+    /**
+     * Cancels the subscription. Unlike a pause or a stop, this doesn't wait for a write {@link #openWriteWindow()}
+     * admitted before it, so a write running at the same time as the cancel may or may not reach the handler.
+     */
     @Override
     public final Mono<Void> cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
@@ -268,17 +292,51 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         return Mono.empty();
     }
 
+    /**
+     * Stops routing to every subscription. A write {@link #openWriteWindow()} admitted and has not closed yet still
+     * reaches them, and this waits for it and admits no new write meanwhile. On a thread that may not block, on one
+     * that opened a write itself, or while written events are being routed, it returns at once instead, and the stop
+     * applies when the last open write closes.
+     */
     @Override
     public final void stop() {
+        synchronized (writeWindows) {
+            if (openWriteWindowsByEpoch.isEmpty()) {
+                applyStop();
+                return;
+            }
+            stopping = true;
+            awaitWriteWindowsClosed(() -> stopping);
+        }
+    }
+
+    private void applyStop() {
         running = false;
         pausedSubscriptions.addAll(subscriptionIds);
     }
 
+    // Called holding writeWindows. Holds the pause of each subscription back until the writes open now have closed.
+    private void pauseAfterOpenWrites(Collection<String> subscriptionIdsToPause) {
+        for (String subscriptionId : subscriptionIdsToPause) {
+            pausing.putIfAbsent(subscriptionId, writeWindowEpoch);
+        }
+        writeWindowEpoch++;
+    }
+
     @Override
     public final void start(boolean resumeSubscriptionsAutomatically) {
-        running = true;
-        if (resumeSubscriptionsAutomatically) {
-            pausedSubscriptions.clear();
+        synchronized (writeWindows) {
+            // A stop still waiting for writes becomes the pauses it would have left behind
+            if (stopping && !resumeSubscriptionsAutomatically) {
+                pauseAfterOpenWrites(subscriptionIds);
+            }
+            stopping = false;
+            running = true;
+            if (resumeSubscriptionsAutomatically) {
+                pausing.clear();
+                pausedSubscriptions.clear();
+            }
+            writeWindows.notifyAll();
         }
     }
 
@@ -301,6 +359,20 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     public final Subscription resumeSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireKnown(subscriptionId);
+        synchronized (writeWindows) {
+            // A pause or a stop still waiting for writes is called off for this subscription
+            if (stopping) {
+                stopping = false;
+                pauseAfterOpenWrites(subscriptionIds);
+                pausing.remove(subscriptionId);
+                writeWindows.notifyAll();
+                return new RegisteredSubscription(subscriptionId, true);
+            }
+            if (pausing.remove(subscriptionId) != null) {
+                writeWindows.notifyAll();
+                return new RegisteredSubscription(subscriptionId, true);
+            }
+        }
         if (!isPaused(subscriptionId)) {
             throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
@@ -309,6 +381,12 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         return new RegisteredSubscription(subscriptionId, true);
     }
 
+    /**
+     * Pauses the subscription. A write {@link #openWriteWindow()} admitted before this call and not closed yet still
+     * reaches it, and this waits for it. On a thread that may not block, on one that opened a write itself, or while
+     * written events are being routed, it returns at once instead, the subscription stays running until those writes
+     * close, and {@link #isPaused(String)} answers {@code false} until then.
+     */
     @Override
     public final void pauseSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
@@ -316,7 +394,105 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         if (!isRunning(subscriptionId)) {
             throw new SubscriptionNotRunningException(subscriptionId);
         }
-        pausedSubscriptions.add(subscriptionId);
+        synchronized (writeWindows) {
+            if (openWriteWindowsByEpoch.isEmpty()) {
+                pausedSubscriptions.add(subscriptionId);
+                return;
+            }
+            pauseAfterOpenWrites(List.of(subscriptionId));
+            awaitWriteWindowsClosed(() -> pausing.containsKey(subscriptionId));
+        }
+    }
+
+    // Called holding writeWindows. A thread with a write open would wait for itself, so it doesn't wait, and neither
+    // does one that may not block, an interrupted one, or any thread while written events are being routed, since it
+    // may be the handler the routing waits for. The writes closing apply what is held back either way.
+    private void awaitWriteWindowsClosed(BooleanSupplier heldBack) {
+        if (writesRouting > 0 || openWriteWindowsByThread.containsKey(Thread.currentThread()) || Schedulers.isInNonBlockingThread()) {
+            return;
+        }
+        while (heldBack.getAsBoolean()) {
+            try {
+                writeWindows.wait();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    /**
+     * Admits a write whose events this model is about to route. A {@link #pauseSubscription(String)} or a
+     * {@link #stop()} that comes after it is held back until it closes, so the subscriptions the write was checked
+     * against still get its events.
+     *
+     * @return What closes the window, to run once the events have been routed or the write failed, on any thread, and
+     * running it more than once closes it once. {@code null} when the model is stopped or stopping, and nothing was
+     * admitted.
+     */
+    protected final @Nullable Runnable openWriteWindow() {
+        Thread opener = Thread.currentThread();
+        long epoch;
+        synchronized (writeWindows) {
+            if (!running || stopping) {
+                return null;
+            }
+            epoch = writeWindowEpoch;
+            openWriteWindowsByEpoch.merge(epoch, 1, Integer::sum);
+            openWriteWindowsByThread.merge(opener, 1, Integer::sum);
+        }
+        AtomicBoolean closed = new AtomicBoolean();
+        return () -> {
+            if (closed.compareAndSet(false, true)) {
+                closeWriteWindow(epoch, opener);
+            }
+        };
+    }
+
+    /**
+     * Routes the events of a write that {@link #openWriteWindow()} admitted. A {@link #pauseSubscription(String)} or a
+     * {@link #stop()} made while the routing is under way doesn't wait for the open writes, since it may come from one
+     * of the handlers being routed to, on whatever thread the store called back on. It applies when they close instead.
+     *
+     * @param routing Supplies the routing, called once when the returned {@link Mono} is subscribed.
+     * @return The routing, counted as under way from subscription until it terminates or is cancelled.
+     */
+    protected final Mono<Void> routeWrittenEvents(Supplier<Mono<Void>> routing) {
+        Objects.requireNonNull(routing, "routing cannot be null");
+        return Mono.defer(() -> {
+            synchronized (writeWindows) {
+                writesRouting++;
+            }
+            return routing.get();
+        }).doFinally(__ -> {
+            synchronized (writeWindows) {
+                writesRouting--;
+            }
+        });
+    }
+
+    // Applies each pause whose writes have all closed, and the stop once every write has
+    private void closeWriteWindow(long epoch, Thread opener) {
+        synchronized (writeWindows) {
+            openWriteWindowsByEpoch.computeIfPresent(epoch, (__, open) -> open == 1 ? null : open - 1);
+            openWriteWindowsByThread.computeIfPresent(opener, (__, open) -> open == 1 ? null : open - 1);
+            if (stopping && openWriteWindowsByEpoch.isEmpty()) {
+                stopping = false;
+                applyStop();
+            }
+            long oldestOpen = openWriteWindowsByEpoch.isEmpty() ? Long.MAX_VALUE : openWriteWindowsByEpoch.firstKey();
+            Iterator<Map.Entry<String, Long>> heldBack = pausing.entrySet().iterator();
+            while (heldBack.hasNext()) {
+                Map.Entry<String, Long> pause = heldBack.next();
+                if (pause.getValue() < oldestOpen) {
+                    if (subscriptionIds.contains(pause.getKey())) {
+                        pausedSubscriptions.add(pause.getKey());
+                    }
+                    heldBack.remove();
+                }
+            }
+            writeWindows.notifyAll();
+        }
     }
 
     // Separates "no such subscription here" from "wrong state for this call", which a caller holding several models
@@ -343,6 +519,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
             pausedSubscriptions.clear();
             soleSubscriptionId.set(null);
         }
+        synchronized (writeWindows) {
+            stopping = false;
+            pausing.clear();
+            writeWindows.notifyAll();
+        }
     }
 
     /**
@@ -355,6 +536,29 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         synchronized (registrationLock) {
             return !registrations.isEmpty();
         }
+    }
+
+    /**
+     * The paused subscriptions whose filter matches at least one of {@code cloudEvents}, counting one whose pause
+     * waits for open writes. Routing skips a paused subscription, so a caller about to write these events can refuse
+     * the write instead of letting those handlers miss it.
+     *
+     * @param cloudEvents The events to match
+     * @return The ids of the paused subscriptions that match, empty when none does
+     */
+    protected final Set<String> pausedSubscriptionsMatching(List<CloudEvent> cloudEvents) {
+        Set<String> beingPaused;
+        synchronized (writeWindows) {
+            beingPaused = new HashSet<>(pausing.keySet());
+        }
+        Set<String> matching = new HashSet<>();
+        for (Registration registration : registrations) {
+            String id = registration.id();
+            if ((pausedSubscriptions.contains(id) || beingPaused.contains(id)) && cloudEvents.stream().anyMatch(registration.matcher())) {
+                matching.add(registration.id());
+            }
+        }
+        return matching;
     }
 
     /**

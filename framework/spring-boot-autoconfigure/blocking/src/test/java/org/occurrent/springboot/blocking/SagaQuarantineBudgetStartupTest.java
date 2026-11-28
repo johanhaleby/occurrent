@@ -16,15 +16,8 @@
 
 package org.occurrent.springboot.blocking;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import org.jspecify.annotations.Nullable;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -35,72 +28,58 @@ import org.occurrent.annotation.Saga;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreSkippedInputs;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.MapPropertySource;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 /**
  * {@code occurrent.saga.quarantine-after} reaches the runner of an {@code @Saga} at startup. A positive value turns
- * quarantine on and leaving it out keeps quarantine off. Zero and negative values refuse startup, because a saga that
- * quietly ran without the protection its configuration appears to ask for is worse than one that does not start.
- * <p>
- * The subscription model here cannot say whether it still holds an event, so a runner that was asked for quarantine
- * says so at startup when it switches quarantine off again. That line is how these tests tell a runner that was asked
- * for quarantine from one that was not.
+ * quarantine on with that budget, leaving it out gives the default of five minutes, and
+ * {@code occurrent.saga.quarantine-enabled=false} turns it off. Blank, zero and negative values refuse startup, because a saga
+ * that quietly ran without the protection its configuration appears to ask for is worse than one that does not start.
  */
 @DisplayName("The saga quarantine budget at startup")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaQuarantineBudgetStartupTest {
 
-    private ListAppender<ILoggingEvent> appender;
-    private Logger runnerLog;
-    private @Nullable Level originalLevel;
-
-    @BeforeEach
-    void startCapturing() {
-        appender = new ListAppender<>();
-        appender.start();
-        runnerLog = (Logger) LoggerFactory.getLogger(SagaRunner.class);
-        runnerLog.addAppender(appender);
-        originalLevel = runnerLog.getLevel();
-        runnerLog.setLevel(Level.WARN);
-    }
-
-    @AfterEach
-    void stopCapturing() {
-        runnerLog.setLevel(originalLevel);
-        runnerLog.detachAppender(appender);
-        appender.stop();
-    }
-
     @Test
-    void asks_for_quarantine_when_the_property_is_a_positive_duration() {
-        contextRunner().withPropertyValues("occurrent.saga.quarantine-after=5m").run(context -> {
-            assertThat(context).hasNotFailed();
-            assertThat(quarantineSwitchedOffWarnings()).hasSize(1);
+    void refuses_to_start_when_the_property_is_blank_and_names_how_to_turn_quarantine_off() {
+        contextRunner().withPropertyValues("occurrent.saga.quarantine-after=").run(context -> {
+            assertThat(context).getFailure()
+                    .hasMessageContaining("occurrent.saga.quarantine-after")
+                    .hasMessageContaining("occurrent.saga.quarantine-enabled=false");
         });
     }
 
     @Test
-    void keeps_quarantine_off_when_the_property_is_left_out() {
-        contextRunner().run(context -> {
+    void refuses_to_start_when_the_property_is_only_whitespace_and_names_the_property() {
+        contextRunner().withInitializer(context -> context.getEnvironment().getPropertySources()
+                .addFirst(new MapPropertySource("whitespace", Map.of("occurrent.saga.quarantine-after", "   ")))).run(context -> {
+            assertThat(context).getFailure().hasStackTraceContaining("occurrent.saga.quarantine-after");
+        });
+    }
+
+    @Test
+    void starts_with_a_budget_that_would_be_refused_when_quarantine_is_disabled_since_it_has_no_budget_to_keep() {
+        contextRunner().withPropertyValues("occurrent.saga.quarantine-enabled=false", "occurrent.saga.quarantine-after=0s").run(context -> {
             assertThat(context).hasNotFailed();
-            assertThat(quarantineSwitchedOffWarnings()).isEmpty();
         });
     }
 
@@ -113,22 +92,34 @@ class SagaQuarantineBudgetStartupTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("occurrent.saga.quarantine-after must be a positive duration")
                     .hasMessageContaining("Leave the property out");
-            assertThat(quarantineSwitchedOffWarnings()).isEmpty();
         });
+    }
+
+    @Test
+    void refuses_to_start_a_saga_that_quarantines_when_its_state_store_cannot_record_skipped_inputs_naming_the_capability_and_the_way_out() {
+        contextRunnerOn(StoreThatDoesNotRecordSkippedInputs.class)
+                .run(context -> assertThat(context).getFailure()
+                        .hasStackTraceContaining("@Saga 'saga-quarantine-budget'")
+                        .hasStackTraceContaining("SagaStateStoreSkippedInputs")
+                        .hasStackTraceContaining("occurrent.saga.quarantine-enabled=false"));
+    }
+
+    @Test
+    void starts_a_saga_whose_state_store_cannot_record_skipped_inputs_when_quarantine_is_off() {
+        contextRunnerOn(StoreThatDoesNotRecordSkippedInputs.class).withPropertyValues("occurrent.saga.quarantine-enabled=false")
+                .run(context -> assertThat(context).hasNotFailed());
     }
 
     private static ApplicationContextRunner contextRunner() {
         return new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(SagaConfiguration.class);
+                .withUserConfiguration(SagaConfiguration.class, StoreThatRecordsSkippedInputs.class, PlainModel.class);
     }
 
-    private List<String> quarantineSwitchedOffWarnings() {
-        return new ArrayList<>(appender.list).stream()
-                .filter(event -> event.getLevel() == Level.WARN)
-                .map(ILoggingEvent::getFormattedMessage)
-                .filter(message -> message.contains("quarantine is switched off for this saga"))
-                .toList();
+    private static ApplicationContextRunner contextRunnerOn(Class<?> storeConfiguration) {
+        return new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SagaConfiguration.class, storeConfiguration, PlainModel.class);
     }
 
     private static org.occurrent.dsl.saga.Saga<TestEvent, TestState, TestCommand> newSaga() {
@@ -163,19 +154,6 @@ class SagaQuarantineBudgetStartupTest {
         }
 
         @Bean
-        Subscribable subscribable() {
-            Subscribable subscribable = mock(Subscribable.class);
-            when(subscribable.subscribe(any(), any(), any(), any())).thenReturn(mock(Subscription.class));
-            return subscribable;
-        }
-
-        @SuppressWarnings("unchecked")
-        @Bean
-        SagaStateStore<TestState> sagaStateStore() {
-            return mock(SagaStateStore.class);
-        }
-
-        @Bean
         CommandDispatcher<TestCommand> commandDispatcher() {
             return command -> {
             };
@@ -184,6 +162,41 @@ class SagaQuarantineBudgetStartupTest {
         @Bean
         QuarantineBudgetSaga quarantineBudgetSaga() {
             return new QuarantineBudgetSaga();
+        }
+    }
+
+    // The store of a saga that can record the inputs it skips and be released, as the in-memory and MongoDB stores are
+    @Configuration(proxyBeanMethods = false)
+    static class StoreThatRecordsSkippedInputs {
+        @SuppressWarnings("unchecked")
+        @Bean
+        SagaStateStore<TestState> sagaStateStore() {
+            SagaStateStore<TestState> store = mock(SagaStateStore.class, withSettings().extraInterfaces(SagaStateStoreSkippedInputs.class));
+            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
+            return store;
+        }
+    }
+
+    // A store of some other implementation, which cannot record the inputs a quarantined instance skips
+    @Configuration(proxyBeanMethods = false)
+    static class StoreThatDoesNotRecordSkippedInputs {
+        @SuppressWarnings("unchecked")
+        @Bean
+        SagaStateStore<TestState> sagaStateStore() {
+            SagaStateStore<TestState> store = mock(SagaStateStore.class);
+            when(store.stateCodec()).thenReturn(SagaStateCodec.identity());
+            return store;
+        }
+    }
+
+    // A model that cannot say whether it holds the events it delivers
+    @Configuration(proxyBeanMethods = false)
+    static class PlainModel {
+        @Bean
+        Subscribable subscribable() {
+            Subscribable subscribable = mock(Subscribable.class);
+            when(subscribable.subscribe(any(), any(), any(), any())).thenReturn(mock(Subscription.class));
+            return subscribable;
         }
     }
 

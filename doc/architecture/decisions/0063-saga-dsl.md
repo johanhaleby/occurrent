@@ -7,6 +7,9 @@ Date: 2026-07-19
 Accepted. This ADR covers the whole design; it lands as a stack of PRs (`dsl/saga-dsl` module family: a
 `saga-dsl/common` descriptor plus blocking-stack execution first, see the non-goals below).
 
+Amended by [ADR 180](0180-occurrent-owns-the-stored-form-of-a-saga-instance.md), which moves the encoding of
+`FlowStateImpl` from the stores into `SagaCodec`.
+
 ## Context
 
 Occurrent's documentation deliberately positions the Dynamic Consistency Boundary (DCB, ADR 47, ADR 52, ADR 53) as

@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.ExecuteFilter;
+import org.occurrent.application.service.internal.EventsAsWritten;
 import org.occurrent.application.service.internal.FailureAfterWrite;
 import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.application.service.reactor.ExecuteOptions;
@@ -113,7 +114,6 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             throw new UnsupportedOperationException("The provided EventStore implementation does not support reading with a StreamReadFilter. EventStore must implement ReadEventStreamWithFilter in order to use filters when reading.");
         }
         @Nullable Function<List<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
-        boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
         @Nullable Long fromStreamVersion = executeOptions.fromStreamVersion();
         int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
 
@@ -123,7 +123,14 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         // executor is entered only when synchronous dispatch must commit atomically with the write; otherwise the
         // write keeps exactly its prior semantics and applications without synchronous subscriptions pay no transaction
         // overhead. The side-effect is composed after the retry so it runs once on success, not per attempt.
-        return Mono.defer(() -> {
+        // Asked per subscription and before anything is read, see beforeWrite(), so a Mono built before a stop or before
+        // the first synchronous handler registered answers for the moment it runs. Closed before the result or the
+        // error reaches the subscriber, and when building the rest throws, so a pause or a stop that the subscriber
+        // makes once the write is done doesn't wait for it.
+        // The side effect runs after the write check closed, so one that pauses or stops a subscription model, or
+        // waits for something that does, never waits for this write
+        return Mono.using(() -> synchronousEventDispatcher == null ? ReactiveSynchronousEventDispatcher.WriteCheck.NONE : synchronousEventDispatcher.beforeWrite(), writeCheck -> {
+            boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
             FailureAfterWrite failureAfterWrite = new FailureAfterWrite();
             // Asked inside the transaction, since the answer depends on what's open, and before the write, so a failure here undoes nothing
             Function<Boolean, Mono<Result<E>>> readDecideWriteUnit = openedTransaction -> Mono.defer(() -> {
@@ -140,6 +147,9 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                             }
                             List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
                             List<E> writtenDomainEvents = newDomainEvents;
+                            if (writeCheck != ReactiveSynchronousEventDispatcher.WriteCheck.NONE) {
+                                writeCheck.check(EventsAsWritten.inStream(streamId, eventStream.version(), newCloudEvents));
+                            }
                             return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
                                     .flatMap(writeResult -> {
                                         Result<E> result = new Result<>(writeResult, writtenDomainEvents);
@@ -162,14 +172,14 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                     .retryWhen(retry)
                     // An executor can swallow the stand-in and return a value, which says nothing about the failure
                     .filter(result -> !failureAfterWrite.isHeld())
-                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()))
-                    .flatMap(result -> {
-                        if (sideEffect == null) {
-                            return Mono.just(result.writeResult());
-                        }
-                        return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
-                    });
-        });
+                    .switchIfEmpty(Mono.defer(() -> failureAfterWrite.isHeld() ? Mono.error(failureAfterWrite.failure()) : Mono.empty()));
+        }, ReactiveSynchronousEventDispatcher.WriteCheck::close, true)
+                .flatMap(result -> {
+                    if (sideEffect == null) {
+                        return Mono.just(result.writeResult());
+                    }
+                    return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
+                });
     }
 
     private Mono<Boolean> reportsTransaction(boolean dispatchSynchronously) {

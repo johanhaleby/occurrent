@@ -21,6 +21,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 
 import java.time.Instant;
 import java.util.List;
@@ -43,21 +46,37 @@ class SagaInstancesTest {
      */
     private static final class CoreOnlyStore implements SagaStateStore<String> {
 
-        private final SagaEnvelope<String> only = new SagaEnvelope<>("s1", "a", SagaStatus.ACTIVE, 1,
-                List.of(), Map.of(), null, NOW, NOW, null, null);
+        private final SagaCodec<String> codec = SagaCodec.of(stateCodec(), null);
+        private final StoredSaga only = codec.encode(new SagaEnvelope<>("s1", "a", SagaStatus.ACTIVE, 1,
+                List.of(), Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null));
 
         @Override
-        public Optional<SagaEnvelope<String>> find(String sagaId) {
+        public SagaStateCodec<String> stateCodec() {
+            return SagaStateCodec.identity();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             return sagaId.equals("s1") ? Optional.of(only) : Optional.empty();
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<String> envelope, long expectedVersion) {
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
+            return find(sagaId);
+        }
+
+        @Override
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
             return true;
         }
 
         @Override
-        public List<SagaEnvelope<String>> findWithDueTimers(Instant now, int limit) {
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
+            return true;
+        }
+
+        @Override
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
             return List.of();
         }
 
@@ -98,8 +117,8 @@ class SagaInstancesTest {
 
         @Test
         void enumerates_through_the_capability() {
-            store.compareAndSave("s1", new SagaEnvelope<>("s1", "a", SagaStatus.ACTIVE, 1,
-                    List.of(), Map.of(), null, NOW, NOW, null, null), 0);
+            store.compareAndSave(SagaCodec.of(store.stateCodec(), null).encode(new SagaEnvelope<>("s1", "a", SagaStatus.ACTIVE, 1,
+                    List.of(), Map.of(), null, NOW, NOW, null, null, true, null, Map.of(), null)), 0);
 
             assertThat(instances.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10))
                     .extracting(SagaInstance::sagaId).containsExactly("s1");

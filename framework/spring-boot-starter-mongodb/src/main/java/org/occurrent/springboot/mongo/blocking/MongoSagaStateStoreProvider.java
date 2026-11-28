@@ -22,7 +22,7 @@ import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore;
 import org.occurrent.springboot.blocking.DefaultSagaStateStoreProvider;
 import org.springframework.context.ApplicationContext;
-import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.MongoTemplate;
 
 /**
  * Stores a {@code @Saga} that declares no store in a {@code saga-<id>} MongoDB collection.
@@ -37,13 +37,16 @@ class MongoSagaStateStoreProvider implements DefaultSagaStateStoreProvider {
 
     @Override
     public <S> SagaStateStore<S> createDefaultSagaStateStore(String sagaId, Class<S> stateType) {
-        // Resolved on use rather than injected, so a store that is never defaulted to is never created.
-        MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
+        // Resolved on use rather than injected, so a store that is never defaulted to is never created. The MongoTemplate
+        // bean rather than the MongoOperations one, like the event store of this configuration, since the store runs its
+        // transactions on the template's MongoDatabaseFactory. An application's MongoOperations decorator marked
+        // @Primary is then left out, as it is for the event store
+        MongoTemplate mongoTemplate = applicationContext.getBean(MongoTemplate.class);
         if (stateType == FlowState.class) {
-            // A flow saga's FlowState holds domain events, serialize them as CloudEvents (stable types) so they can move packages.
+            // The converter only marks this as a flow saga's store. The runner writes and reads the received events with its own.
             CloudEventConverter<?> converter = applicationContext.getBean(CloudEventConverter.class);
-            return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + sagaId, stateType, converter);
+            return new SpringMongoSagaStateStore<>(mongoTemplate, "saga-" + sagaId, stateType, converter);
         }
-        return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + sagaId, stateType);
+        return new SpringMongoSagaStateStore<>(mongoTemplate, "saga-" + sagaId, stateType);
     }
 }

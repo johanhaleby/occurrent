@@ -59,6 +59,12 @@
             <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Release reads the inputs a quarantined instance skipped back from the event store -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-retry</artifactId>

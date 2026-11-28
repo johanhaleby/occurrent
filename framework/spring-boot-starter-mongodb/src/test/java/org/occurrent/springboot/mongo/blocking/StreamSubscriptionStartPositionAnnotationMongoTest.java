@@ -31,14 +31,13 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
-import org.springframework.context.annotation.Import;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import tools.jackson.databind.ObjectMapper;
@@ -51,6 +50,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -73,42 +73,45 @@ import static org.awaitility.Awaitility.await;
  */
 @DisplayName("StreamSubscription startAt matrix")
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@SpringBootTest(
-        classes = StreamSubscriptionStartPositionAnnotationMongoTest.StartPositionApplication.class,
-        properties = {
-                "occurrent.event-store.capabilities=stream",
-                "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:stream-start-position-test"
-        }
-)
-@Import(StreamSubscriptionStartPositionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
-@Timeout(60)
+@Timeout(120)
 class StreamSubscriptionStartPositionAnnotationMongoTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:stream-start-position-test");
     // 2000-01-01T00:00:00Z, well before any event this test appends.
     private static final long FAR_PAST_EPOCH_MILLIS = 946684800000L;
 
-    @Autowired
-    private ApplicationService<TestEvent> applicationService;
-
-    @Autowired
-    private DefaultPositionSubscriber defaultPositionSubscriber;
-
-    @Autowired
-    private NowPositionSubscriber nowPositionSubscriber;
-
-    @Autowired
-    private BeginningOfTimeSubscriber beginningOfTimeSubscriber;
-
-    @Autowired
-    private Iso8601Subscriber iso8601Subscriber;
-
-    @Autowired
-    private EpochMillisSubscriber epochMillisSubscriber;
+    @Container
+    static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     @Test
     void default_and_now_never_replay_history_while_beginning_of_time_iso8601_and_epoch_all_replay_it() {
+        // The start of a subscription at the present is read when the event store bean is created, so only what is
+        // written before the context starts is history. A context with subscriptions off writes it and is closed again.
+        SpringApplication.run(StartPositionApplication.class, bootArgs("--occurrent.subscription.enabled=false", "--test.history=historic-beginning,historic-iso,historic-epoch")).close();
+
+        try (ConfigurableApplicationContext context = SpringApplication.run(StartPositionApplication.class, bootArgs())) {
+            assertSubscribersSeeHistoryOnlyWhenTheyReplayIt(context);
+        }
+    }
+
+    private static String[] bootArgs(String... more) {
+        return Stream.concat(Stream.of(
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("stream-start-position"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE), Stream.of(more)).toArray(String[]::new);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void assertSubscribersSeeHistoryOnlyWhenTheyReplayIt(ConfigurableApplicationContext context) {
+        ApplicationService<TestEvent> applicationService = context.getBean(ApplicationService.class);
+        DefaultPositionSubscriber defaultPositionSubscriber = context.getBean(DefaultPositionSubscriber.class);
+        NowPositionSubscriber nowPositionSubscriber = context.getBean(NowPositionSubscriber.class);
+        BeginningOfTimeSubscriber beginningOfTimeSubscriber = context.getBean(BeginningOfTimeSubscriber.class);
+        Iso8601Subscriber iso8601Subscriber = context.getBean(Iso8601Subscriber.class);
+        EpochMillisSubscriber epochMillisSubscriber = context.getBean(EpochMillisSubscriber.class);
+
         // None of the live-only subscribers ever see the pre-existing history, even after settling.
         // The invocation-count checks prove the handler was never called at all, not merely that
         // whatever it was called with failed the name filter below.
@@ -130,11 +133,9 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
                 assertThat(epochMillisSubscriber.received()).extracting(TestEvent::name).containsExactly("historic-epoch"));
 
         // A fresh event per scenario, appended now that the context is fully up, reaches every subscriber.
-        append(new TestEvent("live-default"));
-        append(new TestEvent("live-now"));
-        append(new TestEvent("live-beginning"));
-        append(new TestEvent("live-iso"));
-        append(new TestEvent("live-epoch"));
+        for (String name : List.of("live-default", "live-now", "live-beginning", "live-iso", "live-epoch")) {
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name)));
+        }
 
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(defaultPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-default"));
@@ -148,21 +149,7 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
                 assertThat(epochMillisSubscriber.received()).extracting(TestEvent::name).containsExactly("historic-epoch", "live-epoch"));
     }
 
-    private void append(TestEvent event) {
-        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
-    }
-
     // --- inner application and configuration classes ---
-
-    @TestConfiguration(proxyBeanMethods = false)
-    static class MongoDbContainerConfiguration {
-
-        @Bean
-        @ServiceConnection
-        MongoDBContainer mongoDbContainer() {
-            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
-        }
-    }
 
     @SpringBootApplication
     @EnableOccurrent
@@ -181,10 +168,10 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
                     .build();
         }
 
-        // Appends the per-scenario historic events before any replaying subscriber starts.
+        // Appends the events of test.history, which only the context that writes before the application starts is given
         @Bean
-        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService) {
-            return new HistoryAppender(applicationService);
+        HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService, @Value("${test.history:}") List<String> history) {
+            return new HistoryAppender(applicationService, history);
         }
 
         @Bean
@@ -220,20 +207,16 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
 
     static class HistoryAppender {
         private final ApplicationService<TestEvent> applicationService;
+        private final List<String> history;
 
-        HistoryAppender(ApplicationService<TestEvent> applicationService) {
+        HistoryAppender(ApplicationService<TestEvent> applicationService, List<String> history) {
             this.applicationService = applicationService;
+            this.history = history;
         }
 
         @PostConstruct
         void appendHistory() {
-            append(new TestEvent("historic-beginning"));
-            append(new TestEvent("historic-iso"));
-            append(new TestEvent("historic-epoch"));
-        }
-
-        private void append(TestEvent event) {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
+            history.forEach(name -> applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent(name))));
         }
     }
 

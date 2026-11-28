@@ -1,0 +1,51 @@
+{
+  "_id": "saga-core-active-with-timers",
+  "status": "ACTIVE",
+  "version": {
+    "$numberLong": "4"
+  },
+  "timers": [
+    {
+      "name": "reminder",
+      "firesAtEpochMilli": {
+        "$numberLong": "1800000000000"
+      }
+    },
+    {
+      "name": "expiry",
+      "firesAtEpochMilli": {
+        "$numberLong": "1800000600000"
+      },
+      "nextAttemptAtEpochMilli": {
+        "$numberLong": "1800000900000"
+      }
+    }
+  ],
+  "nextTimerFiresAt": {
+    "$numberLong": "1800000000000"
+  },
+  "streamWatermarks": {
+    "stream-a": {
+      "$numberLong": "12"
+    },
+    "stream-b": {
+      "$numberLong": "7"
+    }
+  },
+  "positionWatermark": {
+    "$numberLong": "42"
+  },
+  "createdAt": {
+    "$numberLong": "1772600767123"
+  },
+  "updatedAt": {
+    "$numberLong": "1772601377456"
+  },
+  "state": {
+    "orderId": "order-1",
+    "customer": "alice",
+    "quantity": {
+      "$numberInt": "3"
+    }
+  }
+}

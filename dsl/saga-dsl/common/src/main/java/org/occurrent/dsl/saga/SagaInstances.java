@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.saga;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -39,10 +41,11 @@ import static java.util.Objects.requireNonNull;
  */
 public final class SagaInstances {
 
-    private final SagaStateStore<?> stateStore;
+    private final SagaEnvelopes<?> envelopes;
 
+    // No flow converter, because nothing here reads a state
     private SagaInstances(SagaStateStore<?> stateStore) {
-        this.stateStore = requireNonNull(stateStore, "stateStore cannot be null");
+        this.envelopes = SagaEnvelopes.of(requireNonNull(stateStore, "stateStore cannot be null"), null);
     }
 
     /** Observes the instances held in {@code stateStore}. */
@@ -56,12 +59,11 @@ public final class SagaInstances {
      * Read through {@link SagaStateStore#findWithoutState(String)}, because nothing {@link SagaInstance} answers comes
      * from the saga's state. So observing one instance by id costs no more than enumerating them, and, like
      * enumerating them, it still answers for an instance whose state no longer decodes, which is exactly the instance
-     * somebody tends to be looking for. A store that can only read an instance whole still reads the state here, and
-     * still fails on such an instance.
+     * somebody tends to be looking for.
      */
     public Optional<SagaInstance> find(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
-        return stateStore.findWithoutState(sagaId).map(SagaInstances::asInstance);
+        return envelopes.findWithoutState(sagaId).map(SagaInstances::asInstance);
     }
 
     /**
@@ -84,12 +86,13 @@ public final class SagaInstances {
     public List<SagaInstance> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
         requireNonNull(status, "status cannot be null");
         requireNonNull(updatedBefore, "updatedBefore cannot be null");
-        if (!(stateStore instanceof SagaStateStoreQueries<?> queries)) {
+        SagaStateStore<?> stateStore = envelopes.store();
+        if (!(stateStore instanceof SagaStateStoreQueries<?>)) {
             // Checked here rather than in the constructor on purpose: a store that cannot enumerate can still answer a
             // by-id lookup, and refusing to build the facade at all would deny it that.
             throw new UnsupportedOperationException("The provided SagaStateStore implementation does not support enumerating instances. %s must implement SagaStateStoreQueries in order to use findByStatus. find(sagaId) works on any store.".formatted(stateStore.getClass().getName()));
         }
-        return queries.findByStatus(status, updatedBefore, limit).stream()
+        return envelopes.findByStatus(status, updatedBefore, limit).stream()
                 .map(SagaInstances::asInstance)
                 .toList();
     }

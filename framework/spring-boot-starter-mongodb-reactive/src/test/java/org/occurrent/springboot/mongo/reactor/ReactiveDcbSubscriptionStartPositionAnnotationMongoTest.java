@@ -25,6 +25,9 @@ import jakarta.annotation.PreDestroy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
@@ -39,14 +42,12 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.subscription.CatchupCannotResumeException;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.DependsOn;
-import org.springframework.context.annotation.Import;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
@@ -60,6 +61,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -76,41 +78,62 @@ import static org.awaitility.Awaitility.await;
  */
 @DisplayName("Reactive DcbSubscription startAt matrix")
 @DisplayNameGeneration(ReplaceUnderscores.class)
-@SpringBootTest(
-        classes = ReactiveDcbSubscriptionStartPositionAnnotationMongoTest.DcbOnlyApplication.class,
-        properties = {
-                "occurrent.event-store.capabilities=dcb",
-                "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:reactive-dcb-start-position-test"
-        }
-)
-@Import(ReactiveDcbSubscriptionStartPositionAnnotationMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
-@Timeout(60)
+@Timeout(120)
 class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
 
     static final String TAG = "test:reactive-start-position";
     private static final URI SOURCE = URI.create("urn:occurrent:reactive-dcb-start-position-test");
 
-    @Autowired
+    @Container
+    static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
+
+    private static ConfigurableApplicationContext context;
+
     private DcbEventStore dcbEventStore;
-
-    @Autowired
     private CloudEventConverter<TestEvent> cloudEventConverter;
-
-    @Autowired
     private DefaultPositionSubscriber defaultPositionSubscriber;
-
-    @Autowired
     private NowPositionSubscriber nowPositionSubscriber;
-
-    @Autowired
     private ExplicitPositionSubscriber explicitPositionSubscriber;
-
-    @Autowired
     private RefusedPositionSubscriber refusedPositionSubscriber;
-
-    @Autowired
     private CatchupSupportLog catchupSupportLog;
+
+    // The start of a subscription at the present is read when the event store bean is created, so only what is written
+    // before the context starts is history. A context with subscriptions off writes it and is closed again, and the
+    // history is given a second to age, since a live start opens at the start of the current second.
+    @BeforeAll
+    static void bootAfterTheHistoryIsWritten() throws InterruptedException {
+        SpringApplication.run(DcbOnlyApplication.class, bootArgs("--occurrent.subscription.enabled=false", "--test.history=true")).close();
+        Thread.sleep(2100);
+        context = SpringApplication.run(DcbOnlyApplication.class, bootArgs());
+    }
+
+    @AfterAll
+    static void closeContext() {
+        if (context != null) {
+            context.close();
+        }
+    }
+
+    @BeforeEach
+    @SuppressWarnings("unchecked")
+    void wire() {
+        dcbEventStore = context.getBean(DcbEventStore.class);
+        cloudEventConverter = context.getBean(CloudEventConverter.class);
+        defaultPositionSubscriber = context.getBean(DefaultPositionSubscriber.class);
+        nowPositionSubscriber = context.getBean(NowPositionSubscriber.class);
+        explicitPositionSubscriber = context.getBean(ExplicitPositionSubscriber.class);
+        refusedPositionSubscriber = context.getBean(RefusedPositionSubscriber.class);
+        catchupSupportLog = context.getBean(CatchupSupportLog.class);
+    }
+
+    private static String[] bootArgs(String... more) {
+        return Stream.concat(Stream.of(
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("reactive-dcb-start-position"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=dcb",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE), Stream.of(more)).toArray(String[]::new);
+    }
 
     @Test
     void default_and_now_never_replay_history_older_than_a_second_while_an_explicit_position_0_replays_all_of_it() {
@@ -159,16 +182,6 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
 
     // --- inner application and configuration classes ---
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class MongoDbContainerConfiguration {
-
-        @Bean
-        @ServiceConnection
-        MongoDBContainer mongoDbContainer() {
-            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
-        }
-    }
-
     @SpringBootApplication
     @EnableOccurrentReactive
     static class DcbOnlyApplication {
@@ -192,34 +205,30 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
                     .build();
         }
 
-        // Appends three distinguishable events before any subscriber starts. DCB positions are assigned
-        // sequentially from 1 on a fresh store, so they get 1, 2, 3. Every subscriber subscribes more than a second
-        // after them, see HistoryAppender.
+        // Appends three distinguishable events in the boot with subscriptions off, which is the one given test.history.
+        // DCB positions are assigned sequentially from 1 on a fresh store, so they get 1, 2, 3.
         @Bean
+        @ConditionalOnProperty(name = "test.history", havingValue = "true")
         HistoryAppender historyAppender(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter) {
             return new HistoryAppender(dcbEventStore, cloudEventConverter);
         }
 
         @Bean
-        @DependsOn("historyAppender")
         DefaultPositionSubscriber defaultPositionSubscriber() {
             return new DefaultPositionSubscriber();
         }
 
         @Bean
-        @DependsOn("historyAppender")
         NowPositionSubscriber nowPositionSubscriber() {
             return new NowPositionSubscriber();
         }
 
         @Bean
-        @DependsOn("historyAppender")
         ExplicitPositionSubscriber explicitPositionSubscriber() {
             return new ExplicitPositionSubscriber();
         }
 
         @Bean
-        @DependsOn("historyAppender")
         RefusedPositionSubscriber refusedPositionSubscriber() {
             return new RefusedPositionSubscriber();
         }
@@ -234,17 +243,14 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
             this.cloudEventConverter = cloudEventConverter;
         }
 
-        // Waits a second and a half once the history is written, since a subscription started at the present can
-        // also receive what the same MongoClient wrote up to a second before it, which the at-least-once contract allows
         @PostConstruct
-        void appendHistory() throws InterruptedException {
+        void appendHistory() {
             List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(
                             new TestEvent("event-1"), new TestEvent("event-2"), new TestEvent("event-3")))
                     .stream()
                     .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                     .toList();
             dcbEventStore.append(cloudEvents).block();
-            Thread.sleep(1500);
         }
     }
 

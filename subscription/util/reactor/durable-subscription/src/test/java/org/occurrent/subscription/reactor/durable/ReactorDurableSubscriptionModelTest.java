@@ -171,7 +171,8 @@ public class ReactorDurableSubscriptionModelTest {
                 return Mono.empty();
             }
         };
-        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, checkpointStorage);
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, checkpointStorage,
+                new ReactorDurableSubscriptionModelConfig(1).startWhenFirstPositionCanBeOverwritten(true));
         subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e)));
 
         // When
@@ -216,7 +217,7 @@ public class ReactorDurableSubscriptionModelTest {
                 return Mono.empty();
             }
         };
-        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, checkpointStorage, new ReactorDurableSubscriptionModelConfig(3));
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, checkpointStorage, new ReactorDurableSubscriptionModelConfig(3).startWhenFirstPositionCanBeOverwritten(true));
         subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e)));
 
         // When

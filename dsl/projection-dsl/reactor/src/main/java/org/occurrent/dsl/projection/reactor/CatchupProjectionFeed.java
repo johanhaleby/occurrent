@@ -261,6 +261,13 @@ public final class CatchupProjectionFeed<E> {
      * below it. Deleting the marker by hand is best effort, so only a new feed under a new id is sure to replay from
      * the beginning, see the "Cancel" section of
      * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0179-a-catch-up-marker-means-done-on-blocking-and-a-resume-position-on-reactor.md">ADR 179</a>.
+     * Under a new id the subscription starts from the beginning of the history and repeats everything its handler does,
+     * the records it writes, the commands it dispatches and the messages it sends. Stop every instance on the old id
+     * before the first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one
+     * instance, what else a new id needs depends on where each instance keeps what it builds and which broker queue or
+     * consumer group it consumes, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+     * upgrade guide</a> describes.
      * <p>
      * An event fed from code nothing waits for has no caller to tell, so when no replay can bring it back, it is lost
      * if its fold fails or the process stops before it is folded. An event the fold's code feeds on another thread

@@ -416,9 +416,31 @@ public class OccurrentProperties {
          * every restart, and ignores the answer when a checkpoint is stored. Starting anyway means no start position
          * is recorded before the first delivery, so a crash before the first checkpoint is saved starts over from
          * wherever the feed has reached by then, and an event whose delivery failed before the crash is not
-         * redelivered. The default is {@code false}, which refuses such a subscription when it is created.
+         * redelivered. The default is {@code false}, which refuses such a subscription when it is created. On the
+         * blocking stack, with a {@code CheckpointStorage} that answers {@code false} from
+         * {@code evaluatesWriteConditionsFor(String)} for the subscription, {@code true} here isn't enough. The
+         * subscription is still refused when it is created unless {@code start-when-first-position-can-be-overwritten}
+         * is {@code true} as well.
          */
         private boolean startWhenNoStartPositionCanBeRecorded = false;
+
+        /**
+         * Whether a subscription whose first position would be recorded in a {@code CheckpointStorage} that answers
+         * {@code false} from {@code evaluatesWriteConditionsFor(String)} starts anyway instead of being refused. The
+         * first position is written with {@code CheckpointWriteCondition.ifAbsent()}, so of two nodes recording one at
+         * the same moment only one write is stored. A storage that can't evaluate that condition could only write it
+         * unconditionally, and then the two nodes can overwrite each other's first position and lose the events between
+         * the two positions for good. Starting anyway writes it unconditionally, with a warning. The default is
+         * {@code false}, which refuses such a subscription when it is created, before anything is written for it. Every
+         * {@code CheckpointStorage} Occurrent ships evaluates write conditions, apart from
+         * {@code SpringRedisCheckpointStorage} in Cluster-safe mode for an id Redis Cluster can't put in one slot with its
+         * version key, and for an id in the reserved namespace of its version key, which it refuses for every read and
+         * write anyway. The starter reads this before it stores a live start as the first checkpoint, and the MongoDB
+         * starters pass it to the durable subscription model they build. A durable subscription model the application
+         * builds itself doesn't read it, so set {@code startWhenFirstPositionCanBeOverwritten(true)} on that model's
+         * config as well.
+         */
+        private boolean startWhenFirstPositionCanBeOverwritten = false;
 
         /**
          * Tuning for the catch-up-then-live handover used by a push-fed projection's bootstrap.
@@ -450,6 +472,14 @@ public class OccurrentProperties {
 
         public void setStartWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
             this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
+        }
+
+        public boolean isStartWhenFirstPositionCanBeOverwritten() {
+            return startWhenFirstPositionCanBeOverwritten;
+        }
+
+        public void setStartWhenFirstPositionCanBeOverwritten(boolean startWhenFirstPositionCanBeOverwritten) {
+            this.startWhenFirstPositionCanBeOverwritten = startWhenFirstPositionCanBeOverwritten;
         }
 
         // The released getter/setter shape (isX(): boolean / setX(boolean)) is kept, unlike the two getters above,
@@ -762,11 +792,13 @@ public class OccurrentProperties {
         private Duration timerPollInterval = Duration.ofSeconds(15);
 
         /**
-         * How long one event may keep failing before its saga instance can be quarantined on it. It has no default.
-         * Leave it out and quarantine stays off, matching {@code SagaRunnerConfig.defaults()}, and set it to a positive
-         * duration, such as {@code 5m}, to turn quarantine on. Quarantine is off by default because 0.34.0 has no
-         * operation that brings a quarantined instance back, so {@code SagaStateStore.delete(sagaId)} is the only way out
-         * of it. Five minutes is a reasonable value when you turn it on.
+         * How long one event may keep failing before its saga instance can be quarantined on it. Defaults to five
+         * minutes, matching {@code SagaRunnerConfig.defaults()}. Leave it out for the default. A blank value stops an
+         * application with at least one {@code @Saga} from starting while quarantine is enabled, since it kept
+         * quarantine off in 0.34.0. Set
+         * {@code occurrent.saga.quarantine-enabled=false} to turn quarantine off. A quarantined instance records the
+         * events it skips, and {@code SagaSubscription.release(sagaId)} brings it back by replaying them, with no event
+         * store needed.
          * <p>
          * Each failing event keeps its own clock, so a second event that starts failing is measured from its own first
          * failure, and an event that fails again after it was parked is measured from when it first failed.
@@ -777,16 +809,21 @@ public class OccurrentProperties {
          * before the saga can work out which instance it belongs to is never let past, because acknowledging it would
          * lose it. It is refused on every redelivery, and this only sets how often that is logged.
          * <p>
-         * Zero and negative values stop the application from starting when it has at least one {@code @Saga},
-         * because a reader can take zero to mean "never" or "immediately". Leave the property out, or leave it blank,
-         * to keep quarantine off. Even when it is set, quarantine is switched
-         * off on its own,
-         * with a warning at startup, unless the subscription model guarantees that it holds every event it delivers,
-         * because a quarantined instance skips everything addressed to it afterwards and skipping acknowledges. A
-         * model that can answer for one event but cannot make that guarantee gets no quarantine either. The event an
-         * instance stops on is checked as well, so a guarantee made wrongly is caught before that event is dropped.
+         * Zero and negative values stop the application from starting when it has at least one {@code @Saga} and
+         * quarantine is enabled, because a reader can take zero to mean "never" or "immediately".
+         * <p>
+         * Every saga quarantines, whichever subscription model feeds it and whether or not an event store is around,
+         * because a quarantined instance holds the events it skips itself. Deleting a quarantined instance deletes the
+         * only copy the saga keeps of them. A saga whose state store does not implement
+         * {@code SagaStateStoreSkippedInputs} stops the application from starting while quarantine is enabled.
          */
         private @Nullable Duration quarantineAfter;
+
+        /**
+         * Whether a saga instance that keeps failing can be quarantined. Enabled by default. Set it to {@code false} to
+         * never quarantine, which is {@code SagaRunnerConfig.disableQuarantine()}.
+         */
+        private boolean quarantineEnabled = true;
 
         /**
          * Competing-consumer (leader-election) configuration for the saga timer poller.
@@ -801,12 +838,24 @@ public class OccurrentProperties {
             this.timerPollInterval = timerPollInterval;
         }
 
+        /**
+         * @return the budget you set, or {@code null} when you set none, which means the five minute default and not,
+         * as in 0.34.0, that quarantine is off. {@link #isQuarantineEnabled()} says whether it is off
+         */
         public @Nullable Duration getQuarantineAfter() {
             return quarantineAfter;
         }
 
         public void setQuarantineAfter(@Nullable Duration quarantineAfter) {
             this.quarantineAfter = quarantineAfter;
+        }
+
+        public boolean isQuarantineEnabled() {
+            return quarantineEnabled;
+        }
+
+        public void setQuarantineEnabled(boolean quarantineEnabled) {
+            this.quarantineEnabled = quarantineEnabled;
         }
 
         public CompetingConsumerProperties getCompetingConsumer() {

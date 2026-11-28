@@ -54,12 +54,18 @@ import static java.util.Objects.requireNonNull;
  * {@code null} here. Read {@code input} when you want the identity and {@code position} when you have a feed that
  * numbers its events and you want the number.
  * <p>
+ * A release that quarantines the instance again because a replayed event fails names that event by the key it was
+ * recorded under. The key can be a CloudEvent key of the form
+ * {@code cloudevent:<length of id>:<id>:<source>@cloudevent} rather than a stream id with a stream version, see
+ * {@link SkippedInput}.
+ * <p>
  * A record that 0.31.0 to 0.34.0 wrote for an event carrying only a position holds {@code position:N} as its
  * {@code input}. The executor treats such a record as no record, so a new failure starts a fresh budget and the
  * instance's next successful delivery clears it.
  *
- * @param input          the failing input's redelivery key, which is its stream id with its stream version. The same
- *                       string the executor compares against to tell one failing input from the next
+ * @param input          the failing input's redelivery key, which is its stream id with its stream version, or the
+ *                       CloudEvent key a release names an event with no stream by. The same string the executor
+ *                       compares against to tell one failing input from the next
  * @param position       the global subscription position of the failing event, or {@code null} when the event carries
  *                       none
  * @param firstFailedAt  when {@code input} first failed, which is when its quarantine budget started running.
@@ -67,13 +73,27 @@ import static java.util.Objects.requireNonNull;
  *                       it may have been failing for longer, because several ways of failing record nothing, a write
  *                       that loses its compare-and-set on every attempt among them
  * @param failureType    the class name of the exception the saga or its dispatcher threw
- * @param failureMessage that exception's message, or {@code null} when it had none
+ * @param failureMessage that exception's message, or {@code null} when it had none or when the store couldn't take the
+ *                       record with it, in which case only this message is missing
+ * @param releasedAt     when a release of the quarantined instance started, or {@code null} when none is running. An
+ *                       instance that is {@link SagaStatus#QUARANTINED} with this set is releasing. It replays
+ *                       {@code input} and then every input it recorded while quarantined, and turns
+ *                       {@link SagaStatus#ACTIVE} in a write after the last of them, once a read finds none left.
+ *                       Cleared when the instance is quarantined again
+ * @param quarantineId   a random UUID that names the quarantine the instance is in, or {@code null} when it is not
+ *                       quarantined, or was quarantined by 0.34.0, which cannot be released. Set by the write that
+ *                       turns an {@link SagaStatus#ACTIVE} instance {@link SagaStatus#QUARANTINED}, kept when a
+ *                       release quarantines the instance again, and gone once the instance is active again. The
+ *                       inputs the instance skips are recorded under it, so a release replays only the records of
+ *                       the quarantine it ends
  */
 public record SagaFailure(String input,
                           @Nullable Long position,
                           Instant firstFailedAt,
                           String failureType,
-                          @Nullable String failureMessage) {
+                          @Nullable String failureMessage,
+                          @Nullable Instant releasedAt,
+                          @Nullable String quarantineId) {
 
     public SagaFailure {
         requireNonNull(input, "input cannot be null");
@@ -82,5 +102,10 @@ public record SagaFailure(String input,
         if (position != null && position < 0) {
             throw new IllegalArgumentException("position cannot be negative, was " + position);
         }
+    }
+
+    /** Whether a release of the instance is running, see {@link #releasedAt()}. */
+    public boolean isReleasing() {
+        return releasedAt != null;
     }
 }

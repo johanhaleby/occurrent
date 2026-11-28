@@ -1,0 +1,283 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.springboot.mongo.blocking;
+
+import org.awaitility.core.ConditionTimeoutException;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.occurrent.annotation.StartPosition;
+import org.occurrent.annotation.Subscription;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
+import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
+import tools.jackson.databind.ObjectMapper;
+
+import java.net.URI;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.OptionalLong;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import static java.time.Duration.ofMillis;
+import static java.time.Duration.ofSeconds;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
+
+/**
+ * A checkpoint storage written for 0.32.0 and brought to 0.33.0 with the migration guide's stub writes only
+ * unconditionally, and refuses {@code ifAbsent()} with {@link UnsupportedOperationException}. A subscription at
+ * {@code DEFAULT} with nothing stored pins its start boundary as the first checkpoint, and with such a storage it
+ * does so unconditionally when occurrent.subscription.start-when-first-position-can-be-overwritten is set, and
+ * fails startup otherwise.
+ */
+@DisplayName("A checkpoint storage that only writes unconditionally")
+@DisplayNameGeneration(ReplaceUnderscores.class)
+@Testcontainers
+@Timeout(180)
+class UnconditionalCheckpointStorageMongoTest {
+
+    private static final URI SOURCE = URI.create("urn:occurrent:unconditional-checkpoint-storage");
+
+    @Container
+    static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
+
+    @Test
+    void starts_the_application_pins_the_first_checkpoint_of_a_default_subscription_and_the_subscription_gets_what_is_written_once_started() {
+        ConfigurableApplicationContext[] started = new ConfigurableApplicationContext[1];
+        Throwable thrown = catchThrowable(() -> started[0] = SpringApplication.run(new Class<?>[]{UnconditionalStorageConfiguration.class, UnconditionalStorageApplication.class}, new String[]{
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("unconditional-checkpoint-storage"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.subscription.competing-consumer.fence-checkpoints=false",
+                "--occurrent.subscription.start-when-first-position-can-be-overwritten=true",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE}));
+        assertThat(thrown).as("what starting the application threw").isNull();
+
+        try (ConfigurableApplicationContext context = started[0]) {
+            UnconditionalCheckpointStorage storage = context.getBean(UnconditionalCheckpointStorage.class);
+            assertThat(storage.checkpoints).as("checkpoints stored once the application started").containsKey("defaultReceiver");
+
+            applicationServiceOf(context).execute(UUID.randomUUID().toString(), __ -> List.of(new Written("written-once-started")));
+
+            DefaultReceiver receiver = context.getBean(DefaultReceiver.class);
+            try {
+                await().atMost(ofSeconds(15)).pollInterval(ofMillis(100)).until(() -> !receiver.received.isEmpty());
+            } catch (ConditionTimeoutException ignored) {
+                // reported by the assertion that follows
+            }
+            assertThat(receiver.received).extracting(TestEvent::name).containsExactly("written-once-started");
+        }
+    }
+
+    @Test
+    void the_durable_model_the_starter_builds_accepts_a_first_position_written_unconditionally_when_the_property_is_set() {
+        ConfigurableApplicationContext[] started = new ConfigurableApplicationContext[1];
+        Throwable startupFailure = catchThrowable(() -> started[0] = SpringApplication.run(new Class<?>[]{UnconditionalStorageConfiguration.class, UnconditionalStorageApplication.class}, new String[]{
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("unconditional-checkpoint-storage-direct"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.subscription.competing-consumer.fence-checkpoints=false",
+                "--occurrent.subscription.start-when-first-position-can-be-overwritten=true",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE}));
+        assertThat(startupFailure).as("what starting the application threw").isNull();
+
+        try (ConfigurableApplicationContext context = started[0]) {
+            UnconditionalCheckpointStorage storage = context.getBean(UnconditionalCheckpointStorage.class);
+            CompetingConsumerSubscriptionModel model = context.getBean(CompetingConsumerSubscriptionModel.class);
+
+            // Directly on the model rather than through @Subscription, so nothing but the model's own config decides
+            Throwable thrown = catchThrowable(() -> model.subscribe("subscribedDirectly", null, StartAt.subscriptionModelDefault(), __ -> {
+            }).waitUntilStarted(ofSeconds(15)));
+
+            assertThat(thrown).as("what subscribing a default start with nothing stored threw").isNull();
+            assertThat(storage.checkpoints).as("checkpoints stored").containsKey("subscribedDirectly");
+        }
+    }
+
+    @Test
+    void the_durable_model_the_starter_builds_refuses_a_first_position_written_unconditionally_when_the_property_is_unset() {
+        ConfigurableApplicationContext[] started = new ConfigurableApplicationContext[1];
+        Throwable startupFailure = catchThrowable(() -> started[0] = SpringApplication.run(new Class<?>[]{UnconditionalStorageConfiguration.class, ApplicationWithoutDefaultSubscription.class}, new String[]{
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("unconditional-checkpoint-storage-refused"),
+                "--spring.main.web-application-type=none",
+                "--occurrent.event-store.capabilities=stream",
+                "--occurrent.subscription.competing-consumer.fence-checkpoints=false",
+                "--occurrent.cloud-event-converter.cloud-event-source=" + SOURCE}));
+        assertThat(startupFailure).as("what starting the application threw").isNull();
+
+        try (ConfigurableApplicationContext context = started[0]) {
+            UnconditionalCheckpointStorage storage = context.getBean(UnconditionalCheckpointStorage.class);
+            CompetingConsumerSubscriptionModel model = context.getBean(CompetingConsumerSubscriptionModel.class);
+
+            Throwable thrown = catchThrowable(() -> model.subscribe("subscribedDirectly", null, StartAt.subscriptionModelDefault(), __ -> {
+            }).waitUntilStarted(ofSeconds(15)));
+
+            assertThat(thrown).as("what subscribing a default start with nothing stored threw").isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("start-when-first-position-can-be-overwritten");
+            assertThat(storage.checkpoints).as("checkpoints stored").isEmpty();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ApplicationService<TestEvent> applicationServiceOf(ConfigurableApplicationContext context) {
+        return context.getBean(ApplicationService.class);
+    }
+
+    // The 0.33.0 migration guide's stub over an existing unconditional two-argument save
+    static class UnconditionalCheckpointStorage implements CheckpointStorage {
+        final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            return checkpoints.get(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+            checkpoints.put(subscriptionId, checkpoint);
+            return checkpoint;
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+            }
+            return save(subscriptionId, checkpoint);
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return OptionalLong.empty();
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            checkpoints.remove(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return checkpoints.containsKey(subscriptionId);
+        }
+    }
+
+    static class DefaultReceiver {
+        final List<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        @Subscription(id = "defaultReceiver", startAt = StartPosition.DEFAULT)
+        void on(Written event) {
+            received.add(event);
+        }
+    }
+
+    // Registered ahead of the application, since @EnableOccurrent imports the starter's configuration and its
+    // checkpoint storage only steps aside for a bean defined before it
+    @Configuration(proxyBeanMethods = false)
+    static class UnconditionalStorageConfiguration {
+
+        @Bean
+        UnconditionalCheckpointStorage unconditionalCheckpointStorage() {
+            return new UnconditionalCheckpointStorage();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrent
+    static class UnconditionalStorageApplication {
+
+        @Bean
+        CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), SOURCE)
+                    .typeMapper(typeMapper)
+                    .idMapper(TestEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
+        }
+
+        @Bean
+        DefaultReceiver defaultReceiver() {
+            return new DefaultReceiver();
+        }
+    }
+
+    // The same application, without a subscription at DEFAULT that would be refused at startup
+    @Configuration(proxyBeanMethods = false)
+    @EnableAutoConfiguration
+    @EnableOccurrent
+    static class ApplicationWithoutDefaultSubscription {
+
+        @Bean
+        CloudEventTypeMapper<TestEvent> testEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), SOURCE)
+                    .typeMapper(typeMapper)
+                    .idMapper(TestEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
+        }
+    }
+
+    sealed interface TestEvent {
+        String eventId();
+
+        Date timestamp();
+
+        String name();
+    }
+
+    record Written(String eventId, Date timestamp, String name) implements TestEvent {
+        Written(String name) {
+            this(UUID.randomUUID().toString(), new Date(), name);
+        }
+    }
+}

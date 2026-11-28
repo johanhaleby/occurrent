@@ -15,6 +15,10 @@
  */
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.dsl.saga.internal.SagaEnvelopes;
+import org.occurrent.dsl.saga.codec.SagaCodec;
+import org.occurrent.dsl.saga.codec.SagaStateCodec;
+import org.occurrent.dsl.saga.codec.StoredSaga;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -113,18 +117,18 @@ class SagaTimerFailedAttemptMarkerTest {
 
         poll(new CountingStore(backing));
 
-        assertThat(backing.find("s1").orElseThrow().timers())
+        assertThat(SagaEnvelopes.of(backing, null).find("s1").orElseThrow().timers())
                 .containsExactly(new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL), new TimerEntry(OTHER_TIMER, OTHER_FIRES_AT));
     }
 
     @Test
     void keeps_the_version_and_leaves_updatedAt_and_the_state_alone() {
         seed("s1", List.of(new TimerEntry(TIMER, FIRES_AT)));
-        SagaEnvelope<String> before = backing.find("s1").orElseThrow();
+        SagaEnvelope<String> before = SagaEnvelopes.of(backing, null).find("s1").orElseThrow();
 
         poll(new CountingStore(backing));
 
-        SagaEnvelope<String> after = backing.find("s1").orElseThrow();
+        SagaEnvelope<String> after = SagaEnvelopes.of(backing, null).find("s1").orElseThrow();
         assertAll(
                 () -> assertThat(after.version()).isEqualTo(before.version()),
                 () -> assertThat(after.updatedAt()).isEqualTo(before.updatedAt()),
@@ -140,8 +144,8 @@ class SagaTimerFailedAttemptMarkerTest {
         poll(new CountingStore(backing));
 
         assertAll(
-                () -> assertThat(backing.findWithDueTimers(POLL, 10)).isEmpty(),
-                () -> assertThat(backing.findWithDueTimers(POLL.plusMillis(1), 10)).extracting(SagaEnvelope::sagaId).containsExactly("s1")
+                () -> assertThat(SagaEnvelopes.of(backing, null).findWithDueTimers(POLL, 10)).isEmpty(),
+                () -> assertThat(SagaEnvelopes.of(backing, null).findWithDueTimers(POLL.plusMillis(1), 10)).extracting(SagaEnvelope::sagaId).containsExactly("s1")
         );
     }
 
@@ -152,7 +156,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         poll(store);
 
-        SagaEnvelope<String> after = backing.find("s1").orElseThrow();
+        SagaEnvelope<String> after = SagaEnvelopes.of(backing, null).find("s1").orElseThrow();
         assertAll(
                 () -> assertThat(store.markerWrites.get()).as("write attempts").isEqualTo(3),
                 () -> assertThat(after.timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL)),
@@ -170,7 +174,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(store.markerWrites.get()).as("write attempts").isEqualTo(MAX_CAS_ATTEMPTS),
-                () -> assertThat(backing.find("s1").orElseThrow().timers()).as("no marker was written").containsExactly(new TimerEntry(TIMER, FIRES_AT)),
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("s1").orElseThrow().timers()).as("no marker was written").containsExactly(new TimerEntry(TIMER, FIRES_AT)),
                 () -> assertThat(markerWarnings()).hasSize(1),
                 () -> assertThat(markerWarnings().get(0)).contains("s1", "'expiry'", "3 attempts", "kept changing").doesNotContain("refuses")
         );
@@ -189,7 +193,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(store.markerWrites.get()).isZero(),
-                () -> assertThat(backing.find("s1").orElseThrow().timers()).isEmpty(),
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("s1").orElseThrow().timers()).isEmpty(),
                 () -> assertThat(markerWarnings()).isEmpty()
         );
     }
@@ -208,7 +212,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(store.markerWrites.get()).isZero(),
-                () -> assertThat(backing.find("s1").orElseThrow().timers()).containsExactly(reArmed)
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("s1").orElseThrow().timers()).containsExactly(reArmed)
         );
     }
 
@@ -216,9 +220,9 @@ class SagaTimerFailedAttemptMarkerTest {
     void is_not_written_when_the_instance_completed_while_the_timer_was_firing() {
         seed("s1", List.of(new TimerEntry(TIMER, FIRES_AT)));
         onReaction = sagaId -> {
-            SagaEnvelope<String> current = backing.find(sagaId).orElseThrow();
-            backing.compareAndSave(sagaId, new SagaEnvelope<>(sagaId, "cancelled", SagaStatus.COMPLETED, current.version() + 1,
-                    current.timers(), Map.of(), null, CREATED_AND_UPDATED, CREATED_AND_UPDATED, CREATED_AND_UPDATED, null), current.version());
+            SagaEnvelope<String> current = SagaEnvelopes.of(backing, null).find(sagaId).orElseThrow();
+            SagaEnvelopes.of(backing, null).compareAndSave(sagaId, new SagaEnvelope<>(sagaId, "cancelled", SagaStatus.COMPLETED, current.version() + 1,
+                    current.timers(), Map.of(), null, CREATED_AND_UPDATED, CREATED_AND_UPDATED, CREATED_AND_UPDATED, null, true, null, Map.of(), null), current.version());
             throw new IllegalStateException("fails after a concurrent completion");
         };
         CountingStore store = new CountingStore(backing);
@@ -227,7 +231,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(store.markerWrites.get()).isZero(),
-                () -> assertThat(backing.find("s1").orElseThrow().timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT))
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("s1").orElseThrow().timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT))
         );
     }
 
@@ -247,9 +251,9 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(dispatched).as("the healthy instance behind it still fired").containsExactly(new CancelOrder("c-healthy")),
-                () -> assertThat(backing.find("b-failing").orElseThrow().timers())
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("b-failing").orElseThrow().timers())
                         .as("the next failing instance was still marked").containsExactly(new TimerEntry(TIMER, FIRES_AT, MARKED_UNTIL)),
-                () -> assertThat(backing.find("a-unlucky").orElseThrow().timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT)),
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("a-unlucky").orElseThrow().timers()).containsExactly(new TimerEntry(TIMER, FIRES_AT)),
                 () -> assertThat(markerWarnings()).hasSize(1),
                 () -> assertThat(markerWarnings().get(0)).contains("a-unlucky", "state store failed")
         );
@@ -269,7 +273,7 @@ class SagaTimerFailedAttemptMarkerTest {
         execution(store, () -> POLL).pollTimers();
         execution(store, () -> POLL.plusMillis(1)).pollTimers();
 
-        SagaEnvelope<String> after = backing.find("s1").orElseThrow();
+        SagaEnvelope<String> after = SagaEnvelopes.of(backing, null).find("s1").orElseThrow();
         assertAll(
                 () -> assertThat(dispatched).containsExactly(new CancelOrder("s1")),
                 () -> assertThat(after.timers()).isEmpty()
@@ -287,7 +291,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(dispatched).as("only the timer that is due fired").containsExactly(new CancelOrder("s1/reminder")),
-                () -> assertThat(backing.find("s1").orElseThrow().timers()).containsExactly(waitingOutItsMarker)
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("s1").orElseThrow().timers()).containsExactly(waitingOutItsMarker)
         );
     }
 
@@ -303,7 +307,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(dispatched).isEmpty(),
-                () -> assertThat(backing.find("s1").orElseThrow().timers()).containsExactly(markedMeanwhile)
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("s1").orElseThrow().timers()).containsExactly(markedMeanwhile)
         );
     }
 
@@ -319,7 +323,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertThatCode(() -> execution.onCloudEvent(streamKeyed(1, new OrderNoted("s1")))).doesNotThrowAnyException();
 
-        SagaEnvelope<String> after = backing.find("s1").orElseThrow();
+        SagaEnvelope<String> after = SagaEnvelopes.of(backing, null).find("s1").orElseThrow();
         assertAll(
                 () -> assertThat(dispatched).as("the event's command, once").containsExactly(new CancelOrder("noted-s1")),
                 () -> assertThat(after.state()).isEqualTo("noted"),
@@ -348,7 +352,7 @@ class SagaTimerFailedAttemptMarkerTest {
 
         assertAll(
                 () -> assertThat(dispatched).as("the healthy instance fired").containsExactly(new CancelOrder("b-healthy")),
-                () -> assertThat(backing.find("a-failing").orElseThrow().timers()).as("never marked").containsExactly(new TimerEntry(TIMER, FIRES_AT)),
+                () -> assertThat(SagaEnvelopes.of(backing, null).find("a-failing").orElseThrow().timers()).as("never marked").containsExactly(new TimerEntry(TIMER, FIRES_AT)),
                 () -> assertThat(failures.get()).as("tried again by the later poll").isEqualTo(2),
                 () -> assertThat(markerWarnings()).as("one per poll, none fatal").hasSize(2),
                 () -> assertThat(store.markerWrites.get()).as("one refused write per failed fire, not maxCasAttempts").isEqualTo(2),
@@ -362,14 +366,14 @@ class SagaTimerFailedAttemptMarkerTest {
     }
 
     private void seed(String sagaId, List<TimerEntry> timers) {
-        backing.compareAndSave(sagaId, new SagaEnvelope<>(sagaId, "waiting", SagaStatus.ACTIVE, 1, timers,
-                Map.of(), null, CREATED_AND_UPDATED, CREATED_AND_UPDATED, null, null), 0);
+        SagaEnvelopes.of(backing, null).compareAndSave(sagaId, new SagaEnvelope<>(sagaId, "waiting", SagaStatus.ACTIVE, 1, timers,
+                Map.of(), null, CREATED_AND_UPDATED, CREATED_AND_UPDATED, null, null, true, null, Map.of(), null), 0);
     }
 
     private void replaceTimers(String sagaId, List<TimerEntry> timers) {
-        SagaEnvelope<String> current = backing.find(sagaId).orElseThrow();
-        backing.compareAndSave(sagaId, new SagaEnvelope<>(sagaId, current.state(), current.status(), current.version() + 1, timers,
-                Map.of(), null, current.createdAt(), current.updatedAt(), null, null), current.version());
+        SagaEnvelope<String> current = SagaEnvelopes.of(backing, null).find(sagaId).orElseThrow();
+        SagaEnvelopes.of(backing, null).compareAndSave(sagaId, new SagaEnvelope<>(sagaId, current.state(), current.status(), current.version() + 1, timers,
+                Map.of(), null, current.createdAt(), current.updatedAt(), null, null, true, null, Map.of(), null), current.version());
     }
 
     private CloudEvent streamKeyed(long streamVersion, OrderEvent event) {
@@ -404,7 +408,7 @@ class SagaTimerFailedAttemptMarkerTest {
         return new SagaExecution<>("saga-timer-marker", saga, store, command -> {
             onDispatch.run();
             dispatched.add(command);
-        }, converter, config, event -> true, clock);
+        }, converter, config, clock);
     }
 
     /** Delegates to a real store and counts the without-state writes, which only the marker write uses. Can lose or fail them on demand. */
@@ -441,38 +445,49 @@ class SagaTimerFailedAttemptMarkerTest {
         }
 
         @Override
-        public Optional<SagaEnvelope<String>> find(String sagaId) {
+        public SagaStateCodec<String> stateCodec() {
+            return delegate.stateCodec();
+        }
+
+        @Override
+        public Optional<StoredSaga> find(String sagaId) {
             return delegate.find(sagaId);
         }
 
         @Override
-        public boolean compareAndSave(String sagaId, SagaEnvelope<String> envelope, long expectedVersion) {
-            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        public Optional<StoredSaga> findWithoutState(String sagaId) {
+            return delegate.findWithoutState(sagaId);
         }
 
         @Override
-        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<String> envelope, long expectedVersion) {
+        public boolean compareAndSave(StoredSaga saga, long expectedVersion) {
+            return delegate.compareAndSave(saga, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(StoredSaga saga, long expectedVersion) {
             markerWrites.incrementAndGet();
-            if (sagaId.equals(failingFor)) {
+            if (saga.sagaId().equals(failingFor)) {
                 throw new IllegalStateException("the store is down");
             }
-            if (refusingSameVersion && envelope.version() == expectedVersion) {
+            if (refusingSameVersion && saga.version() == expectedVersion) {
                 return false;
             }
             if (toLose > 0) {
                 toLose--;
-                SagaEnvelope<String> current = delegate.find(sagaId).orElseThrow();
-                SagaEnvelope<String> bumped = new SagaEnvelope<>(sagaId, current.state(), current.status(), current.version() + 1, current.timers(),
-                        current.streamWatermarks(), null, current.createdAt(), current.updatedAt(), current.completedAt(), current.currentStep());
-                delegate.compareAndSave(sagaId, bumped, current.version());
+                SagaCodec<String> codec = SagaCodec.of(delegate.stateCodec(), null);
+                SagaEnvelope<String> current = codec.decode(delegate.find(saga.sagaId()).orElseThrow());
+                SagaEnvelope<String> bumped = new SagaEnvelope<>(saga.sagaId(), current.state(), current.status(), current.version() + 1, current.timers(),
+                        current.streamWatermarks(), null, current.createdAt(), current.updatedAt(), current.completedAt(), current.currentStep(), true, null, Map.of(), null);
+                delegate.compareAndSave(codec.encode(bumped), current.version());
                 return false;
             }
-            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+            return delegate.compareAndSaveWithoutState(saga, expectedVersion);
         }
 
         @Override
-        public List<SagaEnvelope<String>> findWithDueTimers(Instant now, int limit) {
-            List<SagaEnvelope<String>> due = delegate.findWithDueTimers(now, limit);
+        public List<StoredSaga> findWithDueTimers(Instant now, int limit) {
+            List<StoredSaga> due = delegate.findWithDueTimers(now, limit);
             if (afterDueTimerRead != null) {
                 afterDueTimerRead.run();
             }

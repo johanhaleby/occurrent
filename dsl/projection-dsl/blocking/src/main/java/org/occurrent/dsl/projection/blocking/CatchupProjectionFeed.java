@@ -54,6 +54,13 @@ import java.util.stream.Stream;
  * filter changes a new id. Under the old id the stored marker skips the replay, and the new filter never sees the
  * history. Any checkpoint stored under the id counts as the marker, a durable subscription's for example, so do not
  * give a durable subscription and this feed the same id in the same storage.
+ * Under a new id the subscription starts from the beginning of the history and repeats everything its handler does, the
+ * records it writes, the commands it dispatches and the messages it sends. Stop every instance on the old id before the
+ * first one on the new id starts. Stopping them doesn't prevent the repeats. With more than one instance, what else a
+ * new id needs depends on where each instance keeps what it builds and which broker queue or consumer group it
+ * consumes, as
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+ * upgrade guide</a> describes.
  * <p>
  * A replayed event has a CloudEvent behind it, so the replay always folds with real {@link EventMetadata}. A live event
  * does not, so metadata on the live path is something the source supplies. Use {@link #acceptAndWait(EventMetadata, Object)}
@@ -65,7 +72,8 @@ import java.util.stream.Stream;
  * {@link #acceptAndWait(Object)} returns). No live position watermark is kept, so delivery is at-least-once and the fold
  * must be idempotent. The de-dup cache and the live buffer are bounded. The buffer fails loud on overflow.
  * {@link #acceptAndWait(Object)} returns only once the event has been folded, during the catch-up as well as after it.
- * An event fed before the feed goes live waits in the buffer, and the call waits with it until the drain folds it. A
+ * An event fed during the replay waits in the buffer, and the call waits with it until the drain folds it. One fed
+ * while the drain runs waits for the drain to take the feed live, and is then folded on the calling thread. A
  * catch-up stopped before the feed went live, a failed catch-up or an interrupt throws instead, so the listener never
  * acknowledges an event that is only held in memory. A replay stopped after a {@link #goLive()} drains the buffer
  * instead, and the call returns normally.
@@ -183,7 +191,9 @@ public final class CatchupProjectionFeed<E> {
      * Feed a live domain event and return once it has been folded. Call this from the broker listener, acknowledging
      * the message only once it returns. Once the feed is live the event is folded on the calling thread. Before the
      * feed goes live, and while a catch-up runs on a feed that already went live, the event waits in the buffer and
-     * this call waits with it until the drain after the replay folds it.
+     * this call waits with it until the drain after the replay folds it. A call that comes while that drain runs
+     * waits for the drain to end instead, and then folds the event on the calling thread when the drain took the feed
+     * live, or throws as described below when the catch-up was stopped or failed.
      * <p>
      * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
      * {@code max.poll.interval.ms}, five minutes by default, is taken out of its group and the record is delivered
@@ -194,12 +204,18 @@ public final class CatchupProjectionFeed<E> {
      * @param event The domain event received from the external source.
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
      *                               went live, the catch-up failed, the waiting thread was interrupted, the live
-     *                               buffer is full, or another delivery of the same event was still running. The
+     *                               buffer is full, another delivery of the same event was still running, or the
+     *                               replay had folded the event already and the view's
+     *                               {@code ReplayAware.alreadyDeliveredByReplay(..)} threw for it. The
      *                               listener must not acknowledge it, and has the broker deliver it again, as
      *                               {@link RoutingOutcome.Disposition#HOLD} describes. Also thrown when this is called
      *                               while the feed is not live from inside the feed's own folds or callbacks, the
      *                               projection's or a view's included, since the wait could only end once that same
-     *                               thread moved on.
+     *                               thread moved on. It is thrown too for a call from inside the projection, view or
+     *                               handler of another blocking catch-up feed or subscription, since a catch-up of
+     *                               that one can be waiting for the calling thread, and two of them feeding each
+     *                               other would wait for each other. The feed is not live yet while it folds the
+     *                               events it held during the replay.
      */
     public void acceptAndWait(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -233,7 +249,8 @@ public final class CatchupProjectionFeed<E> {
      * {@link RoutingOutcome.Disposition#HOLD} describes.
      * <p>
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
-     * feed live, while a replay runs, after {@link #stopCatchUp()} stopped a replay before the feed went live, and while
+     * feed live, while a replay runs, while the events held during it are folded, after {@link #stopCatchUp()} stopped a
+     * replay before the feed went live, and while
      * another delivery of the same event is still being folded. {@link RoutingOutcome#DELIVERED} also covers an event
      * the replay or an earlier delivery already folded, which is not folded again while its id is among the latest
      * {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed remembers. An event older than that is folded a
@@ -311,11 +328,14 @@ public final class CatchupProjectionFeed<E> {
 
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
-     * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
+     * the buffered live events and go live. Skipped if the catch-up marker already records completion, and then the
+     * call waits as {@link #goLive()} describes. Call this once,
      * after wiring the live feed, so events arriving during the replay are captured.
      * <p>
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
-     * {@link #stopCatchUp()} to bring it back down.
+     * {@link #stopCatchUp()} to bring it back down. Before it replays, it waits for every event this feed is still
+     * applying to the view and for a catch-up already running, so don't call it while holding a lock that the view takes, as
+     * {@link #goLive()} describes.
      * <p>
      * A catch-up whose failure reaches this feed on an interrupted thread throws that failure but is not recorded as a
      * failed catch-up, since a store client can fail its reads once the thread is interrupted, the MongoDB driver
@@ -428,12 +448,24 @@ public final class CatchupProjectionFeed<E> {
      * events are not in the local event store, so there is nothing to replay. No completion marker is written, since
      * nothing was replayed, so a later {@link #catchUp()} still replays the full history.
      * <p>
-     * A call while {@link #catchUp()} is still replaying returns only once that replay has ended. When a catch-up on
+     * A call while {@link #catchUp()} is still replaying, or while this feed delivers the events it held or writes its
+     * marker, returns only once that catch-up has ended and this feed is live, unless another replay has started
+     * since. When a catch-up on
      * this feed failed while it waited, it throws an {@link IllegalStateException} whose cause is a catch-up failure
      * recorded while it waited. An interrupt ends the wait early and stays on the thread. A call the view makes while
      * this feed is calling it, from its fold or from a callback such as {@code replayStarted()}, returns without
      * waiting for the replay, since that replay cannot end before the call returns. During a replay, a call the view
      * hands to another thread waits for that replay, which cannot end while the view waits for the call.
+     * <p>
+     * Don't make the call while holding a lock that the view takes. The call waits for this feed to apply an event to
+     * the view, and applying it waits for the lock, so neither returns. Release the lock before the call, or make the
+     * call from another thread without waiting for it while you hold the lock.
+     * <p>
+     * A call from inside the fold, view or handler of another blocking feed or catch-up subscription that comes while
+     * the replay runs waits until that catch-up has ended, as above. One that comes after the replay has ended, while
+     * this feed delivers the events it held or writes its marker, returns without waiting, and this feed goes live
+     * once the delivery ends. So {@link #acceptOrDefer(Object)} can still return {@link RoutingOutcome#DEFERRED} right
+     * after it, and a failure of that catch-up is not thrown to it.
      * <p>
      * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. A redelivery
      * of an event this feed already delivered to the view is skipped only while its id is among the latest
@@ -465,13 +497,14 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * It stops a catch-up asked for before it, whether its replay has started or not, and none asked for after it,
      * also when the view asks for one while the replay it stops is still running. The replay looks for a stop before
-     * each event and once more after the last one, also when the history is empty. A stop after that last look is not
-     * noticed, for example one that comes while a view that buffers during a replay writes that buffer in
-     * {@code replayCompleted()}. Neither is a stop before a catch-up that finds the marker already written, since that
-     * catch-up replays nothing. A catch-up that misses the stop goes live.
+     * each event and once more after the last one, also when the history is empty. The feed then looks again before
+     * each live event it held during the replay and once more right before it goes live, so a stop that comes while a
+     * view that buffers during a replay writes that buffer in {@code replayCompleted()} is noticed too. A stop after
+     * that last look is not noticed, and neither is a stop before a catch-up that finds the marker already written,
+     * since that catch-up replays nothing. A catch-up that misses the stop goes live.
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay
-     * started. One that had not gone live drains nothing and does not go live, and {@link #acceptAndWait(Object)} throws both
+     * started. One that had not gone live delivers no more of what it held and does not go live, and {@link #acceptAndWait(Object)} throws both
      * for an event waiting on the replay and for one fed after the stop, so the listener has the broker deliver them
      * again, as {@link RoutingOutcome.Disposition#HOLD} describes. One
      * replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since

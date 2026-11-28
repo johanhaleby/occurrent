@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
+import org.springframework.beans.factory.config.NamedBeanHolder;
 import org.springframework.context.ApplicationContext;
 
 import java.util.LinkedHashMap;
@@ -48,6 +49,17 @@ public final class PositionOrderedEventStores {
      *                               {@code @Primary}, rather than picking one in registration order.
      */
     public static @Nullable PositionOrderedReader find(ApplicationContext applicationContext) {
+        @Nullable String name = findName(applicationContext);
+        return name == null ? null : (PositionOrderedReader) applicationContext.getBean(name);
+    }
+
+    /**
+     * The bean name of the event store {@link #find(ApplicationContext)} returns, or {@code null} when it returns none.
+     *
+     * @throws IllegalStateException when several event stores can be read in position order and none is
+     *                               {@code @Primary}, rather than picking one in registration order.
+     */
+    public static @Nullable String findName(ApplicationContext applicationContext) {
         // Narrowed by bean name first so that only an event store is ever instantiated, and never some unrelated
         // PositionOrderedReader. The reader test is on the instance, because a bean declared as EventStore hides
         // whether the implementation behind it also reads in position order.
@@ -61,12 +73,13 @@ public final class PositionOrderedEventStores {
             return null;
         }
         if (candidates.size() == 1) {
-            return candidates.values().iterator().next();
+            return candidates.keySet().iterator().next();
         }
         // Several: let the container apply its own @Primary resolution before giving up, so an application that has
         // deliberately marked one store as primary keeps working.
         try {
-            return applicationContext.getBean(EventStore.class) instanceof PositionOrderedReader reader ? reader : null;
+            NamedBeanHolder<EventStore> primary = applicationContext.getAutowireCapableBeanFactory().resolveNamedBean(EventStore.class);
+            return primary.getBeanInstance() instanceof PositionOrderedReader ? primary.getBeanName() : null;
         } catch (NoUniqueBeanDefinitionException e) {
             throw new IllegalStateException(("Found %d event store beans that can be read in position order (%s) and cannot pick one to replay history from. " +
                     "Declare a single reactive EventStore bean, or mark one @Primary.").formatted(candidates.size(), String.join(", ", candidates.keySet())), e);

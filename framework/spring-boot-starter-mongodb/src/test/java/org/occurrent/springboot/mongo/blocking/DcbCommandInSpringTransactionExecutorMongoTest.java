@@ -88,6 +88,12 @@ class DcbCommandInSpringTransactionExecutorMongoTest {
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     private static final SynchronousEventDispatcher DISPATCHER = new SynchronousEventDispatcher() {
+
+        @Override
+        public WriteCheck beforeWrite() {
+            return WriteCheck.NONE;
+        }
+
         @Override
         public void dispatch(List<CloudEvent> written, boolean transactional) {
         }

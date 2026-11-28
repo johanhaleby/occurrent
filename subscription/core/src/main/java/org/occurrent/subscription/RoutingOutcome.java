@@ -80,9 +80,10 @@ public enum RoutingOutcome {
      * next one, and a filter that fails on every event needs an operator rather than a redelivery.
      * <p>
      * Also reported for a registered action that refused the event before attempting dispatch without promising the
-     * refusal is permanent, a catch-up-then-live engine whose live buffer is full while its replay is still
+     * refusal is permanent, a reactor catch-up-then-live engine whose live buffer is full while its replay is still
      * running, say. That refusal clears on its own once the replay drains, so it is a failure to report rather than
-     * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead. A push
+     * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead, as a blocking
+     * catch-up-then-live engine does for a full live buffer, since its catch-up then fails. A push
      * model's {@code acceptOrDefer(..)} returns this refusal without throwing its cause.
      * <p>
      * On the reactor stack a catch-up-then-live engine also reports this outcome after its handler has run, when it
@@ -124,7 +125,20 @@ public enum RoutingOutcome {
      * <p>
      * Offering the same event to the same registration again gets the same answer, so a caller stops rather than
      * parking, discarding or redelivering. Recovery is a lifecycle action, cancelling the subscription and
-     * subscribing again, or building a new projection feed. A refusal that can clear on its own reports
+     * subscribing again, or building a new projection feed. With more than one instance running it, recovery stops
+     * every instance instead, deletes the catch-up marker the checkpoint storage keeps under its id, if it keeps one,
+     * starts one instance again with the same start, and starts the others once it has stored the marker, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the upgrade guide</a>
+     * describes. On the reactor stack the refusal can also come from a catch-up that found a checkpoint under the id
+     * that is not a catch-up marker, such as a durable subscription's, and the error the catch-up logs says so. A
+     * cancel deletes that checkpoint too, so cancel or delete it only when nothing else uses it, and otherwise replace
+     * the subscription with one under a new id. Under a new id the subscription starts from the beginning of the
+     * history and repeats everything its handler does, the records it writes, the commands it dispatches and the
+     * messages it sends. Stop every instance on the old id before the first one on the new id starts. Stopping them
+     * doesn't prevent the repeats. With more than one instance, what else a new id needs depends on where each
+     * instance keeps what it builds and which broker queue or consumer group it consumes, as
+     * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md#changing-a-checkpoint-or-marker-that-several-instances-share">the
+     * upgrade guide</a> describes. A refusal that can clear on its own reports
      * {@link #NOT_DELIVERABLE} instead, so this outcome alone is enough to decide on.
      * <p>
      * On the reactor stack a catch-up-then-live engine also reports this outcome after its handler has run, when it

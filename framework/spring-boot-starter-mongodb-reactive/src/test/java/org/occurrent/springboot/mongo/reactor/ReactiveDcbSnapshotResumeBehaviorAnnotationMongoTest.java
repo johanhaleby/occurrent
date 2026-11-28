@@ -168,13 +168,17 @@ class ReactiveDcbSnapshotResumeBehaviorAnnotationMongoTest {
         EventWriter eventWriter(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> converter,
                                 @Value("${test.before-subscribe}") String beforeSubscribe,
                                 @Value("${test.after-start}") String afterStart,
+                                @Value("${test.last-history}") String lastHistory,
                                 ObjectProvider<DcbSnapshotBeginningSameAsStartAt> replaying,
                                 ObjectProvider<ComposedCatchupModel> composedCatchupModel,
                                 ObjectProvider<FluxSubscriptionModel> subscriptionModel) {
             // The BEGINNING snapshot replays the history on every boot. An event written while that replay still runs
             // is delivered by the replay and by the live feed, so the marker is written once the replay is over.
             Runnable replayIsOver = () -> {
-                String lastHistory = List.of(beforeSubscribe.split(",")).getLast();
+                // The boot that writes the history has subscriptions off, so nothing replays and there is no model
+                if (subscriptionModel.getIfAvailable() == null) {
+                    return;
+                }
                 ReplayAwareSubscriptions replayAware = composedCatchupModel.getObject().catchupModelFor((SubscriptionModelCapability) subscriptionModel.getObject()).orElseThrow();
                 await().atMost(ofSeconds(30)).pollInterval(ofMillis(50)).untilAsserted(() -> {
                     assertThat(replaying.getObject().names()).contains(lastHistory);
