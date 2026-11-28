@@ -258,12 +258,12 @@ class DurableSubscriptionModelResumeAtPositionStoresTest {
 
         @Test
         void throws_CheckpointWriteConditionNotFulfilledException_when_the_storage_refuses_the_write() {
-            // Given a newer write version stored by another node, and a model that writes with an older one
-            InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-            storage.save(SUBSCRIPTION_ID, OLDER, CheckpointWriteCondition.notOlderThan(5));
+            // Given a model that writes with an older version than the one another node stores after it subscribed
+            InMemoryCheckpointStorage storage = storageHolding(OLDER);
             RepositionableFake wrapped = new RepositionableFake();
             DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, id -> OptionalLong.of(1));
             subscribeAndPause(model);
+            storage.save(SUBSCRIPTION_ID, OLDER, CheckpointWriteCondition.notOlderThan(5));
 
             // When
             Throwable thrown = catchThrowable(() -> repositionableIn(model).resumeSubscription(SUBSCRIPTION_ID, StartAt.checkpoint(NEWER)));

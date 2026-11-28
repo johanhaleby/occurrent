@@ -236,10 +236,11 @@ class DurableSubscriptionModelQuietPositionTest {
     @Test
     void a_refused_write_of_the_quiet_position_is_thrown_to_the_wrapped_model() throws InterruptedException {
         // Given
-        storage.save("id", START, CheckpointWriteCondition.notOlderThan(2));
+        storage.save("id", START);
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL), subscriptionId -> OptionalLong.of(1));
         model.subscribe("id", null, StartAt.subscriptionModelDefault(), __ -> {
         });
+        storage.save("id", START, CheckpointWriteCondition.notOlderThan(2));
         Thread.sleep(INTERVAL.toMillis() + 50);
 
         // When
@@ -287,12 +288,13 @@ class DurableSubscriptionModelQuietPositionTest {
         });
         subscribeFromTheStoredStart(model, storage, __ -> {
         });
+        int askedBySubscribe = asked.get();
         Thread.sleep(INTERVAL.toMillis() + 50);
 
         // When
         boolean whileFailing = wrapped.readNothing("id", QUIET);
         boolean rightAfterTheFailure = wrapped.readNothing("id", QUIET);
-        int askedWhileFailing = asked.get();
+        int askedWhileFailing = asked.get() - askedBySubscribe;
         failing.set(false);
         Thread.sleep(INTERVAL.toMillis() + 50);
         boolean afterTheInterval = wrapped.readNothing("id", QUIET);

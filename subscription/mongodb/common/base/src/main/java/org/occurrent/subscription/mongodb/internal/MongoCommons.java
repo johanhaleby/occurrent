@@ -55,6 +55,7 @@ import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static java.util.Arrays.asList;
 import static java.util.Objects.requireNonNull;
@@ -424,6 +425,152 @@ public class MongoCommons {
     public static Optional<Checkpoint> interpretFirstCheckpointRaceResolution(Document afterDocument) {
         if (!afterDocument.containsKey(OPERATION_TIME)) {
             return Optional.empty();
+        }
+        return Optional.of(calculateCheckpointFromMongoStreamPositionDocument(afterDocument));
+    }
+
+    /**
+     * The {@code $replaceWith} pipeline stage for a checkpoint storage's
+     * {@code resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion)}, one round trip like
+     * {@link #buildFirstCheckpointRaceResolution(Document)}.
+     * <p>
+     * Writes only when {@code notOlderThan(writeVersion)} allows it, and then always with {@code writeVersion}. It
+     * writes {@code candidateDocument} when nothing is stored. For a candidate with an {@link #OPERATION_TIME}, it also
+     * writes it when the stored operation time is later, and keeps a stored operation time otherwise. For any other
+     * candidate it keeps a stored checkpoint equal to {@code candidateDocument}, and a generic checkpoint an older
+     * Occurrent version stored in {@link #LEGACY_GENERIC_CHECKPOINT} counts as equal when it holds the value
+     * {@code candidateDocument} holds in {@link #GENERIC_CHECKPOINT}. Every other stored checkpoint can't be
+     * compared with {@code candidateDocument}, so the document is left as it is, and so is one with a newer stored
+     * version.
+     *
+     * @param candidateDocument The document {@link #generateCheckpointDocument(String, Checkpoint)} built for the
+     *                          candidate position
+     * @param writeVersion      The version to store with the checkpoint that governs
+     * @return The {@code $replaceWith} pipeline stage to run through {@code findOneAndUpdate}
+     */
+    public static Document buildFirstCheckpointRaceResolution(Document candidateDocument, long writeVersion) {
+        boolean ordered = candidateDocument.containsKey(OPERATION_TIME);
+        Document takeCandidate = ordered
+                ? new Document("$or", asList(
+                        ifAbsentIsAllowedExpr(),
+                        new Document("$and", asList(
+                                fieldExistsExpr(OPERATION_TIME),
+                                new Document("$gt", asList("$" + OPERATION_TIME, candidateDocument.get(OPERATION_TIME)))))))
+                : ifAbsentIsAllowedExpr();
+        Document keepStored = ordered ? fieldExistsExpr(OPERATION_TIME) : storedCheckpointIsExpr(candidateDocument);
+
+        Document candidateWithVersion = new Document("$mergeObjects", asList(
+                new Document("$literal", candidateDocument),
+                new Document(WRITE_VERSION, writeVersion)));
+        Document storedWithVersion = new Document("$cond", new Document(Map.of(
+                "if", keepStored,
+                "then", new Document("$mergeObjects", asList("$$ROOT", new Document(WRITE_VERSION, writeVersion))),
+                "else", "$$ROOT")));
+
+        Document written = new Document("$cond", new Document(Map.of(
+                "if", takeCandidate,
+                "then", candidateWithVersion,
+                "else", storedWithVersion)));
+
+        Document cond = new Document("$cond", new Document(Map.of(
+                "if", notOlderThanIsAllowedExpr(writeVersion),
+                "then", written,
+                "else", "$$ROOT")));
+
+        return new Document("$replaceWith", cond);
+    }
+
+    // True when every field a checkpoint is stored in holds what candidateDocument holds, and each one it lacks is
+    // missing from the stored document too. A generic checkpoint an older version stored in the legacy field is
+    // compared as if it were stored in the current one, the way calculateCheckpointFromMongoStreamPositionDocument
+    // reads it back, since candidateDocument never holds the legacy field
+    private static Document storedCheckpointIsExpr(Document candidateDocument) {
+        Stream<Document> generic = Stream.of(candidateDocument.containsKey(GENERIC_CHECKPOINT)
+                ? new Document("$eq", asList(storedGenericCheckpointExpr(), new Document("$literal", candidateDocument.get(GENERIC_CHECKPOINT))))
+                : new Document("$and", asList(fieldIsMissingExpr(GENERIC_CHECKPOINT), fieldIsMissingExpr(LEGACY_GENERIC_CHECKPOINT))));
+        Stream<Document> others = Stream.of(RESUME_TOKEN, OPERATION_TIME, CATCHUP_LIVE_FROM, CATCHUP_REPLAY_ORIGIN, CATCHUP_REPLAY_TO)
+                .map(field -> candidateDocument.containsKey(field)
+                        ? new Document("$eq", asList("$" + field, new Document("$literal", candidateDocument.get(field))))
+                        : fieldIsMissingExpr(field));
+        return new Document("$and", Stream.concat(generic, others).toList());
+    }
+
+    // The generic checkpoint stored, read from the legacy field only when the current one is missing, as
+    // calculateCheckpointFromMongoStreamPositionDocument reads it
+    private static Document storedGenericCheckpointExpr() {
+        return new Document("$cond", new Document(Map.of(
+                "if", fieldExistsExpr(GENERIC_CHECKPOINT),
+                "then", "$" + GENERIC_CHECKPOINT,
+                "else", "$" + LEGACY_GENERIC_CHECKPOINT)));
+    }
+
+    /**
+     * What {@code findOneAndUpdate} returned for {@link #buildFirstCheckpointRaceResolution(Document, long)} means.
+     * <p>
+     * A stored version newer than {@code writeVersion} refused the write, whatever kind of checkpoint is stored. A
+     * write stores exactly {@code writeVersion}. For a {@code candidate} with an operation time, a document with
+     * {@code writeVersion} and an {@link #OPERATION_TIME} is the checkpoint that governs. For any other
+     * {@code candidate}, a document with {@code writeVersion} that holds {@code candidate} is. Any other document is a
+     * stored checkpoint the pipeline left as it was.
+     *
+     * @param subscriptionId The id of the subscription the write was for
+     * @param candidate      The position the write offered
+     * @param afterDocument  The document {@code findOneAndUpdate} returned
+     * @param writeVersion   The version the write offered
+     * @return The checkpoint that now governs the subscription's first position, or empty when the pipeline wrote
+     * nothing because the stored checkpoint can't be compared with the candidate
+     * @throws CheckpointWriteConditionNotFulfilledException if a newer stored version refused the write
+     */
+    public static Optional<Checkpoint> interpretFirstCheckpointRaceResolution(String subscriptionId, Checkpoint candidate, Document afterDocument,
+                                                                             long writeVersion) {
+        OptionalLong storedVersion = extractWriteVersion(afterDocument);
+        if (storedVersion.isPresent() && storedVersion.getAsLong() > writeVersion) {
+            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, CheckpointWriteCondition.notOlderThan(writeVersion));
+        }
+        if (storedVersion.isEmpty() || storedVersion.getAsLong() != writeVersion) {
+            return Optional.empty();
+        }
+        if (candidate instanceof MongoOperationTimeCheckpoint) {
+            return afterDocument.containsKey(OPERATION_TIME)
+                    ? Optional.of(calculateCheckpointFromMongoStreamPositionDocument(afterDocument))
+                    : Optional.empty();
+        }
+        Checkpoint stored = calculateCheckpointFromMongoStreamPositionDocument(afterDocument);
+        return stored.asString().equals(candidate.asString()) ? Optional.of(stored) : Optional.empty();
+    }
+
+    /**
+     * Builds the {@code $replaceWith} stage that stores {@code writeVersion} with the checkpoint stored and leaves the
+     * checkpoint as it is. A stored version newer than {@code writeVersion} leaves the whole document as it is. Run
+     * it through {@code findOneAndUpdate} without upsert, so nothing is written when no checkpoint is stored.
+     *
+     * @param writeVersion The version to store with the checkpoint stored
+     * @return The {@code $replaceWith} pipeline stage to run through {@code findOneAndUpdate}
+     */
+    public static Document buildWriteVersionStamp(long writeVersion) {
+        Document cond = new Document("$cond", new Document(Map.of(
+                "if", notOlderThanIsAllowedExpr(writeVersion),
+                "then", new Document("$mergeObjects", asList("$$ROOT", new Document(WRITE_VERSION, writeVersion))),
+                "else", "$$ROOT")));
+        return new Document("$replaceWith", cond);
+    }
+
+    /**
+     * What {@code findOneAndUpdate} returned for {@link #buildWriteVersionStamp(long)} means.
+     *
+     * @param subscriptionId The id of the subscription the write was for
+     * @param afterDocument  The document {@code findOneAndUpdate} returned, {@code null} when no checkpoint is stored
+     * @param writeVersion   The version the write offered
+     * @return The checkpoint stored, now with {@code writeVersion}, or empty when no checkpoint is stored
+     * @throws CheckpointWriteConditionNotFulfilledException if a newer stored version refused the write
+     */
+    public static Optional<Checkpoint> interpretWriteVersionStamp(String subscriptionId, @Nullable Document afterDocument, long writeVersion) {
+        if (afterDocument == null) {
+            return Optional.empty();
+        }
+        OptionalLong storedVersion = extractWriteVersion(afterDocument);
+        if (storedVersion.isPresent() && storedVersion.getAsLong() > writeVersion) {
+            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, CheckpointWriteCondition.notOlderThan(writeVersion));
         }
         return Optional.of(calculateCheckpointFromMongoStreamPositionDocument(afterDocument));
     }

@@ -132,6 +132,10 @@ other sections compile fine and behave differently, so read them first.
 - [A first position a checkpoint storage can only write unconditionally is refused](#a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused).
   A `CheckpointStorage` of your own that answers `false` from `evaluatesWriteConditionsFor` fails a new subscription
   at the model default, where 0.34.0 wrote its first position unconditionally with a warning. Compiles unchanged.
+- [A durable subscription's first position is stored with the write version](#a-durable-subscriptions-first-position-is-stored-with-the-write-version).
+  A `CheckpointStorage` of your own gets the version stored with the first position in one write only once it
+  implements the three-argument `resolveFirstCheckpointRace`, and with a checkpoint already stored only once it
+  implements `storeWriteVersion`. Compiles unchanged.
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
@@ -503,7 +507,10 @@ A durable subscription that starts at the model default, with no checkpoint stor
 anything is delivered. `DurableSubscriptionModel` and `ReactorDurableSubscriptionModel` write it with
 `CheckpointWriteCondition.ifAbsent()`, so of two nodes recording one at the same moment, only one write is stored. Both
 models record one for a `StartAt.dynamic(..)` that answers `StartAt.subscriptionModelDefault()` too, and the Spring
-Boot starters store a live start as the first checkpoint the same way.
+Boot starters store a live start as the first checkpoint the same way. With a write version, `DurableSubscriptionModel`
+first asks the storage to store the position and the version in one write, as
+[A durable subscription's first position is stored with the write version](#a-durable-subscriptions-first-position-is-stored-with-the-write-version)
+describes.
 
 ### Who is affected
 
@@ -566,6 +573,74 @@ refusal. The MongoDB starters pass the property to the durable subscription mode
 that model needs. An application that defines its own `SubscriptionModel` bean gets no durable model from the starter,
 and the one it builds reads only its own config, so it needs the config method as well as the property. There is no OpenRewrite recipe for this. See
 [ADR 184](../architecture/decisions/0184-a-first-position-a-checkpoint-storage-can-only-write-unconditionally-is-refused.md).
+
+## A durable subscription's first position is stored with the write version
+
+### Who is affected
+
+An application whose `DurableSubscriptionModel` has a `CheckpointWriteVersionSource`, such as the
+`CompetingConsumerCheckpointWriteVersionSource` the Spring Boot starter uses for a competing consumer, and either
+records the first position of a subscription that starts at the model default with no checkpoint stored, or
+subscribes from a checkpoint already stored, such as the start position the Spring Boot starter stores for the
+subscription at registration. Compiles unchanged.
+
+### What changes
+
+In 0.34.0 that first position was written with `CheckpointWriteCondition.ifAbsent()` and no write version, so a node
+that had lost its lease could write over it until the new lease holder saved its next checkpoint. From 0.35.0 the
+model first calls the new `CheckpointStorage.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion)`,
+which stores the first position and the version in one write. `NativeMongoCheckpointStorage`,
+`SpringMongoCheckpointStorage`, `SpringRedisCheckpointStorage` and `InMemoryCheckpointStorage` implement it, so once
+every node runs 0.35.0, a first position stored with the newest version refuses the old lease holder's writes from
+then on.
+
+When two nodes record a first position at the same moment, what happens depends on what the other node stored:
+
+| Stored by the other node | 0.35.0 |
+| --- | --- |
+| A newer version than this node's | The call writes nothing, and `subscribe` throws `CheckpointWriteConditionNotFulfilledException`, since the node that stored that version holds a newer lease. Under `CompetingConsumerSubscriptionModel`, `subscribe` returns instead, and the subscription waits until this node gets the lease. 0.34.0 handled this like any other lost race, without looking at the version. |
+| The position this node read, with the same version, an older one or none | This node's version is stored with it, and the subscription starts from it. |
+| Another operation time on the MongoDB storages, with the same version, an older one or none | The earlier of the two positions is stored with this node's version, and the subscription starts from it. |
+| Any other checkpoint, with the same version, an older one or none | The call writes nothing, and `subscribe` throws `StartPositionAlreadyPinnedException`, as in 0.34.0. On the Redis and in-memory storages this is every other stored checkpoint. On the MongoDB storages it is one stored for a delivered event, a generic checkpoint, and a legacy one stored under `subscriptionPosition`. |
+
+When the MongoDB subscription models decide the start position after `subscribe` has returned,
+`CheckpointWriteConditionNotFulfilledException` is logged at `ERROR` there and not retried. Under
+`CompetingConsumerSubscriptionModel` the subscription is paused once the lease strategy reports that another node
+holds the lease, and this node competes for it again.
+
+During a rolling upgrade, a 0.34.0 node that has lost its lease settles a lost race without a version, so on the
+MongoDB storages it can replace a first position a 0.35.0 node stored with an earlier one, which delivers events
+again but skips none.
+
+A subscribe that starts from a checkpoint already stored now stores this node's version with it first, through the
+new `CheckpointStorage.storeWriteVersion(subscriptionId, writeVersion)`, and starts from the checkpoint the call
+answers. The same four storages implement it, and it leaves the stored checkpoint as it is, whatever checkpoint that
+is. When nothing is stored any more, because a cancel on another node deleted the checkpoint after the read, it writes
+nothing, and the subscription starts from the checkpoint read without a version, as in 0.34.0. So does an evaluation
+of the start position after a later `subscribe` of the same id stopped the checkpoint writes of the subscription. That
+covers the start position the Spring Boot starter stores at registration, which it writes
+without a version, and on the MongoDB storages a checkpoint an older Occurrent version stored under the legacy
+`subscriptionPosition` field. In 0.34.0 a node that had lost its lease could store the checkpoint of a later event
+over the position the new lease holder started from. When the new holder stopped before its first save, the next one resumed
+after the events in between and never delivered them. When the storage holds a newer version, `subscribe` throws
+`CheckpointWriteConditionNotFulfilledException`, and under `CompetingConsumerSubscriptionModel` it returns and the
+subscription waits for the lease, as for a first position above.
+
+### What to do
+
+If you catch `StartPositionAlreadyPinnedException` from `subscribe` to alert or to subscribe again, a lost race
+against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. So does a
+subscribe from a stored checkpoint whose version is newer than this node's. Under
+`CompetingConsumerSubscriptionModel` the new exception doesn't reach `subscribe`, since the subscription waits for the
+lease.
+
+A storage of your own that doesn't override the three-argument `resolveFirstCheckpointRace`, or answers it empty,
+gets the `ifAbsent()` write and no version, as in 0.34.0. Until the next checkpoint write stores the version, a node
+that had lost its lease can write over the first position, which delivers events again but skips none. To get the
+version stored with the first position in one write, override the three-argument `resolveFirstCheckpointRace` as its
+javadoc describes. One that doesn't override `storeWriteVersion` stores no version with a checkpoint already stored,
+and the subscription starts from that checkpoint as in 0.34.0. Override it as its javadoc describes to close that.
+There is no OpenRewrite recipe for this.
 
 ## A capability that acts on a subscription is not found past a wrapper
 

@@ -551,7 +551,7 @@ public final class ChangeStreamSubscriptions {
                 // the strategy pause a subscription the model no longer knows about. Logged at error level because
                 // the exception leaves the model right after this and the outer retry won't restart on it, so
                 // nothing else would say why the node went quiet.
-                log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
+                log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint or its write version, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, for a position reached while no event matched, or for this node's write version stored with the checkpoint the start position was read from.", subscriptionId, e.getMessage(), e);
                 throw e;
             } else if (e instanceof NoPositionAtThePresent noPosition && internalSubscription.presentAtSubscribe.gave(noPosition)) {
                 refuseStart(subscriptionId, internalSubscription, noPosition.refusalOf(subscriptionId, currentStartAt.get()));

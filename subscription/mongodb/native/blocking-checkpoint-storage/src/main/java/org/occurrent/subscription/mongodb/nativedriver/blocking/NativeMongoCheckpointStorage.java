@@ -170,6 +170,61 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     }
 
     /**
+     * Compares the way {@link #resolveFirstCheckpointRace(String, Checkpoint)} does, and stores {@code writeVersion}
+     * in the same {@code findOneAndUpdate}, see
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     * A {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} is stored when nothing is, and keeps a
+     * stored checkpoint equal to it, also one an older Occurrent version stored in the legacy
+     * {@code subscriptionPosition} field. Answers empty and writes nothing when any other resume token or generic
+     * checkpoint is stored, since it can't be compared with {@code candidate}.
+     *
+     * @throws IllegalArgumentException if {@code writeVersion} is negative
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        CheckpointWriteCondition.notOlderThan(writeVersion);
+        Document candidateDocument = generateCheckpointDocument(subscriptionId, candidate);
+        Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument, writeVersion);
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
+        return interpretFirstCheckpointRaceResolution(subscriptionId, candidate, afterDocument, writeVersion);
+    }
+
+    /**
+     * Stores {@code writeVersion} with the checkpoint stored in one {@code findOneAndUpdate} without upsert, see
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildWriteVersionStamp(long)}, and answers that
+     * checkpoint. When nothing is stored, nothing is written and this answers empty.
+     *
+     * @throws org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException if the stored version is newer
+     *                                                                                   than {@code writeVersion}, and
+     *                                                                                   then nothing is written
+     * @throws IllegalArgumentException                                                  if {@code writeVersion} is
+     *                                                                                   negative
+     */
+    @Override
+    public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        CheckpointWriteCondition.notOlderThan(writeVersion);
+        Supplier<@Nullable Document> store = () -> persistWriteVersionStamp(subscriptionId, writeVersion);
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        Document afterDocument = executeWithRetry(store, __ -> !shutdown, retryStrategy).get();
+        return interpretWriteVersionStamp(subscriptionId, afterDocument, writeVersion);
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #storeWriteVersion(String, long)} is, see
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildWriteVersionStamp(long)}. Package private
+     * for the same reason {@link #persistConditionalCheckpointDocument} is.
+     */
+    @Nullable
+    Document persistWriteVersionStamp(String subscriptionId, long writeVersion) {
+        return checkpointCollection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(buildWriteVersionStamp(writeVersion)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(false));
+    }
+
+    /**
      * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace} is, see
      * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution}. Package
      * private for the same reason {@link #persistConditionalCheckpointDocument} is.
@@ -178,6 +233,18 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
         return requireNonNull(checkpointCollection.findOneAndUpdate(
                 eq(ID, subscriptionId),
                 singletonList(buildFirstCheckpointRaceResolution(candidateDocument)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} is,
+     * see {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution(Document, long)}.
+     * Package private for the same reason {@link #persistConditionalCheckpointDocument} is.
+     */
+    Document persistFirstCheckpointRaceResolution(String subscriptionId, Document candidateDocument, long writeVersion) {
+        return requireNonNull(checkpointCollection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(buildFirstCheckpointRaceResolution(candidateDocument, writeVersion)),
                 new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
     }
 
