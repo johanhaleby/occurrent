@@ -37,6 +37,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -86,14 +87,32 @@ final class OwedResumeDispatcherFixture {
         Method anyCatchupModel = CatchupSubscriptionModel.class.getDeclaredMethod("anyCatchupModel");
         anyCatchupModel.setAccessible(true);
         Object child = anyCatchupModel.invoke(model);
+        Field owedResumes = abstractCatchupModelOf(child).getDeclaredField("owedResumes");
+        owedResumes.setAccessible(true);
+        return ((Map<?, ?>) owedResumes.get(child)).containsKey(subscriptionId);
+    }
+
+    // Whether any catch-up child of the dispatcher holds a replay of the subscription parked
+    boolean hasParkedReplay(String subscriptionId) throws Exception {
+        Method presentCatchupModels = CatchupSubscriptionModel.class.getDeclaredMethod("presentCatchupModels");
+        presentCatchupModels.setAccessible(true);
+        for (Object child : ((Stream<?>) presentCatchupModels.invoke(model)).toList()) {
+            Method hasParkedReplay = abstractCatchupModelOf(child).getDeclaredMethod("hasParkedReplay", String.class);
+            hasParkedReplay.setAccessible(true);
+            if ((boolean) hasParkedReplay.invoke(child, subscriptionId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Class<?> abstractCatchupModelOf(Object child) {
         Class<?> type = child.getClass();
         while (type != null && !type.getSimpleName().equals("AbstractCatchupSubscriptionModel")) {
             type = type.getSuperclass();
         }
         assertThat(type).as("the abstract catch-up model a child of the dispatcher extends").isNotNull();
-        Field owedResumes = type.getDeclaredField("owedResumes");
-        owedResumes.setAccessible(true);
-        return ((Map<?, ?>) owedResumes.get(child)).containsKey(subscriptionId);
+        return type;
     }
 
     void publish(String eventId) {

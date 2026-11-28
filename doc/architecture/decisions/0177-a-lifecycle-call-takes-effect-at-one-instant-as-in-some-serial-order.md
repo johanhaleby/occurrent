@@ -244,8 +244,11 @@ once, as the replay the turn would have started was parked by that `stopReplay()
 `resumeReplay()` or `start(false)` that came since, and runs once a `start(true)` or a `resumeSubscription(X)` runs
 it again. A pause, a cancel or a new subscribe of X after the turn takes the resume of X off, and it changes nothing
 then. A pause or a cancel of X made on the resuming thread, from a `StartAt.dynamic(..)` function or a
-`CatchupListener` the resume calls, keeps the resume from resuming X too, since the resume asks again after each of
-them, before it resumes X. A pause or a cancel of X that throws changed nothing, so the resume stays owed. A pause of X while that resume is still owed
+`CatchupListener` the resume calls, keeps the resume from resuming X too, whether that code then returns or throws,
+since the resume asks again after each of them, before it resumes X or parks a replay whose listener threw. A pause or a
+cancel of X that throws changed nothing, so the resume stays owed. The exception is a cancel of X from the listener the
+replay tells that it starts. That cancel ends the replay before it asks the wrapped model to cancel X, as a cancel ends
+a running replay, so the replay doesn't run or park even when the cancel then throws. A pause of X while that resume is still owed
 returns, as a pause made once the resume had run would, and after a `stop()` since the turn it throws
 `SubscriptionNotRunningException`, as a pause of X in a stopped model does. A `resumeSubscription(X)` while that
 resume is still owed throws `SubscriptionAlreadyRunningException` and changes nothing, as a resume of a running X
