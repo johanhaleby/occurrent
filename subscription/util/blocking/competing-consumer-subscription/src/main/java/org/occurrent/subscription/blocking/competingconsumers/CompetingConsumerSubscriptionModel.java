@@ -4225,6 +4225,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             || refused.storedVersion.isEmpty() || refused.storedVersion.getAsLong() <= notOlderThan.writeVersion()) {
             return false;
         }
+        // The last two checks can't be true here today. Waiting is set before the first step, and only a subscribe
+        // step throws this refusal, which runs only while nothing is made. They stay so a later step's refusal, once
+        // the wrapped model made the subscription, isn't recorded as waiting for a grant
         if (shutDown || beingMade.cancelled || beingMade.subscription != null || beingMade.waiting == null) {
             return false;
         }
