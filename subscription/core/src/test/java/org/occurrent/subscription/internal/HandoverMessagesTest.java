@@ -39,10 +39,21 @@ class HandoverMessagesTest {
     }
 
     @Test
-    void the_refusal_from_inside_another_handover_names_the_noun_and_says_to_feed_without_waiting_or_from_another_thread_it_does_not_wait_for() {
+    void the_refusal_from_inside_another_handover_names_the_noun_points_at_the_event_store_and_says_an_escaped_exception_fails_the_catch_up_for_good() {
         assertThat(HandoverMessages.acceptedFromAnotherHandover("projection feed"))
                 .contains("this projection feed")
-                .endsWith("Feed it without waiting for it, or from another thread that this handler does not wait for.");
+                .contains("Write the event to the event store")
+                .contains("fails that catch-up for good")
+                .doesNotContain("another thread");
+    }
+
+    @Test
+    void the_own_delivery_refusal_names_the_noun_points_at_the_event_store_and_says_an_escaped_exception_fails_the_catch_up_for_good() {
+        assertThat(HandoverMessages.acceptedFromOwnDelivery("projection feed"))
+                .contains("this projection feed")
+                .contains("Write the event to the event store")
+                .contains("fails the catch-up for good")
+                .doesNotContain("another thread");
     }
 
     @Test

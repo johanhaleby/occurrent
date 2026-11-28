@@ -4967,13 +4967,17 @@ submits to an executor and then waits on, waits forever the same way.
 `isReadyForLiveDelivery(..)` on the model or the feed answers `false` for that time too, so a RabbitMQ or Kafka source
 wired with `readinessSource(..)` stays paused until the catch-up holds nothing.
 A projection that calls `acceptAndWait(..)` on its own feed while it applies an event gets an `IllegalStateException`
-for a held event, as it already did during the replay. Feed that event from another thread instead, and don't have
-the projection wait for that thread.
+for a held event, as it already did during the replay. Write that event to the event store instead, so the feed gets
+it the way it gets its other events. A projection that lets the exception escape during the catch-up fails the
+catch-up for good, and the feed then refuses every later event.
 A projection, view or handler of a blocking catch-up feed or subscription that calls `acceptAndWait(..)` on another
 blocking feed gets an `IllegalStateException` while that other feed isn't live. In 0.34.0 the call waited for that
 feed's catch-up, or applied the event at once while the feed delivered what it held, and two catch-ups whose handlers
-fed each other this way could wait for each other forever. Feed that event from another thread, and don't have the
-handler wait for that thread.
+fed each other this way could wait for each other forever. The call stays refused, so write the event to the event
+store instead, and the other feed gets it the way it gets its other events. A handler that lets the exception escape
+during its own catch-up fails that catch-up for good, and its feed or subscription then refuses every later event.
+Don't feed the event from another thread either, since nothing feeds it again when that call throws, and the event is
+lost.
 
 A `goLive()` on a `CatchupProjectionFeed`, a `goLive(id)` on a `DomainEventFeed`, and a `catchUp()`, `catchUp(id)` or
 `catchUpAll()` that finds the catch-up marker already written wait until the feed is live when they're called while

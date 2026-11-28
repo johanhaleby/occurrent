@@ -200,6 +200,13 @@ public final class CatchupProjectionFeed<E> {
      * again, which costs a redelivery rather than the event. Never call this on the thread that is about to call
      * {@link #catchUp()} or {@link #goLive()}. It waits until another thread runs the catch-up, takes the feed live,
      * calls {@link #stopCatchUp()} or interrupts it.
+     * <p>
+     * The projection or a view of this feed, or the projection, view or handler of another blocking catch-up feed or
+     * subscription, that has an event for this feed while this feed isn't live writes the event to the event store
+     * instead of calling this method. This feed then gets it the way it gets its other events. A call from there is
+     * refused, as described below, and code that lets the exception escape during its own catch-up fails that
+     * catch-up for good, so its feed or subscription refuses every later event. Feeding the event from another thread
+     * loses it when that call throws, since nothing feeds it again.
      *
      * @param event The domain event received from the external source.
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
