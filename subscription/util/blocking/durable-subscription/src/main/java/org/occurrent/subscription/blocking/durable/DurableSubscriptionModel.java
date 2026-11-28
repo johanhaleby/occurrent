@@ -1291,10 +1291,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * stored checkpoint, since a checkpoint stored before it can't lie after its start.
      * <p>
      * Before the wrapped model resumes, this model stores the write version with the checkpoint stored, as a subscribe
-     * does, also when the wrapped model goes on from its own position. When it resumes at the stored checkpoint, it
-     * resumes at the checkpoint {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint, long)} answers.
-     * So a node that has lost its lease can't store the checkpoint of a later event over the stored checkpoint before
-     * this node stores one. When the storage holds a newer write version, this throws that
+     * does, also when the wrapped model goes on from its own position, through
+     * {@link CheckpointStorage#storeWriteVersion(String, long)}, which leaves the stored checkpoint as it is. So a node
+     * that has lost its lease can't store the checkpoint of a later event over the stored checkpoint before this node
+     * stores one. When the storage holds a newer write version, this throws that
      * {@link CheckpointWriteConditionNotFulfilledException}, nothing is resumed and the subscription stays paused. When
      * nothing is stored any more by then, it goes on from the wrapped model's own position.
      * <p>
