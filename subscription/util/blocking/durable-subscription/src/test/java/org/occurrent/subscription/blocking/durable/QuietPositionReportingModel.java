@@ -24,6 +24,7 @@ import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 
@@ -40,8 +41,9 @@ import java.util.function.Consumer;
  * A wrapped model a test reads from by hand, so it decides when a read happens and what it returns, and on which
  * thread.
  */
-final class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, QuietPositionReportingSubscriptions {
+class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, QuietPositionReportingSubscriptions, HistoryLossReportingSubscriptions {
     final List<QuietPositionListener> listeners = new CopyOnWriteArrayList<>();
+    final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
     final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
     final Map<String, StartAt> startAts = new ConcurrentHashMap<>();
     // Whether subscribe evaluates the StartAt it got before it returns, as a model that opens its feed there does
@@ -69,6 +71,16 @@ final class QuietPositionReportingModel implements CheckpointAwareSubscriptionMo
     void deliver(String subscriptionId, Checkpoint position) {
         CloudEvent cloudEvent = CloudEventBuilder.v1().withId(UUID.randomUUID().toString()).withSource(URI.create("urn:test")).withType("type").build();
         actions.get(subscriptionId).accept(new CheckpointAwareCloudEvent(cloudEvent, position));
+    }
+
+    @Override
+    public void addHistoryLossListener(HistoryLossListener listener) {
+        historyLossListeners.add(listener);
+    }
+
+    @Override
+    public void removeHistoryLossListener(HistoryLossListener listener) {
+        historyLossListeners.remove(listener);
     }
 
     @Override

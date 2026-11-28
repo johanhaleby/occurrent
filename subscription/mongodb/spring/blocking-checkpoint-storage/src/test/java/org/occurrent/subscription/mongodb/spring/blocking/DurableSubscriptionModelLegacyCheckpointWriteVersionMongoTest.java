@@ -34,6 +34,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -43,8 +44,12 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -96,6 +101,33 @@ class DurableSubscriptionModelLegacyCheckpointWriteVersionMongoTest {
         assertAll(
                 () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
                 () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("p"),
+                () -> assertThatThrownBy(() -> storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("later"), CheckpointWriteCondition.notOlderThan(1)))
+                        .as("a node with an older version writing over it")
+                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position after the refused write").isEqualTo("p")
+        );
+    }
+
+    @Test
+    void a_plain_resume_over_a_checkpoint_stored_in_the_legacy_field_stores_this_nodes_version_with_it_and_refuses_a_write_with_an_older_one() {
+        MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        String collection = COLLECTION + "-" + UUID.randomUUID();
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, collection);
+        PausableFeed feed = new PausableFeed();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, id -> OptionalLong.of(2));
+        durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("start")), __ -> {
+        }).waitUntilStarted();
+        durable.pauseSubscription(SUBSCRIPTION_ID);
+        storage.delete(SUBSCRIPTION_ID);
+        mongoTemplate.getCollection(collection).insertOne(new Document("_id", SUBSCRIPTION_ID).append("subscriptionPosition", "p"));
+        assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("test setup, the legacy checkpoint holds no version").isEmpty();
+
+        durable.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertAll(
+                () -> assertThat(storage.writeVersion(SUBSCRIPTION_ID)).as("stored version").hasValue(2L),
+                () -> assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("stored position").isEqualTo("p"),
+                () -> assertThat(feed.resumedAt).as("positions the wrapped model was asked to resume at").containsExactly("p"),
                 () -> assertThatThrownBy(() -> storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("later"), CheckpointWriteCondition.notOlderThan(1)))
                         .as("a node with an older version writing over it")
                         .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class),
@@ -161,6 +193,82 @@ class DurableSubscriptionModelLegacyCheckpointWriteVersionMongoTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
+        }
+    }
+
+    /**
+     * Pauses and resumes at a position, so a plain resume of a paused subscription goes through the stored checkpoint.
+     */
+    private static final class PausableFeed implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
+        final List<String> resumedAt = new CopyOnWriteArrayList<>();
+        private final Set<String> paused = ConcurrentHashMap.newKeySet();
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return started(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            paused.remove(subscriptionId);
+            resumedAt.add(((StartAt.StartAtCheckpoint) startAt).checkpoint.asString());
+            return started(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            throw new UnsupportedOperationException("a plain resume must go through the stored checkpoint");
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            paused.add(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return paused.contains(subscriptionId);
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return !paused.contains(subscriptionId);
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return null;
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return true;
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+        }
+
+        private static Subscription started(String subscriptionId) {
+            return new Subscription() {
+                @Override
+                public String id() {
+                    return subscriptionId;
+                }
+
+                @Override
+                public boolean waitUntilStarted(Duration timeout) {
+                    return true;
+                }
+            };
         }
     }
 }

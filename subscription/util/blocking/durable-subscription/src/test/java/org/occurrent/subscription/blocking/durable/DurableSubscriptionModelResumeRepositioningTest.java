@@ -120,6 +120,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         // Either way, this model was never asked to manage this subscription id, so the checkpoint is not its to read.
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
 
+        model.pauseSubscription(SUBSCRIPTION_ID);
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(delegate.plainResumeCalled).isTrue();
@@ -146,6 +147,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         }).waitUntilStarted();
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
 
+        model.pauseSubscription(SUBSCRIPTION_ID);
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(delegate.repositionedTo)
@@ -175,6 +177,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         })).isInstanceOf(RuntimeException.class);
 
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.pauseSubscription(SUBSCRIPTION_ID);
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(delegate.repositionedTo)
@@ -235,6 +238,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         })).isInstanceOf(RuntimeException.class);
 
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.pauseSubscription(SUBSCRIPTION_ID);
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(delegate.repositionedTo)
@@ -258,6 +262,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         })).isInstanceOf(RuntimeException.class);
 
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.pauseSubscription(SUBSCRIPTION_ID);
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(delegate.repositionedTo)
@@ -287,7 +292,10 @@ class DurableSubscriptionModelResumeRepositioningTest {
             }));
             assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
 
-            Future<Subscription> resumeFuture = pool.submit(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+            Future<Subscription> resumeFuture = pool.submit(() -> {
+                model.pauseSubscription(SUBSCRIPTION_ID);
+                return model.resumeSubscription(SUBSCRIPTION_ID);
+            });
 
             assertThatThrownBy(() -> resumeFuture.get(200, TimeUnit.MILLISECONDS))
                     .as("resumeSubscription must wait for this id's lock rather than deciding from a state the "
@@ -420,6 +428,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
             subscribeFuture.get(10, TimeUnit.SECONDS);
 
             storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+            model.pauseSubscription(SUBSCRIPTION_ID);
             model.resumeSubscription(SUBSCRIPTION_ID);
 
             assertThat(delegate.repositionedTo)
@@ -472,6 +481,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
                             + "waited out had already deleted whatever was there before this subscribe could write")
                     .isEqualTo(delegate.globalCheckpoint);
 
+            model.pauseSubscription(SUBSCRIPTION_ID);
             model.resumeSubscription(SUBSCRIPTION_ID);
             assertThat(delegate.repositionedTo).isInstanceOf(StartAt.StartAtCheckpoint.class);
             assertThat(((StartAt.StartAtCheckpoint) delegate.repositionedTo).checkpoint)
@@ -491,8 +501,12 @@ class DurableSubscriptionModelResumeRepositioningTest {
      */
     private static class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel {
         boolean plainResumeCalled = false;
+        void resumed(String subscriptionId) {
+            pausedIds.remove(subscriptionId);
+        }
         @Nullable Checkpoint globalCheckpoint = null;
         private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
+        private final Set<String> pausedIds = ConcurrentHashMap.newKeySet();
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -520,27 +534,30 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
-            return registeredIds.contains(subscriptionId);
+            return registeredIds.contains(subscriptionId) && !pausedIds.contains(subscriptionId);
         }
 
         @Override
         public boolean isPaused(String subscriptionId) {
-            return registeredIds.contains(subscriptionId);
+            return pausedIds.contains(subscriptionId);
         }
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
+            pausedIds.remove(subscriptionId);
             plainResumeCalled = true;
             return dummySubscription(subscriptionId);
         }
 
         @Override
         public void pauseSubscription(String subscriptionId) {
+            pausedIds.add(subscriptionId);
         }
 
         @Override
         public void cancelSubscription(String subscriptionId) {
             registeredIds.remove(subscriptionId);
+            pausedIds.remove(subscriptionId);
         }
 
         static Subscription dummySubscription(String subscriptionId) {
@@ -566,6 +583,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            resumed(subscriptionId);
             repositionedTo = startAt;
             return dummySubscription(subscriptionId);
         }

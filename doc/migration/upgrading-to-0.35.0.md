@@ -136,6 +136,9 @@ other sections compile fine and behave differently, so read them first.
   A `CheckpointStorage` of your own gets the version stored with the first position in one write only once it
   implements the three-argument `resolveFirstCheckpointRace`, and with a checkpoint already stored only once it
   implements `storeWriteVersion`. Compiles unchanged.
+- [A quiet position whose save throws a checked exception is logged](#a-quiet-position-whose-save-throws-a-checked-exception-is-logged).
+  A checked exception that a `CheckpointStorage` throws from the save of a quiet position no longer reaches the
+  wrapped subscription model. Compiles unchanged.
 - [A capability that acts on a subscription is not found past a wrapper](#a-capability-that-acts-on-a-subscription-is-not-found-past-a-wrapper).
   `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` or a
   `ManualStartSubscriptionModel` answers empty. Compiles unchanged.
@@ -461,8 +464,10 @@ checkpoint, then resumes the wrapped model there.
   call throws `IllegalStateException`, nothing is stored and the subscription stays paused.
 * `StartAt.subscriptionModelDefault()` resumes from the stored checkpoint, as `resumeSubscription(subscriptionId)`
   does.
-* A subscription subscribed without checkpointing, or one the wrapped model doesn't report as paused, is passed on to
-  the wrapped model and nothing is stored.
+* A subscription the wrapped model reports as running throws `SubscriptionAlreadyRunningException`, and nothing is
+  stored or resumed.
+* Any other subscription subscribed without checkpointing, or one the wrapped model doesn't report as paused, is passed
+  on to the wrapped model and nothing is stored.
 * A checkpoint the wrapped model's new `restartsAt(..)` answers `false` for is passed on to the wrapped model and
   nothing is stored. The method answers `false` unless the model overrides it. The MongoDB subscription models answer
   `false` for a `GlobalCheckpoint`, a `CatchupTimeCheckpoint`, a time and every other checkpoint their change stream
@@ -475,6 +480,25 @@ whose write the checkpoint storage refuses, because another node has written wit
 throws after the write, the checkpoint stored before is put back with the write condition the position was stored
 with and the exception is thrown, so a failed reposition leaves the stored position as it was before the call. When
 nothing was stored before, the new checkpoint stays.
+
+The MongoDB subscription models stop waiting for a running event handler one second into a pause, so a handler can
+still be running when the resume stores the position. Once it returns, the checkpoint of its event isn't stored over
+that position, and neither is a quiet position read before the resume. A restart then resumes from the position you
+asked for. A plain `resumeSubscription(id)` drops those saves the same way when it asks the wrapped model to resume at
+the stored checkpoint. That includes a catch-up's position or a time on the MongoDB models, which go on from their own
+position for those checkpoints. A plain resume of a subscription the wrapped model reports as
+running throws `SubscriptionAlreadyRunningException` and drops nothing. A subscription that runs again by the time the
+resume reads the stored checkpoint, after a resume that didn't go through the durable model, such as the wrapped
+model's own `start()`, has its saves dropped too. A restart before a later event stores its checkpoint then delivers
+again the events whose saves were dropped, and none is skipped. After such a resume, when the wrapped model goes on from its own position, no quiet
+position is saved over a checkpoint another node stored during the pause until the resumed subscription stores the
+checkpoint of an event. An evaluation of the start position that found no checkpoint stored before such a resume, or
+a restart after a lost history, stored a position records no first position over it. One that read a stored checkpoint
+before then doesn't store this node's version with that checkpoint, since on the MongoDB storages that write could
+replace a later operation time the resume stored with the earlier one read. One that read it once `subscribe(..)` had
+decided the start position throws `IllegalStateException`, as one that found no checkpoint does, and evaluating again
+starts from the stored checkpoint. One that read it while `subscribe(..)` decided the start position reads the stored
+checkpoint again and starts from it.
 
 A catch-up model whose live delegate is a `DurableSubscriptionModel` now has the position stored when it resumes the
 durable model at one. [Section 29 of the 0.34.0 upgrade guide](upgrading-to-0.34.0.md#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it) says such a resume stores nothing until the first live
@@ -582,7 +606,8 @@ An application whose `DurableSubscriptionModel` has a `CheckpointWriteVersionSou
 `CompetingConsumerCheckpointWriteVersionSource` the Spring Boot starter uses for a competing consumer, and either
 records the first position of a subscription that starts at the model default with no checkpoint stored, or
 subscribes from a checkpoint already stored, such as the start position the Spring Boot starter stores for the
-subscription at registration. Compiles unchanged.
+subscription at registration, or resumes a paused subscription with `resumeSubscription(id)` while a checkpoint is
+stored. Compiles unchanged.
 
 ### What changes
 
@@ -626,13 +651,21 @@ after the events in between and never delivered them. When the storage holds a n
 `CheckpointWriteConditionNotFulfilledException`, and under `CompetingConsumerSubscriptionModel` it returns and the
 subscription waits for the lease, as for a first position above.
 
+A plain `resumeSubscription(id)` stores this node's version with the stored checkpoint the same way before it resumes.
+That includes a resume where the wrapped model goes on from its own position, because the stored checkpoint is still
+the one stored before a subscribe at a checkpoint of the caller's own. This node's version stored with that checkpoint
+doesn't count as a change by another node, also when the write that stored it threw, so a later resume still goes on
+from the wrapped model's own position. When the storage holds a newer version, it throws `CheckpointWriteConditionNotFulfilledException`,
+nothing is resumed and the subscription stays paused. When `CompetingConsumerSubscriptionModel` resumes the
+subscription because this node got the lease, it gives the lease back and the node stays a candidate for it.
+
 ### What to do
 
 If you catch `StartPositionAlreadyPinnedException` from `subscribe` to alert or to subscribe again, a lost race
-against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. So does a
-subscribe from a stored checkpoint whose version is newer than this node's. Under
-`CompetingConsumerSubscriptionModel` the new exception doesn't reach `subscribe`, since the subscription waits for the
-lease.
+against a node with a newer version throws `CheckpointWriteConditionNotFulfilledException` instead. So do a
+subscribe and a plain `resumeSubscription(id)` from a stored checkpoint whose version is newer than this node's.
+Under `CompetingConsumerSubscriptionModel` the new exception doesn't reach `subscribe`, since the subscription waits
+for the lease.
 
 A storage of your own that doesn't override the three-argument `resolveFirstCheckpointRace`, or answers it empty,
 gets the `ifAbsent()` write and no version, as in 0.34.0. Until the next checkpoint write stores the version, a node
@@ -641,6 +674,31 @@ version stored with the first position in one write, override the three-argument
 javadoc describes. One that doesn't override `storeWriteVersion` stores no version with a checkpoint already stored,
 and the subscription starts from that checkpoint as in 0.34.0. Override it as its javadoc describes to close that.
 There is no OpenRewrite recipe for this.
+
+## A quiet position whose save throws a checked exception is logged
+
+### Who is affected
+
+An application whose blocking `DurableSubscriptionModel` saves quiet positions with `saveQuietPositionEvery(..)`, over
+a `CheckpointStorage` that throws a checked exception without declaring it, as a storage written in Kotlin can.
+Compiles unchanged.
+
+### What changes
+
+In 0.34.0 the model logged a `RuntimeException` from the save of a quiet position and tried again after the interval,
+and a checked exception reached the wrapped subscription model that asked for the save. From 0.35.0 a checked exception
+is logged at `WARN` and tried again after the interval too. A `CheckpointWriteConditionNotFulfilledException` and an
+`Error` still reach the wrapped model.
+
+After any checkpoint write that throws, the next quiet save reads the stored checkpoint first, since the write may or
+may not have stored its position. It saves the quiet position only when what it reads is the checkpoint of the latest
+event or a position the model wrote after that event. A read that throws is logged and tried again after the interval.
+
+### What to do
+
+Nothing, unless an error handler of the wrapped model counts on seeing that checked exception. `DurableSubscriptionModel`
+logs it instead, at `WARN` with the message "Failed to save the quiet position of subscription". There is no
+OpenRewrite recipe for this.
 
 ## A capability that acts on a subscription is not found past a wrapper
 
