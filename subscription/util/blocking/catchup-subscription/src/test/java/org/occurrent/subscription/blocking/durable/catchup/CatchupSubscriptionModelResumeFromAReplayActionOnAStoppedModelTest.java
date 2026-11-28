@@ -1,0 +1,319 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.blocking.durable.catchup;
+
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import org.awaitility.core.ConditionTimeoutException;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+
+import java.net.URI;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+/**
+ * A {@code stop()} that gives up waiting for the action of a replay parks every replay in flight, so the subscription of
+ * another replay it parked reads as paused. A {@code resumeSubscription(..)} that the still running action then calls
+ * for that subscription only hands the start over to be run once the action has returned, since the model is stopped
+ * until then. The resume must still take effect once the action has returned: the model runs, the subscription runs and
+ * the handle the resume returned starts.
+ */
+@DisplayNameGeneration(ReplaceUnderscores.class)
+@Timeout(60)
+class CatchupSubscriptionModelResumeFromAReplayActionOnAStoppedModelTest {
+
+    private static final String X = "x";
+    private static final String Y = "y";
+
+    private final CountDownLatch inTheActionOfX = new CountDownLatch(1);
+    private final CountDownLatch inTheActionOfY = new CountDownLatch(1);
+    private final CountDownLatch resumeNow = new CountDownLatch(1);
+    private final CountDownLatch releaseY = new CountDownLatch(1);
+    private final CountDownLatch actionOfXReturned = new CountDownLatch(1);
+    private final AtomicBoolean resumeCalled = new AtomicBoolean();
+    private final CompletableFuture<Subscription> resumed = new CompletableFuture<>();
+    private InMemorySubscriptionModel inMemory;
+    private InMemoryEventStore eventStore;
+    private CatchupSubscriptionModel model;
+
+    @BeforeEach
+    void create_a_started_model_over_an_in_memory_model() {
+        inMemory = new InMemorySubscriptionModel();
+        eventStore = new InMemoryEventStore(inMemory).withoutStreamPosition();
+        model = new CatchupSubscriptionModel(new DelegatingSubscriptionModel(inMemory), eventStore, new CatchupSubscriptionModelConfig(100));
+    }
+
+    @AfterEach
+    void release_everything_and_shut_down() {
+        resumeNow.countDown();
+        releaseY.countDown();
+        CompletableFuture<Void> shutdown = CompletableFuture.runAsync(() -> {
+            model.shutdown();
+            inMemory.shutdown();
+        }, daemonExecutor("shutdown-of-the-model"));
+        try {
+            shutdown.get(10, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            // A shutdown that hangs is left on its daemon thread, the assertions of the test have already reported it
+        }
+    }
+
+    @Test
+    void a_resume_that_the_action_of_a_replay_calls_for_a_subscription_a_stop_parked_takes_effect_once_the_action_has_returned() throws Exception {
+        // Given a replay of x whose action is held, and a replay of y whose action is held, both of which a stop parks
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        model.subscribe(X, StartAtTime.beginningOfTime(), event -> {
+            if (resumeCalled.compareAndSet(false, true)) {
+                inTheActionOfX.countDown();
+                awaitLatch(resumeNow);
+                try {
+                    resumed.complete(model.resumeSubscription(Y));
+                } catch (Throwable e) {
+                    resumed.completeExceptionally(e);
+                } finally {
+                    actionOfXReturned.countDown();
+                }
+            }
+        });
+        model.subscribe(Y, StartAtTime.beginningOfTime(), event -> {
+            inTheActionOfY.countDown();
+            awaitLatch(releaseY);
+        });
+        assertThat(inTheActionOfX.await(10, TimeUnit.SECONDS)).as("whether the replay of x reached its action").isTrue();
+        assertThat(inTheActionOfY.await(10, TimeUnit.SECONDS)).as("whether the replay of y reached its action").isTrue();
+
+        // And a stop that gives up waiting for the two actions and returns
+        CompletableFuture<Void> stop = CompletableFuture.runAsync(model::stop, daemonExecutor("stop-of-the-model"));
+        Throwable stopFailed = null;
+        boolean stopReturned = true;
+        try {
+            stop.get(10, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            stopReturned = false;
+        } catch (Exception e) {
+            stopFailed = e;
+        }
+        assertThat(stopReturned).as("whether stop() returned within 10 s although the actions of x and y still ran").isTrue();
+        assertThat(stopFailed).as("what stop() threw").isNull();
+        assertThat(model.isRunning()).as("whether the model runs right after the stop returned").isFalse();
+        assertThat(model.isPaused(Y)).as("whether y reads as paused right after the stop parked its replay").isTrue();
+        releaseY.countDown();
+
+        // When the action of x resumes y and then returns
+        resumeNow.countDown();
+        assertThat(actionOfXReturned.await(10, TimeUnit.SECONDS)).as("whether the action of x returned within 10 s of calling resumeSubscription(y)").isTrue();
+        Throwable resumeThrew = null;
+        Subscription handle = null;
+        try {
+            handle = resumed.get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            resumeThrew = e;
+        }
+
+        // Then
+        assertThat(resumeThrew).as("what resumeSubscription(y) threw when the action of x called it on a stopped model").isNull();
+        try {
+            await().atMost(Duration.ofSeconds(10)).until(() -> model.isRunning() && model.isRunning(Y) && !model.isPaused(Y));
+        } catch (ConditionTimeoutException ignored) {
+            // The assertions below say which of the three did not hold
+        }
+        assertThat(model.isRunning()).as("whether the model runs within 10 s of the action of x returning").isTrue();
+        assertThat(model.isRunning(Y)).as("whether y runs within 10 s of the action of x returning").isTrue();
+        assertThat(model.isPaused(Y)).as("whether y is still paused within 10 s of the action of x returning").isFalse();
+        assertThat(handle).as("the handle resumeSubscription(y) returned").isNotNull();
+        assertThat(handle.waitUntilStarted(Duration.ofSeconds(10))).as("whether the handle resumeSubscription(y) returned started within 10 s").isTrue();
+    }
+
+    @Test
+    void a_stop_from_another_thread_made_after_the_action_of_a_replay_called_resume_runs_after_the_resume_and_leaves_the_model_stopped_and_the_subscription_paused_until_the_next_start() throws Exception {
+        // Given a replay of x whose action is held, and a replay of y whose action is held, and a stop that gave up waiting for them and parked y
+        eventStore.write(UUID.randomUUID().toString(), List.of(cloudEvent()));
+        CountDownLatch resumeReturned = new CountDownLatch(1);
+        CountDownLatch secondStopReturned = new CountDownLatch(1);
+        model.subscribe(X, StartAtTime.beginningOfTime(), event -> {
+            if (resumeCalled.compareAndSet(false, true)) {
+                inTheActionOfX.countDown();
+                awaitLatch(resumeNow);
+                try {
+                    resumed.complete(model.resumeSubscription(Y));
+                } catch (Throwable e) {
+                    resumed.completeExceptionally(e);
+                }
+                resumeReturned.countDown();
+                // A stop from another thread made after the resume was handed over runs after it, so it cannot return before this action does
+                awaitUpTo(secondStopReturned, Duration.ofMillis(1500));
+                actionOfXReturned.countDown();
+            }
+        });
+        model.subscribe(Y, StartAtTime.beginningOfTime(), event -> {
+            inTheActionOfY.countDown();
+            awaitLatch(releaseY);
+        });
+        assertThat(inTheActionOfX.await(10, TimeUnit.SECONDS)).as("whether the replay of x reached its action").isTrue();
+        assertThat(inTheActionOfY.await(10, TimeUnit.SECONDS)).as("whether the replay of y reached its action").isTrue();
+        CompletableFuture.runAsync(model::stop, daemonExecutor("first-stop-of-the-model")).get(10, TimeUnit.SECONDS);
+        assertThat(model.isPaused(Y)).as("whether y reads as paused after the first stop parked its replay").isTrue();
+        releaseY.countDown();
+
+        // When the action of x resumes y, a stop from another thread is made, and the action returns
+        resumeNow.countDown();
+        assertThat(resumeReturned.await(10, TimeUnit.SECONDS)).as("whether resumeSubscription(y) returned to the action of x within 10 s").isTrue();
+        CompletableFuture<Void> secondStop = CompletableFuture.runAsync(() -> {
+            model.stop();
+            secondStopReturned.countDown();
+        }, daemonExecutor("second-stop-of-the-model"));
+        assertThat(actionOfXReturned.await(10, TimeUnit.SECONDS)).as("whether the action of x returned within 10 s of calling resumeSubscription(y)").isTrue();
+        secondStop.get(30, TimeUnit.SECONDS);
+        Subscription handle = resumed.get(10, TimeUnit.SECONDS);
+
+        // Then the outcome is that of resuming and then stopping
+        assertThat(model.isRunning()).as("whether the model runs after the resume and the second stop ran").isFalse();
+        assertThat(model.isPaused(Y)).as("whether y is paused after the resume and the second stop ran").isTrue();
+
+        // And the next start runs the replay of y again
+        model.start();
+        try {
+            await().atMost(Duration.ofSeconds(10)).until(() -> model.isRunning(Y) && !model.isPaused(Y));
+        } catch (ConditionTimeoutException ignored) {
+            // The assertions below say which of the two did not hold
+        }
+        assertThat(model.isRunning(Y)).as("whether y runs within 10 s of the next start()").isTrue();
+        assertThat(model.isPaused(Y)).as("whether y is still paused within 10 s of the next start()").isFalse();
+        assertThat(handle.waitUntilStarted(Duration.ofSeconds(10))).as("whether the handle resumeSubscription(y) returned started within 10 s of the next start()").isTrue();
+    }
+
+    private static void awaitUpTo(CountDownLatch latch, Duration timeout) {
+        try {
+            latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static Executor daemonExecutor(String name) {
+        return runnable -> {
+            Thread thread = new Thread(runnable, name);
+            thread.setDaemon(true);
+            thread.start();
+        };
+    }
+
+    private static CloudEvent cloudEvent() {
+        return CloudEventBuilder.v1().withId(UUID.randomUUID().toString()).withSource(URI.create("urn:test")).withType("test.event").withTime(OffsetDateTime.now()).build();
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("latch not released");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    // Wraps the in-memory model, which a catch-up model needs to ask for a global checkpoint
+    private static final class DelegatingSubscriptionModel implements CheckpointAwareSubscriptionModel {
+        private final InMemorySubscriptionModel delegate;
+
+        private DelegatingSubscriptionModel(InMemorySubscriptionModel delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, StartAt.now(), action);
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return new StringBasedCheckpoint("in-memory-global-position");
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+    }
+}

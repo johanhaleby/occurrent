@@ -912,6 +912,69 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     /**
+     * A pause asked while a subscribe's replay runs is applied by the handover, which holds the handover lock from the end
+     * of the replay through the live subscribe. A resume that comes after the replay ended but before the live model
+     * has the subscription therefore waits for that lock, instead of finding no live subscription to resume and
+     * throwing after the pause returned ok.
+     */
+    @Test
+    void a_resume_that_comes_between_the_end_of_a_replay_and_the_live_subscribe_waits_for_the_handover_and_does_not_throw_after_the_pause_returned() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CountDownLatch inTheAction = new CountDownLatch(1);
+        CountDownLatch leaveTheAction = new CountDownLatch(1);
+        CountDownLatch replayEnded = new CountDownLatch(1);
+        CountDownLatch releaseTheHandover = new CountDownLatch(1);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
+            @Override
+            protected boolean endReplayIfStillCurrent(String subscriptionId) {
+                boolean stillCurrent = super.endReplayIfStillCurrent(subscriptionId);
+                replayEnded.countDown();
+                awaitLatch(releaseTheHandover);
+                return stillCurrent;
+            }
+        };
+        AtomicReference<Thread> resumingThread = new AtomicReference<>();
+        AtomicReference<Throwable> resumeThrew = new AtomicReference<>();
+        try {
+            // Given a pause asked while the replay of the subscribe runs, and a replay that has ended but holds the handover
+            subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+                inTheAction.countDown();
+                awaitLatch(leaveTheAction);
+            });
+            assertThat(inTheAction.await(5, TimeUnit.SECONDS)).as("the replay reached the action").isTrue();
+            subscription.pauseSubscription(subscriptionId);
+            leaveTheAction.countDown();
+            assertThat(replayEnded.await(5, TimeUnit.SECONDS)).as("the replay ended and the handover is held").isTrue();
+
+            // When a resume is made from another thread
+            Thread resume = new Thread(() -> {
+                resumingThread.set(Thread.currentThread());
+                resumeThrew.set(catchThrowable(() -> subscription.resumeSubscription(subscriptionId)));
+            });
+            resume.start();
+
+            // Then it waits for the handover lock while the handover is held
+            await().atMost(Duration.ofSeconds(5)).until(() -> resumingThread.get() != null && Arrays.stream(resumingThread.get().getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("lockHandover")));
+            assertThat(resume.isAlive()).as("the resume is still waiting while the handover is held").isTrue();
+
+            // And once the handover goes on it returns without throwing, and the subscription runs
+            releaseTheHandover.countDown();
+            resume.join(Duration.ofSeconds(5).toMillis());
+            assertAll(
+                    () -> assertThat(resume.isAlive()).as("the resume returned").isFalse(),
+                    () -> assertThat(resumeThrew.get()).as("what the resume threw").isNull(),
+                    () -> await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(subscription.isRunning(subscriptionId)).as("the subscription runs").isTrue()),
+                    () -> assertThat(subscription.isPaused(subscriptionId)).as("the subscription is paused").isFalse());
+        } finally {
+            leaveTheAction.countDown();
+            releaseTheHandover.countDown();
+            subscription.shutdown();
+        }
+    }
+
+    /**
      * Issue #827, the checkpoint-delete manifestation of the same gap (deferred from PR 823, the time-based path's
      * "delegate must not run" cleanup at what was then line 307). A finishing attempt's temporary checkpoint delete
      * runs after it already relinquished ownership of the id. Unguarded, a fresh attempt for the same id can
@@ -2710,24 +2773,31 @@ class StreamCatchupSubscriptionModelTest {
 
     @Test
     @Timeout(30)
-    void a_stop_called_from_inside_the_action_of_a_replay_does_not_wait_for_that_action() throws InterruptedException {
+    void a_stop_called_from_inside_the_action_of_a_replay_returns_at_once_and_stops_the_model_once_the_action_has_returned() throws InterruptedException {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         write(eventStore, nameDefined("event1"));
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
-        AtomicLong stopTookMillis = new AtomicLong(-1);
-        CountDownLatch stopReturned = new CountDownLatch(1);
+        AtomicReference<Throwable> thrownByTheStop = new AtomicReference<>();
+        CountDownLatch stopReturnedOrThrew = new CountDownLatch(1);
+        CountDownLatch releaseTheAction = new CountDownLatch(1);
 
         try {
             subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
-                long before = System.nanoTime();
-                subscription.stop();
-                stopTookMillis.set(Duration.ofNanos(System.nanoTime() - before).toMillis());
-                stopReturned.countDown();
+                thrownByTheStop.set(catchThrowable(subscription::stop));
+                stopReturnedOrThrew.countDown();
+                awaitLatch(releaseTheAction);
             });
 
-            assertThat(stopReturned.await(5, TimeUnit.SECONDS)).as("the stop made from the action returned").isTrue();
-            assertThat(stopTookMillis.get()).as("how many milliseconds the stop from inside the action took").isLessThan(500);
+            assertThat(stopReturnedOrThrew.await(5, TimeUnit.SECONDS)).as("the stop made from the action returned or threw while the action still ran").isTrue();
+            assertThat(thrownByTheStop.get()).as("what the stop made from the action of a replay of the model threw").isNull();
+            assertThat(subscription.isRunning()).as("whether the model runs while the action that made the stop still runs").isTrue();
+            releaseTheAction.countDown();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(subscription.isRunning()).as("whether the model runs once the action that made the stop has returned").isFalse();
+                assertThat(subscription.isRunning("subscription")).as("whether the subscription runs once the action that made the stop has returned").isFalse();
+            });
         } finally {
+            releaseTheAction.countDown();
             subscription.shutdown();
         }
     }

@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
@@ -50,11 +51,13 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -82,17 +85,23 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
@@ -278,6 +287,88 @@ class CatchupLostLiveStartDurableMongoTest {
         assertThat(received).as("the event written after the resume").filteredOn(afterResume::equals).hasSize(1);
     }
 
+    /**
+     * A pause that comes after the catch-up answered that it takes a lost live start over, and before the MongoDB model
+     * paused the subscription for the takeover, goes to the MongoDB model, which pauses the subscription and then drops
+     * the takeover without running what follows the pause. The catch-up stores the position its replay starts from
+     * itself then, so a stack made after a restart replays from it. Without it, storage keeps the live start that was
+     * lost, which a default start resumes from, and the history before it is never delivered.
+     */
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Driver.class)
+    void a_pause_made_after_the_catch_up_took_a_lost_live_start_over_and_before_it_was_paused_stores_the_replay_origin_that_a_stack_made_after_a_restart_replays_from(Driver driver) {
+        // Given a catch-up whose live start the oplog loses, and a pause that is made when it has answered that it takes the subscription over
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        SpringMongoEventStore eventStore = eventStoreAndLiveModel(connectionString, driver, Replay.POSITION, true);
+        MongoTemplate template = new MongoTemplate(client, requireNonNull(connectionString.getDatabase()));
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"));
+        history.forEach(event -> write(eventStore, Replay.POSITION, event));
+        NameDefined writtenInTheGap = nameDefined("writtenInTheGap");
+        CopyOnWriteArrayList<Checkpoint> saved = new CopyOnWriteArrayList<>();
+        CheckpointStorage sharedStorage = recordingSavesOf(new SpringMongoCheckpointStorage(template, "storage"), saved);
+        durable = new DurableSubscriptionModel((CheckpointAwareSubscriptionModel) liveModel, sharedStorage);
+        ArmsTheFailpointAfterTheFinalCheck armed = new ArmsTheFailpointAfterTheFinalCheck(durable, () -> {
+            client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
+                    .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", HISTORY_LOST).append("appName", SUBSCRIPTION_APP)));
+            write(eventStore, Replay.POSITION, writtenInTheGap);
+        });
+        catchup = new CatchupSubscriptionModel(armed, eventStore, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(sharedStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        AtomicInteger pausesMade = new AtomicInteger();
+        AtomicReference<@Nullable Throwable> pauseThrew = new AtomicReference<>();
+        armed.afterEachTakeOverAnswer(subscriptionId -> {
+            pausesMade.incrementAndGet();
+            try {
+                catchup.pauseSubscription(subscriptionId);
+            } catch (Throwable e) {
+                pauseThrew.set(e);
+            }
+        });
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+
+        // When the subscription is started and the MongoDB model finds its live start lost
+        catchup.subscribe(SUBSCRIPTION_ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+
+        // Then the pause returned, the subscription is held paused and delivers nothing more, since a paused subscription
+        // replays nothing until it is resumed, and the position the replay starts from is stored once
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(saved.stream().map(Checkpoint::asString).filter(position -> position.startsWith("position:0;")).toList())
+                .as("the saves of the position the takeover replays from").hasSize(1));
+        await().atMost(Duration.ofSeconds(10)).during(Duration.ofSeconds(2)).untilAsserted(() -> assertAll(
+                () -> assertThat(historyLostReplies).as("the replies that said the oplog lost the history").hasValue(1),
+                () -> assertThat(pausesMade).as("the pauses made after the catch-up answered that it takes the subscription over").hasValue(1),
+                () -> assertThat(pauseThrew.get()).as("what the pause threw").isNull(),
+                () -> assertThat(catchup.isPaused(SUBSCRIPTION_ID)).as("paused").isTrue(),
+                () -> assertThat(received).as("the events the paused subscription got, which are those of the history it replayed first").containsExactlyInAnyOrderElementsOf(history),
+                () -> assertThat(saved.stream().map(Checkpoint::asString).filter(position -> position.startsWith("position:0;")).toList()).as("the saves of the position the takeover replays from").hasSize(1)));
+
+        // And a stack made over the same storage and event store, as after a restart, subscribes with its default start and delivers every event of the lost history
+        Checkpoint lostLiveStart = armed.probes.getFirst();
+        shutDownTheStack();
+        SpringMongoEventStore restartedEventStore = eventStoreAndLiveModel(connectionString, driver, Replay.POSITION, true);
+        CheckpointStorage restartedStorage = new SpringMongoCheckpointStorage(new MongoTemplate(client, requireNonNull(connectionString.getDatabase())), "storage");
+        assertThat(Optional.ofNullable(restartedStorage.read(SUBSCRIPTION_ID)).map(Checkpoint::asString).orElse("nothing")).as("the position stored when the process went down, among the saves " + saved.stream().map(Checkpoint::asString).toList()).startsWith("position:0;");
+        durable = new DurableSubscriptionModel((CheckpointAwareSubscriptionModel) liveModel, restartedStorage);
+        // The oplog doesn't come back, so the live start it lost stays lost for the stack made after the restart
+        ArmsTheFailpointAfterTheFinalCheck restartedLiveModel = new ArmsTheFailpointAfterTheFinalCheck(durable, () -> {
+        }).losing(lostLiveStart);
+        catchup = new CatchupSubscriptionModel(restartedLiveModel, restartedEventStore, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(restartedStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<DomainEvent> receivedAfterTheRestart = new CopyOnWriteArrayList<>();
+        Throwable subscribeThrew = catchThrowable(() -> catchup.subscribe(SUBSCRIPTION_ID, StartAt.subscriptionModelDefault(), toDomainEvents(receivedAfterTheRestart)));
+        assertThat(subscribeThrew).as("what the default subscribe after the restart threw, which is CatchupCannotResumeException when the live start the MongoDB model lost is stored").isNull();
+        List<DomainEvent> everyEvent = Stream.concat(history.stream(), Stream.of(writtenInTheGap)).toList();
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(receivedAfterTheRestart).as("the events the stack made after the restart got").containsAll(everyEvent));
+    }
+
+    // Closes what the test made, as the shutdown after each test does, so a stack can be made again over the same database
+    private void shutDownTheStack() {
+        catchup.shutdown();
+        durable.shutdown();
+        if (nativeExecutor != null) {
+            nativeExecutor.shutdownNow();
+        }
+        subscriptionClient.close();
+        client.close();
+    }
+
     private SpringMongoEventStore eventStoreAndLiveModel(ConnectionString connectionString, Driver driver, Replay replay, boolean restartOnHistoryLost) {
         client = MongoClients.create(connectionString);
         subscriptionClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).applicationName(SUBSCRIPTION_APP)
@@ -343,12 +434,14 @@ class CatchupLostLiveStartDurableMongoTest {
         });
     }
 
-    private static final class ArmsTheFailpointAfterTheFinalCheck implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions {
+    private static final class ArmsTheFailpointAfterTheFinalCheck implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper, RepositionableSubscriptions, HistoryLossReportingSubscriptions {
         private final CheckpointAwareSubscriptionModel delegate;
         private final Runnable afterTheFirstFinalCheck;
         private final AtomicBoolean armed = new AtomicBoolean();
         private volatile @Nullable Checkpoint armedFor;
         final List<Checkpoint> probes = new CopyOnWriteArrayList<>();
+        private volatile @Nullable Consumer<String> afterEachTakeOverAnswer;
+        private final Map<HistoryLossListener, HistoryLossListener> addedToTheDelegate = new ConcurrentHashMap<>();
 
         private ArmsTheFailpointAfterTheFinalCheck(CheckpointAwareSubscriptionModel delegate, Runnable afterTheFirstFinalCheck) {
             this.delegate = delegate;
@@ -369,6 +462,58 @@ class CatchupLostLiveStartDurableMongoTest {
                 afterTheFirstFinalCheck.run();
             }
             return canResume;
+        }
+
+        // Runs on the thread the MongoDB model asks the listener on, without a lock of the model, once a listener
+        // answered that it takes the subscription over and before the answer reaches the model
+        void afterEachTakeOverAnswer(Consumer<String> afterEachTakeOverAnswer) {
+            this.afterEachTakeOverAnswer = afterEachTakeOverAnswer;
+        }
+
+        // The history doesn't reach back to checkpoint, so the model can't resume from it, and it never arms the failpoint
+        ArmsTheFailpointAfterTheFinalCheck losing(Checkpoint checkpoint) {
+            armed.set(true);
+            armedFor = checkpoint;
+            return this;
+        }
+
+        @Override
+        public void addHistoryLossListener(HistoryLossListener listener) {
+            HistoryLossListener added = new HistoryLossListener() {
+                @Override
+                public HistoryLossHandling handleHistoryLoss(String subscriptionId, Checkpoint lostFrom) {
+                    HistoryLossHandling answer = listener.handleHistoryLoss(subscriptionId, lostFrom);
+                    Consumer<String> after = afterEachTakeOverAnswer;
+                    if (after != null && answer instanceof HistoryLossHandling.TakeOver) {
+                        after.accept(subscriptionId);
+                    }
+                    return answer;
+                }
+
+                @Override
+                public void restartingAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
+                    listener.restartingAfterHistoryLoss(subscriptionId, restartedFrom, stillCurrent);
+                }
+
+                @Override
+                public boolean storesRestartPositionOf(String subscriptionId) {
+                    return listener.storesRestartPositionOf(subscriptionId);
+                }
+            };
+            addedToTheDelegate.put(listener, added);
+            historyLossReportingDelegate().addHistoryLossListener(added);
+        }
+
+        @Override
+        public void removeHistoryLossListener(HistoryLossListener listener) {
+            HistoryLossListener added = addedToTheDelegate.remove(listener);
+            if (added != null) {
+                historyLossReportingDelegate().removeHistoryLossListener(added);
+            }
+        }
+
+        private HistoryLossReportingSubscriptions historyLossReportingDelegate() {
+            return HistoryLossReportingSubscriptions.findIn(delegate).orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " doesn't report lost history"));
         }
 
         @Override

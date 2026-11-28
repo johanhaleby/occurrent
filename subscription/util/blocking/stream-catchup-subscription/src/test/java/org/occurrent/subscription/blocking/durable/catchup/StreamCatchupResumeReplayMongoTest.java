@@ -2430,7 +2430,9 @@ class StreamCatchupResumeReplayMongoTest {
         storage.delete(subscriptionId);
 
         // Then no resume replay is registered, so a start that resumes lets the live delegate resume the subscriptions
-        assertThat(catchupB.anyResumeReplays()).as("a resume replay or a cancel is registered").isFalse();
+        var resumes = catchupB.new StartResumes(catchupB, List.of(catchupB), (id, read, mayStart, owed) -> null);
+        resumes.readBeforeTheTurn();
+        assertThat(catchupB.anyResumeReplays(resumes.reads())).as("a resume replay or a cancel is registered").isFalse();
     }
 
     @Test
@@ -2493,9 +2495,10 @@ class StreamCatchupResumeReplayMongoTest {
     }
 
     @Test
-    void a_resume_from_inside_the_action_of_a_cancelled_resume_replay_throws_at_once_and_changes_nothing() throws Exception {
+    void a_resume_from_inside_the_action_of_a_cancelled_resume_replay_returns_at_once_and_runs_once_the_action_has_returned() throws Exception {
         // Given B's resume replay is in the action on h2, which waits for a signal and then resumes the subscription, the live delegate failed the cancel, and the position stored for the subscription is gone
         AtomicReference<Throwable> thrownInsideTheAction = new AtomicReference<>();
+        AtomicReference<Subscription> handleFromInside = new AtomicReference<>();
         CountDownLatch inH2 = new CountDownLatch(1);
         CountDownLatch resumeFromInside = new CountDownLatch(1);
         CountDownLatch resumedFromInside = new CountDownLatch(1);
@@ -2505,7 +2508,7 @@ class StreamCatchupResumeReplayMongoTest {
             if (name.equals("h2") && inH2.getCount() > 0) {
                 inH2.countDown();
                 awaitUninterrupted(resumeFromInside);
-                thrownInsideTheAction.set(catchThrowable(() -> catchupB.resumeSubscription(subscriptionId)));
+                thrownInsideTheAction.set(catchThrowable(() -> handleFromInside.set(catchupB.resumeSubscription(subscriptionId))));
                 resumedFromInside.countDown();
             }
         }, CancelFailingModel::new);
@@ -2518,11 +2521,11 @@ class StreamCatchupResumeReplayMongoTest {
         resumeFromInside.countDown();
         assertThat(resumedFromInside.await(5, SECONDS)).as("the call from inside the action returned").isTrue();
 
-        // Then the call threw IllegalStateException at once, and the subscription is as it was
-        assertThat(thrownInsideTheAction.get()).as("what the resume from inside the action threw").isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(subscriptionId).hasMessageContaining("from inside its own action");
-        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isTrue();
-        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription runs").isFalse();
+        // Then the call returned a handle at once and threw nothing inside the action, and the resume ran once the action had returned
+        assertThat(thrownInsideTheAction.get()).as("what the call from inside the action threw").isNull();
+        assertThat(handleFromInside.get().waitUntilStarted(Duration.ofSeconds(15))).as("whether the handle from inside the action answers started").isTrue();
+        assertThat(catchupB.isRunning(subscriptionId)).as("whether the subscription runs once the action has returned").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("whether the subscription is paused once the action has returned").isFalse();
     }
 
     @Test

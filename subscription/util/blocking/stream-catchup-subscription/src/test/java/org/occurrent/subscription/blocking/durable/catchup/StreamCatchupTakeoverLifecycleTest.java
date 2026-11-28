@@ -719,6 +719,137 @@ class StreamCatchupTakeoverLifecycleTest {
         );
     }
 
+    @Test
+    @Timeout(60)
+    void a_resume_that_started_the_takeover_outside_the_lock_returns_its_replay_and_does_not_read_again_once_the_replay_has_gone_live() throws InterruptedException {
+        // Given a live model that lost the history and holds the subscription paused for the takeover, and a checkpoint storage
+        // that makes a second read of the subscription by the resuming thread wait until the live model runs the subscription again
+        CountDownLatch pausedForTheTakeover = new CountDownLatch(1);
+        CountDownLatch letTheTakeoverStart = new CountDownLatch(1);
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> write(writtenInTheGap))
+                .betweenTheFirstTakeOverPauseAndWhatFollows(() -> {
+                    pausedForTheTakeover.countDown();
+                    awaitUnchecked(letTheTakeoverStart);
+                })
+                .resumingWhereItWasHeldOnceThisReturns(() -> waitUpTo(Duration.ofSeconds(5), () -> signals.size() > 2));
+        AtomicInteger readsOnTheResumingThread = new AtomicInteger();
+        AtomicReference<Thread> resumingThread = new AtomicReference<>();
+        storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                if (ID.equals(subscriptionId) && Thread.currentThread() == resumingThread.get() && readsOnTheResumingThread.incrementAndGet() >= 2) {
+                    waitUpTo(Duration.ofSeconds(10), () -> liveModel.isRunning(ID) && !liveModel.openedAt.isEmpty());
+                }
+                return super.read(subscriptionId);
+            }
+        };
+        create(true);
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(pausedForTheTakeover.await(10, TimeUnit.SECONDS)).as("the live model paused the subscription for the takeover").isTrue();
+
+        // When
+        resumingThread.set(Thread.currentThread());
+        AtomicReference<Subscription> resumed = new AtomicReference<>();
+        Throwable thrown = catchThrowable(() -> resumed.set(catchup.resumeSubscription(ID)));
+        letTheTakeoverStart.countDown();
+
+        // Then
+        assertThat(thrown).as("what the resume threw, since the takeover it started has resumed the subscription in the live model by its second read").isNull();
+        assertThat(resumed.get().waitUntilStarted(Duration.ofSeconds(10))).as("started once resumed").isTrue();
+        NameDefined writtenWhileLive = nameDefined("writtenWhileLive");
+        write(writtenWhileLive);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).as("the event written once live").contains(writtenWhileLive));
+        assertAll(
+                () -> assertThat(received).as("the history and the event written in between").containsAll(history).contains(writtenInTheGap),
+                () -> assertThat(received).as("the event written once live").filteredOn(writtenWhileLive::equals).hasSize(1),
+                () -> assertThat(liveModel.lostLiveStarts).as("the live starts the live model lost").hasSize(1),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(failedOnTheirOwnThreads).as("failures").isEmpty()
+        );
+    }
+
+    @Test
+    @Timeout(60)
+    void a_takeover_a_resume_finds_the_live_model_paused_for_does_not_store_its_position_under_the_model_lock_when_the_pause_lands_between_two_asks() throws InterruptedException {
+        // Given a live model that lost the history and holds the subscription paused, which it first reports as not paused to the
+        // thread that resumes, as when the pause lands only after that ask, and a checkpoint storage whose first save of the
+        // subscription waits for the resume of another subscription, a call that waits for the model lock
+        String other = "other";
+        CountDownLatch pausedForTheTakeover = new CountDownLatch(1);
+        CountDownLatch letTheTakeoverStart = new CountDownLatch(1);
+        AtomicReference<Thread> resumingThread = new AtomicReference<>();
+        AtomicInteger asksOnTheResumingThread = new AtomicInteger();
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> write(writtenInTheGap))
+                .betweenTheFirstTakeOverPauseAndWhatFollows(() -> {
+                    pausedForTheTakeover.countDown();
+                    awaitUnchecked(letTheTakeoverStart);
+                })
+                .resumingWhereItWasHeldOnceThisReturns(() -> waitUpTo(Duration.ofSeconds(5), () -> signals.size() > 2))
+                .answeringIsPausedWith(subscriptionId -> ID.equals(subscriptionId) && Thread.currentThread() == resumingThread.get() && asksOnTheResumingThread.incrementAndGet() == 1 ? Boolean.FALSE : null);
+        AtomicBoolean armed = new AtomicBoolean();
+        AtomicBoolean firstSave = new AtomicBoolean(true);
+        CountDownLatch saving = new CountDownLatch(1);
+        CountDownLatch otherResumed = new CountDownLatch(1);
+        AtomicBoolean waitedForTheOtherResumeInVain = new AtomicBoolean();
+        storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (armed.get() && ID.equals(subscriptionId) && firstSave.compareAndSet(true, false)) {
+                    saving.countDown();
+                    if (!awaitedWithin(otherResumed, Duration.ofSeconds(5))) {
+                        waitedForTheOtherResumeInVain.set(true);
+                    }
+                }
+                return super.save(subscriptionId, checkpoint, condition);
+            }
+        };
+        create(true);
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(pausedForTheTakeover.await(10, TimeUnit.SECONDS)).as("the live model paused the subscription for the takeover").isTrue();
+        assertThat(catchup.subscribe(other, StartAt.now(), event -> {
+        }).waitUntilStarted(Duration.ofSeconds(10))).as("the other subscription started").isTrue();
+        catchup.pauseSubscription(other);
+        armed.set(true);
+
+        // When the subscription is resumed, and the other one while its takeover stores the position
+        Thread resuming = new Thread(() -> {
+            try {
+                resumingThread.set(Thread.currentThread());
+                catchup.resumeSubscription(ID);
+            } catch (Throwable e) {
+                failedOnTheirOwnThreads.add(e);
+            }
+        }, "resuming-the-subscription");
+        resuming.setDaemon(true);
+        resuming.start();
+        boolean storingOnTheResumingThread = waitUpTo(Duration.ofSeconds(10), () -> saving.getCount() == 0 || !resuming.isAlive());
+        letTheTakeoverStart.countDown();
+        boolean storing = storingOnTheResumingThread && saving.await(10, TimeUnit.SECONDS);
+        Thread resumingTheOther = new Thread(() -> {
+            try {
+                catchup.resumeSubscription(other);
+            } catch (Throwable e) {
+                failedOnTheirOwnThreads.add(e);
+            } finally {
+                otherResumed.countDown();
+            }
+        }, "resuming-the-other-subscription");
+        resumingTheOther.setDaemon(true);
+        if (storing) {
+            resumingTheOther.start();
+        }
+        resumingTheOther.join(Duration.ofSeconds(15));
+        resuming.join(Duration.ofSeconds(15));
+
+        // Then
+        assertAll(
+                () -> assertThat(storing).as("the takeover stored the position it replays from").isTrue(),
+                () -> assertThat(waitedForTheOtherResumeInVain).as("whether the takeover's save waited the whole bound for the resume of another subscription, as it does when the save runs under the model lock that resume waits for").isFalse(),
+                () -> assertThat(resuming.isAlive() || resumingTheOther.isAlive()).as("a resume is still waiting").isFalse()
+        );
+    }
+
     /**
      * Gets the live model to lose the live start while a pause that holds the subscription for as long as the test
      * wants is under way, and another call for the subscription waits for it. The takeover is asked for in between,
@@ -1026,6 +1157,15 @@ class StreamCatchupTakeoverLifecycleTest {
             latch.await(30, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private static boolean awaitedWithin(CountDownLatch latch, Duration timeout) {
+        try {
+            return latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

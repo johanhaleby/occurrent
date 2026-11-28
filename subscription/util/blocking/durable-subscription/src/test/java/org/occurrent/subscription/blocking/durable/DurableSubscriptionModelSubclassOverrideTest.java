@@ -25,10 +25,13 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.PreparedResumeSubscriptions;
+import org.occurrent.subscription.api.blocking.PreparedResumeSubscriptions.PreparedResume;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
@@ -244,6 +247,105 @@ class DurableSubscriptionModelSubclassOverrideTest {
         // Then the call to super after the nested call is the outer call's
         assertThat(wrapped.calls).as("calls the wrapped model got")
                 .containsExactly(new Call("globalCheckpoint(BooleanSupplier)", innerStillWanted), new Call("globalCheckpoint(BooleanSupplier)", outerStillWanted));
+    }
+
+    @Test
+    void a_plain_model_is_found_as_one_that_splits_its_resume() {
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+
+        assertThat(PreparedResumeSubscriptions.findIn(model)).as("the capability found in the plain model").containsSame(model);
+    }
+
+    @Test
+    void a_subclass_that_overrides_resumeSubscription_and_not_resumeAsPrepared_is_not_found_as_one_that_splits_its_resume() {
+        // Given a subclass that overrides only resumeSubscription(String), which a resume as prepared would go around
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage()) {
+            @Override
+            public Subscription resumeSubscription(String subscriptionId) {
+                return super.resumeSubscription(subscriptionId);
+            }
+        };
+
+        // When
+        Optional<PreparedResumeSubscriptions> found = PreparedResumeSubscriptions.findIn(model);
+
+        // Then
+        assertThat(found).as("the capability found in the subclass").isEmpty();
+    }
+
+    @Test
+    void a_subclass_that_overrides_both_resumeSubscription_and_resumeAsPrepared_is_found_as_one_that_splits_its_resume() {
+        // Given a subclass that overrides the resume and the resume as prepared
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage()) {
+            @Override
+            public Subscription resumeSubscription(String subscriptionId) {
+                return super.resumeSubscription(subscriptionId);
+            }
+
+            @Override
+            public Optional<Subscription> resumeAsPrepared(String subscriptionId, PreparedResume prepared) {
+                return super.resumeAsPrepared(subscriptionId, prepared);
+            }
+        };
+
+        // When
+        Optional<PreparedResumeSubscriptions> found = PreparedResumeSubscriptions.findIn(model);
+
+        // Then
+        assertThat(found).as("the capability found in the subclass").containsSame(model);
+    }
+
+    @Test
+    void a_subclass_that_overrides_only_resumeAsPrepared_is_found_as_one_that_splits_its_resume() {
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage()) {
+            @Override
+            public Optional<Subscription> resumeAsPrepared(String subscriptionId, PreparedResume prepared) {
+                return super.resumeAsPrepared(subscriptionId, prepared);
+            }
+        };
+
+        assertThat(PreparedResumeSubscriptions.findIn(model)).as("the capability found in the subclass").containsSame(model);
+    }
+
+    @Test
+    void a_subclass_that_overrides_resumeSubscription_below_a_class_that_overrides_both_is_not_found_as_one_that_splits_its_resume() {
+        // Given a leaf that overrides only resumeSubscription(String), below a class that overrides it and resumeAsPrepared
+        DurableSubscriptionModel leaf = new OverridesBothResumes(wrapped) {
+            @Override
+            public Subscription resumeSubscription(String subscriptionId) {
+                return super.resumeSubscription(subscriptionId);
+            }
+        };
+
+        // When
+        Optional<PreparedResumeSubscriptions> found = PreparedResumeSubscriptions.findIn(leaf);
+
+        // Then the resume as prepared the leaf inherits would go around its override
+        assertThat(found).as("the capability found in the leaf").isEmpty();
+    }
+
+    @Test
+    void a_subclass_that_overrides_both_resumes_is_found_as_one_that_splits_its_resume_when_a_leaf_below_it_overrides_neither() {
+        DurableSubscriptionModel leaf = new OverridesBothResumes(wrapped) {
+        };
+
+        assertThat(PreparedResumeSubscriptions.findIn(leaf)).as("the capability found in the leaf").containsSame(leaf);
+    }
+
+    private static class OverridesBothResumes extends DurableSubscriptionModel {
+        OverridesBothResumes(CheckpointAwareSubscriptionModel wrapped) {
+            super(wrapped, new InMemoryCheckpointStorage());
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return super.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public Optional<Subscription> resumeAsPrepared(String subscriptionId, PreparedResume prepared) {
+            return super.resumeAsPrepared(subscriptionId, prepared);
+        }
     }
 
     private record Call(String method, @Nullable BooleanSupplier stillWanted) {

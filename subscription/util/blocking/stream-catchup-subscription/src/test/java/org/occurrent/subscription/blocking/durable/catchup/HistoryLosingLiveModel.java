@@ -24,6 +24,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
@@ -84,6 +85,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
     final List<String> subscribePausedCalls = new CopyOnWriteArrayList<>();
     final List<StartAt> subscribePausedStartAts = new CopyOnWriteArrayList<>();
     final List<String> resumeCalls = new CopyOnWriteArrayList<>();
+    final AtomicInteger startCalls = new AtomicInteger();
     final List<String> restartedFromNow = new CopyOnWriteArrayList<>();
     final List<Checkpoint> lossesReported = new CopyOnWriteArrayList<>();
 
@@ -239,6 +241,9 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         beforeThisResume.run();
         Open held = paused.remove(subscriptionId);
         if (held == null) {
+            if (running.containsKey(subscriptionId)) {
+                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            }
             throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
         }
         resumeCalls.add(subscriptionId);
@@ -259,6 +264,9 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
         }
         Open held = paused.remove(subscriptionId);
         if (held == null) {
+            if (running.containsKey(subscriptionId)) {
+                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            }
             throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
         }
         resumeCalls.add(subscriptionId);
@@ -383,6 +391,7 @@ final class HistoryLosingLiveModel implements CheckpointAwareSubscriptionModel, 
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        startCalls.incrementAndGet();
         running_ = true;
         if (resumeSubscriptionsAutomatically) {
             Set.copyOf(paused.keySet()).forEach(this::resumeSubscription);

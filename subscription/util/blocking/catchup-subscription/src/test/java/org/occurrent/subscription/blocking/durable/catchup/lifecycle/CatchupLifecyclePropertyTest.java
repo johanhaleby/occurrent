@@ -121,7 +121,6 @@ class CatchupLifecyclePropertyTest {
         assertThat(run.notes).as(run.toString()).isEmpty();
     }
 
-    @Disabled("#1237: a start(false) that runs inside a stop() clears what the stop set, so the stop's park runs the replay again and its action starts after the stop returned. Shrunk plain history=0us start=0us [[subscribe(a), start(false)], [subscribe(a), cancel(b), stop]] and [[subscribe(a), stop], [subscribe(a), start(false)]], seed -781864361498931721, at 1000 tries")
     @Property(tries = 200)
     void s2_without_pause_no_action_starts_after_a_cancel_or_a_stop_has_returned(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
@@ -161,7 +160,7 @@ class CatchupLifecyclePropertyTest {
         assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.timing(), run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
-    @Disabled("#1516: resume(b) after stop() returns ok while the model stays stopped and b parked, when the subscribe(b) it resumes overlapped the stop. Shrunk plain [[subscribe(b)], [stop, resume(b)]], seed 3464570091306833055. Also #1237: a stop() that overlaps a start(..) leaves the model running with a replay parked. Shrunk plain start=300us [[start(false), subscribe(a)], [subscribe(b), stop]], seed -3275268944031671567")
+    @Disabled("#1516: resume(b) after stop() returns ok while the model stays stopped and b parked, when the subscribe(b) it resumes overlapped the stop. Shrunk plain [[subscribe(b)], [stop, resume(b)]], seed 3464570091306833055")
     @Property(tries = 200)
     void mixed_calls_without_pause_end_equal_to_some_serial_order(@ForAll("mixedScenariosWithoutPause") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);
@@ -191,7 +190,7 @@ class CatchupLifecyclePropertyTest {
         assertThat(CatchupLifecycleSpec.accepts(scenario, run.outcomes, run.timing(), run.observed, InterleavingRunner.IDS)).as(run.toString()).isTrue();
     }
 
-    @Disabled("#1524: same cause as the per-id property. Shrunk plain [[subscribe(a)], [subscribe(a), pause(a), pause(a)]], seed -8546245661977250639. Also #1256: a pause during a replay takes effect at the handover, so a start(true) after it finds nothing to run again and a stays paused. Shrunk plain [[subscribe(a)], [pause(a), start(true)]], seed 1398733071185951526. Also #1237: a stop() that overlaps a start(..) leaves the model running with a replay parked. Shrunk plain start=300us [[start(true)], [subscribe(a), stop]], seed -2899625114797750950")
+    @Disabled("#1524: same cause as the per-id property. Shrunk plain [[subscribe(a)], [subscribe(a), pause(a), pause(a)]], seed -8546245661977250639. Also #1256: a pause during a replay takes effect at the handover, so a start(true) after it finds nothing to run again and a stays paused. Shrunk plain [[subscribe(a)], [pause(a), start(true)]], seed 1398733071185951526")
     @Property(tries = 200)
     void mixed_calls_end_equal_to_some_serial_order(@ForAll("mixedScenarios") Scenario scenario) {
         Run run = InterleavingRunner.run(scenario, false);

@@ -24,6 +24,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
@@ -64,6 +65,17 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     };
     private volatile Runnable beforeTheFirstPause = () -> {
     };
+    private volatile Runnable beforeTheNextStart = () -> {
+    };
+    private final AtomicBoolean firstTakeOver = new AtomicBoolean(true);
+    private final AtomicBoolean firstTakeOverHeld = new AtomicBoolean(true);
+    private volatile Runnable beforeTheFirstTakeOverIsHeldPaused = () -> {
+    };
+    private final Map<String, Held> losingTheHistory = new ConcurrentHashMap<>();
+    private final Set<String> pausedBeforeItHeldTheTakeOverPaused = ConcurrentHashMap.newKeySet();
+    private volatile boolean refusesAPauseOfAHeldSubscription;
+    private volatile Runnable betweenTheFirstTakeOverPauseAndWhatFollows = () -> {
+    };
     private final AtomicInteger liveStartsRead = new AtomicInteger();
     private final Set<Checkpoint> lost = ConcurrentHashMap.newKeySet();
     private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
@@ -84,6 +96,16 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         this.writtenInTheGap = writtenInTheGap;
     }
 
+    // A model made after the process that ran the other one restarted. The live starts it can't resume from stay lost, since
+    // the history doesn't come back, its live starts go on from where the other one's were, and it keeps every open
+    LiveStartLosingSubscriptionModel afterARestartOf(LiveStartLosingSubscriptionModel before) {
+        lost.addAll(before.lost);
+        liveStartsRead.set(before.liveStartsRead.get());
+        losesTheNextOpen.set(false);
+        losesEveryOpen = false;
+        return this;
+    }
+
     LiveStartLosingSubscriptionModel losingEveryOpen() {
         losesEveryOpen = true;
         return this;
@@ -91,6 +113,30 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     LiveStartLosingSubscriptionModel beforeTheFirstOpen(Runnable beforeTheFirstOpen) {
         this.beforeTheFirstOpen = beforeTheFirstOpen;
+        return this;
+    }
+
+    // Runs once, at the start of the next start(..), on the thread that starts it
+    LiveStartLosingSubscriptionModel beforeTheNextStart(Runnable beforeTheNextStart) {
+        this.beforeTheNextStart = beforeTheNextStart;
+        return this;
+    }
+
+    // Runs on the thread that found the history lost, once the listener answered that it takes the subscription over and
+    // before the subscription is held paused. A pause made there finds a subscription the delegate doesn't know yet
+    LiveStartLosingSubscriptionModel beforeTheFirstTakeOverIsHeldPaused(Runnable beforeTheFirstTakeOverIsHeldPaused) {
+        this.beforeTheFirstTakeOverIsHeldPaused = beforeTheFirstTakeOverIsHeldPaused;
+        return this;
+    }
+
+    // A pause of a subscription it holds paused throws SubscriptionNotRunningException, as a MongoDB subscription model does
+    LiveStartLosingSubscriptionModel refusingAPauseOfAHeldSubscription() {
+        refusesAPauseOfAHeldSubscription = true;
+        return this;
+    }
+
+    LiveStartLosingSubscriptionModel betweenTheFirstTakeOverPauseAndWhatFollows(Runnable betweenTheFirstTakeOverPauseAndWhatFollows) {
+        this.betweenTheFirstTakeOverPauseAndWhatFollows = betweenTheFirstTakeOverPauseAndWhatFollows;
         return this;
     }
 
@@ -180,7 +226,25 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private void historyLost(String subscriptionId, @Nullable SubscriptionFilter filter, Checkpoint lostFrom, Consumer<CloudEvent> action, OpenHandle handle) {
         for (HistoryLossListener listener : listeners) {
             if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver) {
+                if (firstTakeOverHeld.compareAndSet(true, false)) {
+                    losingTheHistory.put(subscriptionId, new Held(filter, action));
+                    try {
+                        beforeTheFirstTakeOverIsHeldPaused.run();
+                    } finally {
+                        losingTheHistory.remove(subscriptionId);
+                    }
+                }
                 paused.put(subscriptionId, new Held(filter, action));
+                if (firstTakeOver.compareAndSet(true, false)) {
+                    betweenTheFirstTakeOverPauseAndWhatFollows.run();
+                }
+                if (pausedBeforeItHeldTheTakeOverPaused.remove(subscriptionId)) {
+                    // A pause came after the answer and before this pause, so the subscription is held paused, and the
+                    // takeover is dropped without afterPause, as a MongoDB subscription model drops a takeover of a run it
+                    // finds no longer current
+                    takeOversAsked.incrementAndGet();
+                    return;
+                }
                 takeOver.afterPause().run();
                 takeOversAsked.incrementAndGet();
                 return;
@@ -233,6 +297,10 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        Runnable beforeThisStart = beforeTheNextStart;
+        beforeTheNextStart = () -> {
+        };
+        beforeThisStart.run();
         delegate.start(resumeSubscriptionsAutomatically);
     }
 
@@ -262,6 +330,17 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
             beforeTheFirstPause.run();
         }
         if (paused.containsKey(subscriptionId)) {
+            if (refusesAPauseOfAHeldSubscription) {
+                throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
+            }
+            return;
+        }
+        Held heldWhileLosing = losingTheHistory.get(subscriptionId);
+        if (heldWhileLosing != null) {
+            // Holds the subscription paused from now on, as a MongoDB subscription model does, and the takeover that
+            // finds it paused is dropped without afterPause
+            paused.put(subscriptionId, heldWhileLosing);
+            pausedBeforeItHeldTheTakeOverPaused.add(subscriptionId);
             return;
         }
         delegate.pauseSubscription(subscriptionId);

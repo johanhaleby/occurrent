@@ -89,6 +89,28 @@ class DurableSubscriptionModelHistoryLossListenerTest {
     }
 
     @Test
+    void a_resume_as_prepared_is_empty_when_the_restart_position_after_lost_history_was_stored_since_the_preparation() {
+        // Given a subscription from a start position of its own, and a resume prepared for it
+        HistoryLossReportingModel wrapped = new HistoryLossReportingModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("own")), __ -> {
+        });
+        org.occurrent.subscription.api.blocking.PreparedResumeSubscriptions.PreparedResume prepared = model.prepareResume(SUBSCRIPTION_ID);
+
+        // When its history is lost and the position it restarts from is stored
+        wrapped.listeners.getFirst().restartingAfterHistoryLoss(SUBSCRIPTION_ID, new StringBasedCheckpoint("restarted-from"), () -> true);
+
+        // Then the resume as prepared is refused, so the caller prepares again
+        Object answer;
+        try {
+            answer = model.resumeAsPrepared(SUBSCRIPTION_ID, prepared);
+        } catch (Throwable e) {
+            answer = e;
+        }
+        assertThat(answer).as("the answer of the resume as prepared made after the restart position was stored").isEqualTo(java.util.Optional.empty());
+    }
+
+    @Test
     void a_restart_after_lost_history_that_asks_before_subscribe_has_returned_is_told_its_position_is_stored() throws Exception {
         // Given
         HistoryLossReportingModel wrapped = new HistoryLossReportingModel();
