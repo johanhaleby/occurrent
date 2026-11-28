@@ -654,9 +654,11 @@ public abstract class CheckpointStorageConformance {
         private Checkpoint earlier;
         private Checkpoint later;
         private boolean ordersStartPositions;
+        private boolean resolves;
 
         @BeforeEach
         void theStartPositionsTheFixtureDeclares() {
+            resolves = fixture().resolvesFirstCheckpointRaceWithoutCreatingACheckpoint();
             List<Checkpoint> positions = requireNonNull(fixture().startPositionsEarlierFirst(), "startPositionsEarlierFirst() returned null");
             ordersStartPositions = !positions.isEmpty();
             if (ordersStartPositions) {
@@ -671,6 +673,25 @@ public abstract class CheckpointStorageConformance {
 
         private Optional<Checkpoint> resolve(String id, Checkpoint candidate, long version) {
             return checkpointStorage().resolveFirstCheckpointRaceWithoutCreatingACheckpoint(id, candidate, version);
+        }
+
+        // The default answers empty and writes nothing for every input, a negative or older version included, and the
+        // blocking DurableSubscriptionModel then starts at the candidate without a version, as in 0.34.0
+        private void assertAnswersEmptyAndWritesNothing(String id, Checkpoint candidate, long version) {
+            String storedBefore = requireNonNull(checkpointStorage().read(id)).asString();
+            OptionalLong versionBefore = checkpointStorage().writeVersion(id);
+
+            List<Optional<Checkpoint>> resolved = new ArrayList<>();
+            Throwable thrown = catchThrowable(() -> resolved.add(resolve(id, candidate, version)));
+
+            assertThat(thrown).as("thrown by a storage that keeps the default").isNull();
+            assertThat(resolved.get(0)).as("a storage that keeps the default answers empty").isEmpty();
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                    .as("stored checkpoint, which a storage that keeps the default doesn't write")
+                    .isEqualTo(storedBefore);
+            assertThat(checkpointStorage().writeVersion(id))
+                    .as("stored version, which a storage that keeps the default doesn't write")
+                    .isEqualTo(versionBefore);
         }
 
         @Test
@@ -694,6 +715,10 @@ public abstract class CheckpointStorageConformance {
         void keeps_a_stored_checkpoint_that_is_the_candidate_and_stores_the_version_with_it() {
             String id = subscriptionId();
             checkpointStorage().save(id, later, CheckpointWriteCondition.any());
+            if (!resolves) {
+                assertAnswersEmptyAndWritesNothing(id, later, VERSION);
+                return;
+            }
 
             Optional<Checkpoint> resolved = resolve(id, later, VERSION);
 
@@ -708,6 +733,10 @@ public abstract class CheckpointStorageConformance {
         void keeps_an_earlier_stored_checkpoint_with_the_version_or_answers_empty_when_the_storage_cannot_order_positions() {
             String id = subscriptionId();
             checkpointStorage().save(id, earlier, CheckpointWriteCondition.any());
+            if (!resolves) {
+                assertAnswersEmptyAndWritesNothing(id, later, VERSION);
+                return;
+            }
 
             Optional<Checkpoint> resolved = resolve(id, later, VERSION);
 
@@ -727,6 +756,10 @@ public abstract class CheckpointStorageConformance {
         void writes_the_candidate_over_a_later_stored_checkpoint_with_the_version_or_answers_empty_when_the_storage_cannot_order_positions() {
             String id = subscriptionId();
             checkpointStorage().save(id, later, CheckpointWriteCondition.any());
+            if (!resolves) {
+                assertAnswersEmptyAndWritesNothing(id, earlier, VERSION);
+                return;
+            }
 
             Optional<Checkpoint> resolved = resolve(id, earlier, VERSION);
 
@@ -754,6 +787,10 @@ public abstract class CheckpointStorageConformance {
             String id = subscriptionId();
             checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION));
             checkpointStorage().resolveFirstCheckpointRace(id, earlier);
+            if (!resolves) {
+                assertAnswersEmptyAndWritesNothing(id, later, VERSION);
+                return;
+            }
 
             Optional<Checkpoint> resolved = resolve(id, later, VERSION);
             Throwable thrown = catchThrowable(() -> checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)));
@@ -774,6 +811,10 @@ public abstract class CheckpointStorageConformance {
             }
             String id = subscriptionId();
             checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION + 5));
+            if (!resolves) {
+                assertAnswersEmptyAndWritesNothing(id, later, VERSION);
+                return;
+            }
 
             assertThatThrownBy(() -> resolve(id, later, VERSION))
                     .as("a version below the stored one is refused")
@@ -786,6 +827,10 @@ public abstract class CheckpointStorageConformance {
         void throws_for_a_negative_version() {
             String id = subscriptionId();
             checkpointStorage().save(id, later, CheckpointWriteCondition.any());
+            if (!resolves) {
+                assertAnswersEmptyAndWritesNothing(id, later, -1);
+                return;
+            }
 
             assertThatThrownBy(() -> resolve(id, later, -1))
                     .as("a negative version is no version")

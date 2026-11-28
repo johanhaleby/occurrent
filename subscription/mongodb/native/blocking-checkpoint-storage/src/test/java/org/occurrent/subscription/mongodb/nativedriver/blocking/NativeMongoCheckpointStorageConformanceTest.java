@@ -128,6 +128,11 @@ class NativeMongoCheckpointStorageConformanceTest extends CheckpointStorageConfo
         }
 
         @Override
+        public boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+            return true;
+        }
+
+        @Override
         public void close() {
             collection.drop();
         }

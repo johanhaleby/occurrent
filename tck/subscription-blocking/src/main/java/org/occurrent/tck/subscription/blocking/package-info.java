@@ -110,6 +110,15 @@
  *       <td>the type comes back out of {@code read}</td>
  *       <td>the type must <em>not</em> come back, and {@code asString()} must still round-trip</td>
  *       <td>{@code CheckpointStorageConformance}</td></tr>
+ *   <tr><td>{@code startPositionsEarlierFirst()}, two positions or none</td>
+ *       <td>two positions owe a refused {@code notOlderThan} save from the later one once
+ *       {@code resolveFirstCheckpointRace} moved the stored position to the earlier one</td>
+ *       <td>none owes that save accepted</td>
+ *       <td>{@code CheckpointStorageConformance}</td></tr>
+ *   <tr><td>{@code resolvesFirstCheckpointRaceWithoutCreatingACheckpoint()}</td>
+ *       <td>everything the javadoc of that {@code CheckpointStorage} method promises a storage that overrides it</td>
+ *       <td>the method answers empty and writes nothing for every input</td>
+ *       <td>{@code CheckpointStorageConformance}</td></tr>
  * </table>
  *
  * Three rules govern them, and each one was learned by getting it wrong. Reasoning in

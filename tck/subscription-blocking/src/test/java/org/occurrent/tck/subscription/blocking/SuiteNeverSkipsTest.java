@@ -74,6 +74,11 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void passes_every_test_and_skips_none_of_them_against_a_storage_that_keeps_the_default_resolution() {
+        assertEveryTestPasses(KeepsTheDefaultResolutionCheckpointStorageConformance.class, "storage");
+    }
+
+    @Test
     void fails_every_test_and_skips_none_of_them_against_a_subscription_model_that_honours_nothing() {
         assertEveryTestFails(HonoursNothingSubscriptionModelConformance.class, "a model that honours nothing");
     }
@@ -285,6 +290,12 @@ class SuiteNeverSkipsTest {
                 public boolean evaluatesWriteConditions() {
                     return true;
                 }
+
+                // Claimed for the same reason, so the assertions of a storage that overrides the resolution run and fail
+                @Override
+                public boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+                    return true;
+                }
             };
         }
     }
@@ -305,6 +316,34 @@ class SuiteNeverSkipsTest {
                 /**
                  * A map hands back the checkpoint it was given, so every type survives.
                  */
+                @Override
+                public boolean preservesCheckpointType(Checkpoint checkpoint) {
+                    return true;
+                }
+
+                @Override
+                public boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+                    return true;
+                }
+            };
+        }
+    }
+
+    // Keeps the interface default of the resolution and the fixture's declaration at its default, so the suite's
+    // default branch runs
+    static class KeepsTheDefaultResolutionCheckpointStorageConformance extends CheckpointStorageConformance {
+
+        @Override
+        protected CheckpointStorageFixture createFixture() {
+            return new CheckpointStorageFixture() {
+
+                private final CheckpointStorage storage = new WorkingCheckpointStorage(false);
+
+                @Override
+                public CheckpointStorage checkpointStorage() {
+                    return storage;
+                }
+
                 @Override
                 public boolean preservesCheckpointType(Checkpoint checkpoint) {
                     return true;

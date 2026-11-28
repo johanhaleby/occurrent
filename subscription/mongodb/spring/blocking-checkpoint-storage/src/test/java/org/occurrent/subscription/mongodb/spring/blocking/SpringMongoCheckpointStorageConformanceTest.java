@@ -129,6 +129,11 @@ class SpringMongoCheckpointStorageConformanceTest extends CheckpointStorageConfo
         }
 
         @Override
+        public boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+            return true;
+        }
+
+        @Override
         public void close() {
             mongoOperations.dropCollection(collection);
         }

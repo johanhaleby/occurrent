@@ -30,9 +30,9 @@ import java.util.List;
  * constructing a new instance. The suite never cleans up on an implementation's behalf, because what needs cleaning
  * is exactly the part a contract cannot describe.
  * <p>
- * There is one thing the suite has to be told rather than ask, and it is {@link #preservesCheckpointType(Checkpoint)}.
- * Every storage round-trips the value, but they disagree about whether the {@link Checkpoint} that comes back is the
- * same type that went in, and nothing on {@code CheckpointStorage} reports which way a given storage goes.
+ * Some things the suite has to be told rather than ask. One is {@link #preservesCheckpointType(Checkpoint)}. Every
+ * storage round-trips the value, but they disagree about whether the {@link Checkpoint} that comes back is the same
+ * type that went in, and nothing on {@code CheckpointStorage} reports which way a given storage goes.
  */
 @NullMarked
 public interface CheckpointStorageFixture {
@@ -110,6 +110,24 @@ public interface CheckpointStorageFixture {
      */
     default List<Checkpoint> startPositionsEarlierFirst() {
         return List.of();
+    }
+
+    /**
+     * Whether this storage overrides
+     * {@link CheckpointStorage#resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String, Checkpoint, long)}.
+     * <p>
+     * {@code false}, the default, means the storage keeps the default of that method, and the suite asserts that it
+     * answers empty and writes nothing for every input, a negative or older version included. {@code true} means the
+     * suite asserts everything the method's javadoc promises a storage that overrides it. The fixtures of Occurrent's
+     * MongoDB, Redis and blocking in-memory storages answer {@code true}.
+     * <p>
+     * A fixture that answers {@code false} for a storage that overrides the method as documented fails, since the
+     * storage then answers a checkpoint the suite expects empty. One that answers {@code true} for a storage that keeps
+     * the default fails too. This is a declaration because nothing on {@code CheckpointStorage} reports whether the
+     * method was overridden.
+     */
+    default boolean resolvesFirstCheckpointRaceWithoutCreatingACheckpoint() {
+        return false;
     }
 
     /**

@@ -39,6 +39,15 @@ class WorkingCheckpointStorage implements CheckpointStorage {
 
     private final Map<String, Checkpoint> checkpoints = new HashMap<>();
     private final Map<String, Long> versions = new HashMap<>();
+    private final boolean overridesResolutionWithoutCreatingACheckpoint;
+
+    WorkingCheckpointStorage() {
+        this(true);
+    }
+
+    WorkingCheckpointStorage(boolean overridesResolutionWithoutCreatingACheckpoint) {
+        this.overridesResolutionWithoutCreatingACheckpoint = overridesResolutionWithoutCreatingACheckpoint;
+    }
 
     @Override
     public @Nullable Checkpoint read(String subscriptionId) {
@@ -92,6 +101,9 @@ class WorkingCheckpointStorage implements CheckpointStorage {
 
     @Override
     public Optional<Checkpoint> resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        if (!overridesResolutionWithoutCreatingACheckpoint) {
+            return CheckpointStorage.super.resolveFirstCheckpointRaceWithoutCreatingACheckpoint(subscriptionId, candidate, writeVersion);
+        }
         CheckpointWriteCondition condition = CheckpointWriteCondition.notOlderThan(writeVersion);
         Long stored = versions.get(subscriptionId);
         if (stored != null && stored > writeVersion) {

@@ -307,7 +307,8 @@ public interface CheckpointStorage {
      * nothing is stored, when the stored checkpoint can't be ordered before {@code candidate}, or when this storage
      * doesn't settle it, and then nothing is written
      * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
-     *                                                       {@code writeVersion}
+     *                                                       {@code writeVersion}. The four storages named above throw
+     *                                                       it, and the default answers empty
      * @throws IllegalArgumentException                      if {@code writeVersion} is negative. The four storages
      *                                                       named above throw it, and the default answers empty
      */
