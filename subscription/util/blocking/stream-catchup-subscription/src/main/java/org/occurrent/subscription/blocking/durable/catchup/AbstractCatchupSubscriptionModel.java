@@ -1081,11 +1081,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 || e.storedVersion.isPresent() && e.storedVersion.getAsLong() > notOlderThan.writeVersion()) {
                 throw e;
             }
-            Checkpoint stored = cfg.storage().read(subscriptionId);
-            if (stored == null) {
+            if (cfg.storage().storeWriteVersion(subscriptionId, notOlderThan.writeVersion()).isEmpty()) {
                 throw e;
             }
-            cfg.storage().resolveFirstCheckpointRace(subscriptionId, stored, notOlderThan.writeVersion());
             cfg.storage().save(subscriptionId, position, writeCondition);
         }
     }

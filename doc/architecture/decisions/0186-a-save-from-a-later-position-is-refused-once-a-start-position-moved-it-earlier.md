@@ -34,8 +34,9 @@ P_H either.
    the released `CheckpointWriteConditionNotFulfilledException`, with a stored version that isn't newer than the
    version of the write. A write of a catch-up or generic checkpoint is not refused, since it doesn't go on from a
    change stream position.
-3. Any write that replaces the stored checkpoint removes the field. So does the three-argument
-   `resolveFirstCheckpointRace` when it keeps the stored checkpoint, which is how a resume stores its version.
+3. Any write that replaces the stored checkpoint removes the field. So does `storeWriteVersion`, which is how a resume
+   and a subscribe at the model default store their version, and so does the three-argument
+   `resolveFirstCheckpointRace` when it keeps the stored checkpoint.
 4. The blocking `DurableSubscriptionModel` tells its `StartRefusalListener`s about a refused event or quiet save
    through `handleStoredPositionMovedEarlier`, or logs an error when none is added, and throws the refusal on. That
    ends delivery in the MongoDB subscription models. It doesn't resume the subscription itself.
@@ -44,7 +45,8 @@ P_H either.
    lease candidate throughout.
 6. A resume at a position, in `DurableSubscriptionModel` and in the stream catch-up model, and the position a
    `DurableSubscriptionModel` stores after a lost history, are refused the same way. They store this node's version
-   with the stored checkpoint first and write once more, since nothing else would remove the field.
+   with the stored checkpoint first through `storeWriteVersion` and write once more, since nothing else would remove
+   the field.
 7. Every checkpoint a MongoDB checkpoint storage writes keeps a `lineageOrigin` field, the operation time of the first
    position its delivery started from. A write over nothing stored sets it from the operation time it writes, and
    every other write keeps the stored one. A first-position race that writes its candidate sets it to the candidate's
@@ -58,8 +60,8 @@ P_H either.
    also when a checkpoint was stored when the subscription registered. When the race keeps the stored checkpoint, it
    starts at the model default, as before.
 10. A subscribe of the blocking `DurableSubscriptionModel` at `StartAt.checkpoint(..)` of the stored checkpoint stores
-    this node's version with it through the three-argument `resolveFirstCheckpointRace`, as a subscribe at the model
-    default does. The starter subscribes that way without `CompetingConsumerSubscriptionModel`, and without it the
+    this node's version with it through the three-argument `resolveFirstCheckpointRace`, with that checkpoint as the
+    candidate. The starter subscribes that way without `CompetingConsumerSubscriptionModel`, and without it the
     field item 1 stores would refuse B's own first save. The model then starts from the checkpoint that call answers.
     When another node's two-argument resolve wrote an earlier checkpoint between the model's read and the call, the
     call keeps that earlier one, and a start from the checkpoint the model read would let B's saves move the stored
@@ -98,6 +100,10 @@ Under `CompetingConsumerSubscriptionModel` the blocking starter starts B at the 
 checkpoint once B holds the lease. With `occurrent.subscription.competing-consumer.fence-checkpoints=false` the
 starter's version source answers no version, so H saves with `any()`. H's next save then writes a position after P_H
 over P_B, and no node delivers the events between P_B and P_H.
+
+The three-argument call of item 10 writes its candidate when nothing is stored. So when a cancel on another node
+deletes the checkpoint between the model's read and that call, the call stores B's start checkpoint again. A
+subscribe at the model default doesn't, since `storeWriteVersion` writes nothing when nothing is stored.
 
 An ordinary restart keeps its stored checkpoint, since the `lineageOrigin` of a checkpoint stored before the restart
 is earlier than the live start the restart reads. A `lineageOrigin` that is later than the real first position would

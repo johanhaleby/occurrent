@@ -639,11 +639,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             if (!(writeCondition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan) || !storedPositionMovedEarlier(e, writeCondition)) {
                 throw e;
             }
-            Checkpoint stored = storage.read(subscriptionId);
-            if (stored == null) {
+            if (storage.storeWriteVersion(subscriptionId, notOlderThan.writeVersion()).isEmpty()) {
                 throw e;
             }
-            stampWriteVersion(subscriptionId, stored, notOlderThan.writeVersion());
             storage.save(subscriptionId, position, writeCondition);
         }
     }
@@ -1332,7 +1330,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // that earlier checkpoint, stores this node's version with it and removes the mark, so this node no longer starts at
     // startAt but at the checkpoint the storage answers. Starting at startAt instead would let this node's saves move
     // storage past the events the other node replays from the earlier checkpoint, and lose them should that node stop
-    // before it reaches startAt. The storage never answers a checkpoint later than startAt, so this skips nothing
+    // before it reaches startAt. The storage never answers a checkpoint later than startAt, so this skips nothing.
+    // A cancel on another node between the read and the write still has startAt stored again, since the three-argument
+    // call writes its candidate when nothing is stored
     private Checkpoint storeThisNodesWriteVersionWithTheStoredCheckpointAt(String subscriptionId, Checkpoint startAt) {
         Checkpoint stored;
         try {
