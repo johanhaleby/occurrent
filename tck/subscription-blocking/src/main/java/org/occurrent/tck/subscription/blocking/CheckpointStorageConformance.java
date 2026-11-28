@@ -644,4 +644,154 @@ public abstract class CheckpointStorageConformance {
             assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.of(VERSION));
         }
     }
+
+    @Nested
+    @DisplayName("a resolution that creates no checkpoint")
+    class ResolutionWithoutCreatingACheckpoint {
+
+        private static final long VERSION = 4;
+
+        private Checkpoint earlier;
+        private Checkpoint later;
+        private boolean ordersStartPositions;
+
+        @BeforeEach
+        void theStartPositionsTheFixtureDeclares() {
+            List<Checkpoint> positions = requireNonNull(fixture().startPositionsEarlierFirst(), "startPositionsEarlierFirst() returned null");
+            ordersStartPositions = !positions.isEmpty();
+            if (ordersStartPositions) {
+                assertThat(positions).as("startPositionsEarlierFirst() answers two positions or none").hasSize(2);
+                earlier = positions.get(0);
+                later = positions.get(1);
+            } else {
+                earlier = new StringBasedCheckpoint("earlier-start-position");
+                later = new StringBasedCheckpoint("later-start-position");
+            }
+        }
+
+        private Optional<Checkpoint> resolve(String id, Checkpoint candidate, long version) {
+            return checkpointStorage().resolveFirstCheckpointRaceWithoutCreatingACheckpoint(id, candidate, version);
+        }
+
+        @Test
+        void answers_empty_and_stores_nothing_when_nothing_is_stored() {
+            String id = subscriptionId();
+
+            Optional<Checkpoint> resolved = resolve(id, later, VERSION);
+
+            assertThat(resolved).as("nothing was stored, so there is no checkpoint to settle").isEmpty();
+            assertThat(checkpointStorage().read(id)).as("stored checkpoint, as a cancel that deleted it left it").isNull();
+            assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.empty());
+            if (fixture().evaluatesWriteConditions()) {
+                checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION - 1));
+                assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                        .as("a version left behind by the resolution would have refused this save")
+                        .isEqualTo(later.asString());
+            }
+        }
+
+        @Test
+        void keeps_a_stored_checkpoint_that_is_the_candidate_and_stores_the_version_with_it() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, later, CheckpointWriteCondition.any());
+
+            Optional<Checkpoint> resolved = resolve(id, later, VERSION);
+
+            assertThat(resolved)
+                    .as("the stored checkpoint is the candidate itself, so it governs")
+                    .hasValueSatisfying(settled -> assertThat(settled.asString()).isEqualTo(later.asString()));
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString()).as("stored checkpoint").isEqualTo(later.asString());
+            assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.of(VERSION));
+        }
+
+        @Test
+        void keeps_an_earlier_stored_checkpoint_with_the_version_or_answers_empty_when_the_storage_cannot_order_positions() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, earlier, CheckpointWriteCondition.any());
+
+            Optional<Checkpoint> resolved = resolve(id, later, VERSION);
+
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString()).as("stored checkpoint").isEqualTo(earlier.asString());
+            if (ordersStartPositions) {
+                assertThat(resolved)
+                        .as("the stored checkpoint is earlier than the candidate, so it governs")
+                        .hasValueSatisfying(settled -> assertThat(settled.asString()).isEqualTo(earlier.asString()));
+                assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.of(VERSION));
+            } else {
+                assertThat(resolved).as("the stored checkpoint can't be ordered before the candidate").isEmpty();
+                assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.empty());
+            }
+        }
+
+        @Test
+        void writes_the_candidate_over_a_later_stored_checkpoint_with_the_version_or_answers_empty_when_the_storage_cannot_order_positions() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, later, CheckpointWriteCondition.any());
+
+            Optional<Checkpoint> resolved = resolve(id, earlier, VERSION);
+
+            if (ordersStartPositions) {
+                assertThat(resolved)
+                        .as("the candidate is earlier than the stored checkpoint, so it governs")
+                        .hasValueSatisfying(settled -> assertThat(settled.asString()).isEqualTo(earlier.asString()));
+                assertThat(requireNonNull(checkpointStorage().read(id)).asString()).as("stored checkpoint").isEqualTo(earlier.asString());
+                assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.of(VERSION));
+            } else {
+                assertThat(resolved).as("the stored checkpoint can't be ordered before the candidate").isEmpty();
+                assertThat(requireNonNull(checkpointStorage().read(id)).asString()).as("stored checkpoint").isEqualTo(later.asString());
+                assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.empty());
+            }
+        }
+
+        @Test
+        void drops_the_mark_of_a_position_moved_earlier_when_it_keeps_the_stored_checkpoint() {
+            if (!fixture().evaluatesWriteConditions()) {
+                assertThatThrownBy(() -> checkpointStorage().save(subscriptionId(), later, CheckpointWriteCondition.notOlderThan(VERSION)))
+                        .as("a storage that declares it does not evaluate write conditions refuses anything but any()")
+                        .isInstanceOf(UnsupportedOperationException.class);
+                return;
+            }
+            String id = subscriptionId();
+            checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION));
+            checkpointStorage().resolveFirstCheckpointRace(id, earlier);
+
+            Optional<Checkpoint> resolved = resolve(id, later, VERSION);
+            Throwable thrown = catchThrowable(() -> checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION)));
+
+            assertThat(resolved).as("the stored checkpoint is the candidate or earlier than it, so it governs").isPresent();
+            assertThat(thrown).as("thrown by a save from the later position once the resolution kept the stored checkpoint").isNull();
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString()).as("stored checkpoint").isEqualTo(later.asString());
+            assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.of(VERSION));
+        }
+
+        @Test
+        void throws_and_writes_nothing_when_a_newer_version_is_stored() {
+            if (!fixture().evaluatesWriteConditions()) {
+                assertThatThrownBy(() -> checkpointStorage().save(subscriptionId(), later, CheckpointWriteCondition.notOlderThan(VERSION)))
+                        .as("a storage that declares it does not evaluate write conditions refuses anything but any()")
+                        .isInstanceOf(UnsupportedOperationException.class);
+                return;
+            }
+            String id = subscriptionId();
+            checkpointStorage().save(id, later, CheckpointWriteCondition.notOlderThan(VERSION + 5));
+
+            assertThatThrownBy(() -> resolve(id, later, VERSION))
+                    .as("a version below the stored one is refused")
+                    .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString()).as("stored checkpoint").isEqualTo(later.asString());
+            assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.of(VERSION + 5));
+        }
+
+        @Test
+        void throws_for_a_negative_version() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, later, CheckpointWriteCondition.any());
+
+            assertThatThrownBy(() -> resolve(id, later, -1))
+                    .as("a negative version is no version")
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString()).as("stored checkpoint").isEqualTo(later.asString());
+            assertThat(checkpointStorage().writeVersion(id)).as("stored version").isEqualTo(OptionalLong.empty());
+        }
+    }
 }

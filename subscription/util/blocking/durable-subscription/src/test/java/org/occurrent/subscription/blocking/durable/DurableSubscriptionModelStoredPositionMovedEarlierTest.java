@@ -408,7 +408,7 @@ class DurableSubscriptionModelStoredPositionMovedEarlierTest {
      * Delegates to a real {@link InMemoryCheckpointStorage}, which evaluates write conditions, and stands in for the
      * MongoDB storages' refusal. After {@link #aLaterPositionStoredWithThisNodesVersionThatAnotherStartMovedEarlier()}
      * a {@code notOlderThan} save is refused with the stored version, until a write goes through, or a resolution with
-     * a version or a {@code storeWriteVersion} call keeps the stored checkpoint.
+     * a version, with or without creating a checkpoint, or a {@code storeWriteVersion} call keeps the stored checkpoint.
      */
     private static final class StorageWithAMovedEarlierMark implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
@@ -469,6 +469,15 @@ class DurableSubscriptionModelStoredPositionMovedEarlierTest {
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
             Optional<Checkpoint> resolution = delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
             movedEarlier = false;
+            return resolution;
+        }
+
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRaceWithoutCreatingACheckpoint(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            Optional<Checkpoint> resolution = delegate.resolveFirstCheckpointRaceWithoutCreatingACheckpoint(subscriptionId, candidate, writeVersion);
+            if (resolution.isPresent()) {
+                movedEarlier = false;
+            }
             return resolution;
         }
 
