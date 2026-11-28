@@ -33,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -57,8 +58,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * Because the checkpoint key is a caller-chosen subscription id with no prefix of its own, a subscription could in
  * principle choose an id equal to the exact text of some other subscription's version key, and land its own
  * checkpoint on that other subscription's stored version. {@link #read(String)}, {@link #save(String, Checkpoint,
- * CheckpointWriteCondition)}, {@link #resolveFirstCheckpointRace(String, Checkpoint, long)}, {@link #delete(String)},
- * and {@link #exists(String)} all refuse a subscription id
+ * CheckpointWriteCondition)}, {@link #resolveFirstCheckpointRace(String, Checkpoint, long)},
+ * {@link #storeWriteVersion(String, long)}, {@link #delete(String)}, and {@link #exists(String)} all refuse a
+ * subscription id
  * that starts with the version key's own prefix, which every version key does and no id a real caller would pick
  * does by accident, closing that off entirely rather than leaving it as a documented risk.
  * <p>
@@ -68,7 +70,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * writing through {@code opsForValue().set}, exactly as before, leaving the version key untouched.
  * {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} runs one Lua script the same way. When the stored
  * version isn't newer, it stores the candidate and the version when no checkpoint is stored, and the version alone
- * when the candidate is the checkpoint stored. It writes nothing otherwise.
+ * when the candidate is the checkpoint stored. It writes nothing otherwise. {@link #storeWriteVersion(String, long)}
+ * runs one Lua script too, and stores the version alone when a checkpoint is stored and the stored version isn't
+ * newer.
  * <p>
  * <strong>Redis Cluster.</strong> The version key carries a hash tag built from whatever the checkpoint key itself
  * hashes on, so Cluster places both keys in the same slot and the scripts above are never refused for crossing
@@ -248,6 +252,27 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     private static final byte REFUSED = 'r';
     // The first byte FIRST_CHECKPOINT_RACE_SCRIPT returns when another checkpoint is stored and it wrote nothing
     private static final byte ALREADY_STORED = 's';
+
+    // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = write version as plain decimal digits. A stored
+    // version greater than the one offered refuses the call and nothing is written. Otherwise the version is stored
+    // when a checkpoint is, and nothing is written when none is.
+    // Returns 'r' followed by the stored version, 'n' when no checkpoint is stored, or 'w' followed by the stored
+    // checkpoint value when it wrote
+    private static final RedisScript<byte[]> STORE_WRITE_VERSION_SCRIPT = RedisScript.of(VERSION_IS_GREATER + """
+            local storedVersion = redis.call('GET', KEYS[2])
+            if storedVersion and versionIsGreater(storedVersion, ARGV[1]) then
+                return 'r' .. storedVersion
+            end
+            local storedCheckpoint = redis.call('GET', KEYS[1])
+            if not storedCheckpoint then
+                return 'n'
+            end
+            redis.call('SET', KEYS[2], ARGV[1])
+            return 'w' .. storedCheckpoint
+            """, byte[].class);
+
+    // The first byte STORE_WRITE_VERSION_SCRIPT returns when no checkpoint is stored and it wrote nothing
+    private static final byte NOTHING_STORED = 'n';
 
     private final RedisOperations<String, String> redis;
     private final RetryStrategy retryStrategy;
@@ -474,6 +499,53 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(storedVersion), condition);
         }
         return reply[0] == ALREADY_STORED ? Optional.empty() : Optional.of(candidate);
+    }
+
+    /**
+     * Stores {@code writeVersion} with the checkpoint stored in one Lua script that compares the stored version and
+     * reads the checkpoint key, and answers that checkpoint. When nothing is stored, nothing is written and this
+     * answers empty. A retry whose first attempt wrote and lost its reply writes the same version again and answers
+     * the same checkpoint.
+     * <p>
+     * In Cluster-safe mode, for the subscription id shape the class javadoc names Redis Cluster cannot align a slot
+     * for, this writes nothing. It reads the stored version on its own, throws when that is newer, and answers empty
+     * otherwise, as {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} does for that id.
+     *
+     * @throws CheckpointWriteConditionNotFulfilledException if the stored version is newer than {@code writeVersion},
+     *                                                       and then nothing is written
+     * @throws IllegalArgumentException                      if {@code subscriptionId} starts with the prefix this
+     *                                                       storage reserves for its own version keys, see the class
+     *                                                       javadoc, or if {@code writeVersion} is negative. The
+     *                                                       prefix isn't part of the {@link CheckpointStorage}
+     *                                                       contract.
+     */
+    @Override
+    public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        CheckpointWriteCondition condition = CheckpointWriteCondition.notOlderThan(writeVersion);
+        requireOutsideVersionKeyNamespace(subscriptionId);
+        if (!standalone && !isClusterSlotAlignable(subscriptionId)) {
+            // The version key is in another slot, so a script can't read it with the checkpoint key
+            OptionalLong storedVersion = writeVersion(subscriptionId);
+            if (storedVersion.isPresent() && storedVersion.getAsLong() > writeVersion) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
+            }
+            return Optional.empty();
+        }
+        Supplier<byte @Nullable []> store = () -> redis.execute(STORE_WRITE_VERSION_SCRIPT, conditionArgsSerializer, RedisSerializer.byteArray(),
+                List.of(subscriptionId, versionKey(subscriptionId)), Long.toString(writeVersion).getBytes(StandardCharsets.UTF_8));
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        byte[] reply = requireNonNull(executeWithRetry(store, e -> !shutdown && !isClusterSlotMismatch(e), retryStrategy).get());
+        if (reply[0] == REFUSED) {
+            long storedVersion = Long.parseLong(new String(reply, 1, reply.length - 1, StandardCharsets.UTF_8));
+            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(storedVersion), condition);
+        }
+        if (reply[0] == NOTHING_STORED) {
+            return Optional.empty();
+        }
+        // Decoded with the value serializer opsForValue().get(..) uses, so this answers what read(..) would
+        Object stored = redis.getValueSerializer().deserialize(Arrays.copyOfRange(reply, 1, reply.length));
+        return Optional.of(new StringBasedCheckpoint((String) requireNonNull(stored)));
     }
 
     // The checkpoint key is subscriptionId itself, unprefixed, and every version key starts with VERSION_KEY_PREFIX,

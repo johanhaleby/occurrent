@@ -93,10 +93,10 @@ class DurableSubscriptionModelStoredCheckpointWriteVersionTest {
     }
 
     @Test
-    void another_checkpoint_stored_between_the_read_and_the_stamp_is_read_and_gets_this_nodes_version() {
+    void another_checkpoint_stored_between_the_read_and_the_stamp_is_kept_and_gets_this_nodes_version() {
         HookedStorage storage = new HookedStorage();
         storage.delegate.save(SUBSCRIPTION_ID, STORED);
-        storage.beforeTheFirstThreeArgumentResolver = () -> storage.delegate.save(SUBSCRIPTION_ID, OTHER);
+        storage.beforeTheFirstWriteVersionStore = () -> storage.delegate.save(SUBSCRIPTION_ID, OTHER);
         DurableSubscriptionModel durable = new DurableSubscriptionModel(new Feed(false), storage, id -> OptionalLong.of(2));
 
         durable.subscribe(SUBSCRIPTION_ID, __ -> {
@@ -156,7 +156,7 @@ class DurableSubscriptionModelStoredCheckpointWriteVersionTest {
         HookedStorage storage = new HookedStorage();
         storage.delegate.save(SUBSCRIPTION_ID, STORED);
         // A checkpoint stored with no version, after the subscribe settled and before the evaluation reads
-        storage.afterTheFirstThreeArgumentResolver = () -> {
+        storage.afterTheFirstWriteVersionStore = () -> {
             storage.delegate.delete(SUBSCRIPTION_ID);
             storage.delegate.save(SUBSCRIPTION_ID, OTHER);
         };
@@ -176,13 +176,13 @@ class DurableSubscriptionModelStoredCheckpointWriteVersionTest {
 
     /**
      * Over {@link InMemoryCheckpointStorage}, records what is saved through it and runs a hook once, right before or
-     * right after the first call of the three-argument {@code resolveFirstCheckpointRace}.
+     * right after the first call of {@code storeWriteVersion}.
      */
     private static class HookedStorage implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
         final List<CheckpointWriteCondition> conditionsSaved = new ArrayList<>();
-        @Nullable Runnable beforeTheFirstThreeArgumentResolver;
-        @Nullable Runnable afterTheFirstThreeArgumentResolver;
+        @Nullable Runnable beforeTheFirstWriteVersionStore;
+        @Nullable Runnable afterTheFirstWriteVersionStore;
 
         @Override
         public @Nullable Checkpoint read(String subscriptionId) {
@@ -217,17 +217,22 @@ class DurableSubscriptionModelStoredCheckpointWriteVersionTest {
 
         @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
-            Runnable before = beforeTheFirstThreeArgumentResolver;
-            beforeTheFirstThreeArgumentResolver = null;
+            return delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+        }
+
+        @Override
+        public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+            Runnable before = beforeTheFirstWriteVersionStore;
+            beforeTheFirstWriteVersionStore = null;
             if (before != null) {
                 before.run();
             }
             Optional<Checkpoint> answer;
             try {
-                answer = delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+                answer = delegate.storeWriteVersion(subscriptionId, writeVersion);
             } finally {
-                Runnable after = afterTheFirstThreeArgumentResolver;
-                afterTheFirstThreeArgumentResolver = null;
+                Runnable after = afterTheFirstWriteVersionStore;
+                afterTheFirstWriteVersionStore = null;
                 if (after != null) {
                     after.run();
                 }
@@ -237,7 +242,7 @@ class DurableSubscriptionModelStoredCheckpointWriteVersionTest {
     }
 
     /**
-     * Keeps the default {@code resolveFirstCheckpointRace}, which answers empty whatever is stored.
+     * Keeps the default {@code storeWriteVersion} and {@code resolveFirstCheckpointRace}, which answer empty whatever is stored.
      */
     private static final class StorageWithoutResolvers implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();

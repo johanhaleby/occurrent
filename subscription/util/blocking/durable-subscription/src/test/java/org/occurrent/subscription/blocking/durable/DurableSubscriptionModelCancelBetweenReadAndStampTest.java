@@ -52,9 +52,9 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * An evaluation of the start position runs outside the subscription-id lock. When a cancel deletes the checkpoint an
- * evaluation has read before that evaluation stores this node's write version with it, the evaluation is refused, so
- * the cancelled subscription is not left with a checkpoint again. An evaluation that has no version to store is not
- * refused, and starts from the checkpoint it read.
+ * evaluation has read before that evaluation stores this node's write version with it, nothing is stored, so the
+ * cancelled subscription is not left with a checkpoint again. An evaluation after the first position settled starts
+ * from the checkpoint it read, and one that is settling the first position is refused.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelCancelBetweenReadAndStampTest {
@@ -70,7 +70,7 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
     }
 
     @Test
-    void a_later_evaluation_whose_read_a_cancel_overtakes_stores_nothing_and_is_refused() throws Exception {
+    void a_later_evaluation_whose_read_a_cancel_overtakes_starts_from_the_checkpoint_it_read_and_stores_nothing() throws Exception {
         HoldingStorage storage = new HoldingStorage();
         storage.delegate.save(SUBSCRIPTION_ID, STORED);
         CapturingFeed feed = new CapturingFeed();
@@ -78,7 +78,7 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
         durable.subscribe(SUBSCRIPTION_ID, __ -> {
         });
 
-        Future<?> evaluation = executor.submit(() -> {
+        Future<StartAt> evaluation = executor.submit(() -> {
             storage.holdReadsOf(Thread.currentThread());
             return feed.startAt.get(new SubscriptionModelContext(CapturingFeed.class));
         });
@@ -87,13 +87,15 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
         assertThat(storage.delegate.read(SUBSCRIPTION_ID)).as("test setup, the cancel deleted the checkpoint").isNull();
         storage.release.countDown();
 
-        Throwable thrown = catchThrowable(() -> evaluation.get(10, TimeUnit.SECONDS));
+        AtomicReference<StartAt> returned = new AtomicReference<>();
+        Throwable thrown = catchThrowable(() -> returned.set(evaluation.get(10, TimeUnit.SECONDS)));
 
         assertAll(
+                () -> assertThat(thrown).as("thrown by the evaluation").isNull(),
+                () -> assertThat(returned.get()).as("start position returned").isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                        startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo(STORED.asString())),
                 () -> assertThat(storage.delegate.read(SUBSCRIPTION_ID)).as("stored checkpoint").isNull(),
-                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty(),
-                () -> assertThat(thrown).as("thrown by the evaluation").isInstanceOf(ExecutionException.class)
-                        .cause().isInstanceOf(IllegalStateException.class)
+                () -> assertThat(storage.delegate.writeVersion(SUBSCRIPTION_ID)).as("stored version").isEmpty()
         );
     }
 
@@ -208,6 +210,11 @@ class DurableSubscriptionModelCancelBetweenReadAndStampTest {
         @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
             return delegate.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+        }
+
+        @Override
+        public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+            return delegate.storeWriteVersion(subscriptionId, writeVersion);
         }
     }
 

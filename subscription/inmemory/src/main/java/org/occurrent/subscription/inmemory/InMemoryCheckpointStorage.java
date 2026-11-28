@@ -39,7 +39,8 @@ import static java.util.Objects.requireNonNull;
  * {@link CheckpointWriteCondition} is evaluated for real, not refused. The checkpoint and its version are two
  * separate maps, since {@link CheckpointWriteCondition#any()} writes the former and leaves the latter untouched.
  * {@link #resolveFirstCheckpointRace(String, Checkpoint, long)} takes the same lock as a save, so a first position and
- * its write version are stored together, and a checkpoint already stored is never overwritten.
+ * its write version are stored together, and a checkpoint already stored is never overwritten. So does
+ * {@link #storeWriteVersion(String, long)}.
  */
 @NullMarked
 public class InMemoryCheckpointStorage implements CheckpointStorage {
@@ -116,6 +117,36 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
             }
             versions.put(subscriptionId, writeVersion);
             return Optional.of(candidate);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Stores {@code writeVersion} with the checkpoint stored, under the same lock as
+     * {@link #save(String, Checkpoint, CheckpointWriteCondition)}, and answers that checkpoint. When nothing is
+     * stored, nothing is written and this answers empty.
+     *
+     * @throws CheckpointWriteConditionNotFulfilledException if the stored version is newer than {@code writeVersion},
+     *                                                       and then nothing is written
+     * @throws IllegalArgumentException                      if {@code writeVersion} is negative
+     */
+    @Override
+    public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        CheckpointWriteCondition condition = CheckpointWriteCondition.notOlderThan(writeVersion);
+        lock.lock();
+        try {
+            Long stored = versions.get(subscriptionId);
+            if (stored != null && stored > writeVersion) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
+            }
+            Checkpoint storedCheckpoint = checkpoints.get(subscriptionId);
+            if (storedCheckpoint == null) {
+                return Optional.empty();
+            }
+            versions.put(subscriptionId, writeVersion);
+            return Optional.of(storedCheckpoint);
         } finally {
             lock.unlock();
         }

@@ -216,11 +216,6 @@ public interface CheckpointStorage {
      * such as one written for a delivered event, nothing is written and this answers {@link Optional#empty()}, as the
      * default does.
      * <p>
-     * The blocking {@code DurableSubscriptionModel} also calls this before it starts a subscription from a checkpoint
-     * already stored, with that checkpoint as {@code candidate}, so {@code writeVersion} is stored with it. When this
-     * answers empty, the model reads the stored checkpoint again and calls this with the one it reads, unless that is
-     * {@code candidate} again.
-     * <p>
      * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
      * allow it. When the storage holds a newer version, whatever checkpoint is stored, nothing is written and
      * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
@@ -245,9 +240,48 @@ public interface CheckpointStorage {
      * nothing is written
      * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
      *                                                       {@code writeVersion}
+     * @throws IllegalArgumentException                      if {@code writeVersion} is negative, as
+     *                                                       {@link CheckpointWriteCondition#notOlderThan(long)} throws.
+     *                                                       The four storages named above throw it, and the default
+     *                                                       answers empty
      */
     @NullMarked
     default Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        return Optional.empty();
+    }
+
+    /**
+     * Stores {@code writeVersion} with the checkpoint stored for {@code subscriptionId}, whatever checkpoint that is,
+     * and answers that checkpoint. The checkpoint itself is left as it is, in the same atomic write. When nothing is
+     * stored, nothing is written and this answers {@link Optional#empty()}, so a checkpoint that a cancel on another
+     * node deleted isn't stored again.
+     * <p>
+     * The blocking {@code DurableSubscriptionModel} calls this before it starts a subscription from a checkpoint
+     * already stored. A node that has lost its lease then can't store the checkpoint of a later event over the one
+     * this node starts from, since its next save with {@link CheckpointWriteCondition#notOlderThan(long)} is refused.
+     * The subscription starts from the checkpoint this answers, which is the one read unless another node stored a
+     * checkpoint after the read. When this answers empty, it starts from the checkpoint it read, without a version,
+     * as in 0.34.0.
+     * <p>
+     * The write is allowed when {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(writeVersion)} would
+     * allow it. When the storage holds a newer version, nothing is written and
+     * {@link CheckpointWriteConditionNotFulfilledException} is thrown.
+     * <p>
+     * The default answers {@link Optional#empty()} and writes nothing.
+     * {@code NativeMongoCheckpointStorage}, {@code SpringMongoCheckpointStorage}, {@code SpringRedisCheckpointStorage}
+     * and the blocking {@code InMemoryCheckpointStorage} override this method.
+     *
+     * @param subscriptionId The id of the subscription whose stored checkpoint gets the version
+     * @param writeVersion   The version to store with the checkpoint stored
+     * @return The checkpoint stored for {@code subscriptionId}, now stored with {@code writeVersion}, or empty when
+     * nothing is stored or this storage doesn't store a version this way, and then nothing is written
+     * @throws CheckpointWriteConditionNotFulfilledException if the storage holds a version newer than
+     *                                                       {@code writeVersion}
+     * @throws IllegalArgumentException                      if {@code writeVersion} is negative. The four storages
+     *                                                       named above throw it, and the default answers empty
+     */
+    @NullMarked
+    default Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
         return Optional.empty();
     }
 }

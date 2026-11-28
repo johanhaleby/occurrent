@@ -158,14 +158,51 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
      * stored checkpoint equal to it, also one an older Occurrent version stored in the legacy
      * {@code subscriptionPosition} field. Answers empty and writes nothing when any other resume token or generic
      * checkpoint is stored, since it can't be compared with {@code candidate}.
+     *
+     * @throws IllegalArgumentException if {@code writeVersion} is negative
      */
     @Override
     public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+        CheckpointWriteCondition.notOlderThan(writeVersion);
         Document candidateDocument = MongoCommons.generateCheckpointDocument(subscriptionId, candidate);
         Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument, writeVersion);
         // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
         Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
         return MongoCommons.interpretFirstCheckpointRaceResolution(subscriptionId, candidate, afterDocument, writeVersion);
+    }
+
+    /**
+     * Stores {@code writeVersion} with the checkpoint stored in one {@code findOneAndUpdate} without upsert, see
+     * {@link MongoCommons#buildWriteVersionStamp(long)}, and answers that checkpoint. When nothing is stored, nothing
+     * is written and this answers empty.
+     *
+     * @throws org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException if the stored version is newer
+     *                                                                                   than {@code writeVersion}, and
+     *                                                                                   then nothing is written
+     * @throws IllegalArgumentException                                                  if {@code writeVersion} is
+     *                                                                                   negative
+     */
+    @Override
+    public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        CheckpointWriteCondition.notOlderThan(writeVersion);
+        Supplier<@Nullable Document> store = () -> persistWriteVersionStamp(subscriptionId, writeVersion);
+        // Interpreted outside the retried supplier, so a refusal is thrown once and never retried
+        Document afterDocument = executeWithRetry(store, __ -> !shutdown, retryStrategy).get();
+        return MongoCommons.interpretWriteVersionStamp(subscriptionId, afterDocument, writeVersion);
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #storeWriteVersion(String, long)} is, reached the same way
+     * {@link #persistConditionalCheckpointDocument} is. See {@link MongoCommons#buildWriteVersionStamp(long)}.
+     */
+    @Nullable
+    Document persistWriteVersionStamp(String subscriptionId, long writeVersion) {
+        MongoCollection<Document> collection = mongoOperations.getCollection(checkpointCollection);
+        return collection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(MongoCommons.buildWriteVersionStamp(writeVersion)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(false));
     }
 
     /**

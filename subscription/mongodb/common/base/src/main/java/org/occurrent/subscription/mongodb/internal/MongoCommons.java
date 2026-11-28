@@ -540,6 +540,42 @@ public class MongoCommons {
     }
 
     /**
+     * Builds the {@code $replaceWith} stage that stores {@code writeVersion} with the checkpoint stored and leaves the
+     * checkpoint as it is. A stored version newer than {@code writeVersion} leaves the whole document as it is. Run
+     * it through {@code findOneAndUpdate} without upsert, so nothing is written when no checkpoint is stored.
+     *
+     * @param writeVersion The version to store with the checkpoint stored
+     * @return The {@code $replaceWith} pipeline stage to run through {@code findOneAndUpdate}
+     */
+    public static Document buildWriteVersionStamp(long writeVersion) {
+        Document cond = new Document("$cond", new Document(Map.of(
+                "if", notOlderThanIsAllowedExpr(writeVersion),
+                "then", new Document("$mergeObjects", asList("$$ROOT", new Document(WRITE_VERSION, writeVersion))),
+                "else", "$$ROOT")));
+        return new Document("$replaceWith", cond);
+    }
+
+    /**
+     * What {@code findOneAndUpdate} returned for {@link #buildWriteVersionStamp(long)} means.
+     *
+     * @param subscriptionId The id of the subscription the write was for
+     * @param afterDocument  The document {@code findOneAndUpdate} returned, {@code null} when no checkpoint is stored
+     * @param writeVersion   The version the write offered
+     * @return The checkpoint stored, now with {@code writeVersion}, or empty when no checkpoint is stored
+     * @throws CheckpointWriteConditionNotFulfilledException if a newer stored version refused the write
+     */
+    public static Optional<Checkpoint> interpretWriteVersionStamp(String subscriptionId, @Nullable Document afterDocument, long writeVersion) {
+        if (afterDocument == null) {
+            return Optional.empty();
+        }
+        OptionalLong storedVersion = extractWriteVersion(afterDocument);
+        if (storedVersion.isPresent() && storedVersion.getAsLong() > writeVersion) {
+            throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, CheckpointWriteCondition.notOlderThan(writeVersion));
+        }
+        return Optional.of(calculateCheckpointFromMongoStreamPositionDocument(afterDocument));
+    }
+
+    /**
      * Reads the version {@link #buildConditionalCheckpointWrite(Document, CheckpointWriteCondition)} recorded, or
      * empty if the document has none.
      */

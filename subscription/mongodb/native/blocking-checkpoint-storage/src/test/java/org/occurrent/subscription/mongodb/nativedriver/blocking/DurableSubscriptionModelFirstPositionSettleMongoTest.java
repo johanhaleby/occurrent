@@ -257,7 +257,7 @@ class DurableSubscriptionModelFirstPositionSettleMongoTest {
     /**
      * Lets another node store a checkpoint with no version while this node writes its first position, and holds that
      * write until {@code writeMayContinue} is released. Counts every write of a first position or of a version with
-     * a checkpoint read, which is what {@code resolveFirstCheckpointRace} is called for.
+     * a checkpoint read, which is what {@code resolveFirstCheckpointRace} and {@code storeWriteVersion} are called for.
      */
     private static final class HoldingStorage extends NativeMongoCheckpointStorage {
         private final Consumer<NativeMongoCheckpointStorage> otherNodeWrites;
@@ -272,7 +272,18 @@ class DurableSubscriptionModelFirstPositionSettleMongoTest {
         }
 
         @Override
+        public Optional<Checkpoint> storeWriteVersion(String subscriptionId, long writeVersion) {
+            holdTheFirstWrite();
+            return super.storeWriteVersion(subscriptionId, writeVersion);
+        }
+
+        @Override
         public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate, long writeVersion) {
+            holdTheFirstWrite();
+            return super.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
+        }
+
+        private void holdTheFirstWrite() {
             if (writesOfAFirstPosition.incrementAndGet() == 1) {
                 otherNodeWrites.accept(this);
                 otherNodeStored.countDown();
@@ -285,7 +296,6 @@ class DurableSubscriptionModelFirstPositionSettleMongoTest {
                     throw new IllegalStateException("Interrupted while the write of the first position was held.", e);
                 }
             }
-            return super.resolveFirstCheckpointRace(subscriptionId, candidate, writeVersion);
         }
     }
 

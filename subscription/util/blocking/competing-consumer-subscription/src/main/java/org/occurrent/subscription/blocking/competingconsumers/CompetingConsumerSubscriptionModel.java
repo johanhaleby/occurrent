@@ -6,6 +6,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.AttemptNotMade;
 import org.occurrent.subscription.CatchupCannotResumeException;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -4201,10 +4202,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * the consumer is recorded as waiting for a grant and gives up a lease it still holds, so this node competes for
      * the lease again. While this model is stopped it gives up its registration instead, and {@code start()} registers
      * it again. The subscribe returns rather than throwing. Answers {@code false},
-     * and the subscribe throws as for any other failure, once the model was shut down or the id cancelled, or when the
-     * wrapped model runs the subscription after all or can't say whether it does. Called under the subscription's lock
+     * and the subscribe throws as for any other failure, when the refusal names no stored version newer than the
+     * {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan} version it refused, once the model was shut down
+     * or the id cancelled, or when the wrapped model runs the subscription after all or can't say whether it does.
+     * Called under the subscription's lock
      */
     private boolean waitsForTheLeaseAfterARefusedWrite(BeingMade beingMade, CheckpointWriteConditionNotFulfilledException refused) {
+        if (!(refused.condition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan)
+            || refused.storedVersion.isEmpty() || refused.storedVersion.getAsLong() <= notOlderThan.writeVersion()) {
+            return false;
+        }
         if (shutDown || beingMade.cancelled || beingMade.subscription != null || beingMade.waiting == null) {
             return false;
         }
